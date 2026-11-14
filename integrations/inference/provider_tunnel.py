@@ -37,8 +37,9 @@ connected to, and its own start and stop: never a byte of payload, never a heade
 that is not a CONNECT (a URL may carry a credential), never the server name a refused ClientHello presented. It is
 bounded (_BoundedLog): per refusal reason the first LOG_REFUSAL_LINES (20) refused connection lines of each
 LOG_WINDOW_S (60 s) window are written and the rest counted in one refusals-suppressed line per reason; past
-LOG_CEILING_BYTES (64 MiB) per log file every line is dropped and counted (upstream-connect lines included, so the
-census then fails closed); the tunnel-stop line is always written and carries the totals.
+LOG_CEILING_BYTES (64 MiB) per log file every line is dropped and counted (upstream-connect lines included); the
+first drop writes one log-ceiling-reached line, after which the census reports UNKNOWN, never PASS (a later peer may
+be unrecorded); the tunnel-stop line is always written and carries the totals.
 
 Lifecycle (the broker's pattern): `serve` runs in the foreground of the session that starts it and opens no window
 of its own (a process that starts it from a session with no console passes CREATE_NO_WINDOW,
@@ -118,9 +119,10 @@ LOG_REFUSAL_LINES = 20
 LOG_WINDOW_S = 60.0
 LOG_CEILING_BYTES = 64 * 1024 * 1024
 # IPv6 forms that embed or translate an IPv4 address, refused as resolved origin addresses whatever their
-# is_global (review NIT d): IPv4-compatible, IPv4-mapped, the NAT64 prefixes, 6to4 and Teredo.
-EMBEDDED_V6 = tuple(ipaddress.ip_network(n) for n in ('::/96', '::ffff:0:0/96', '64:ff9b::/96', '64:ff9b:1::/48',
-                                                      '2002::/16', '2001::/32'))
+# is_global (review NIT d, round 2 NIT2): IPv4-compatible, IPv4-mapped, IPv4-translated (RFC 2765), the NAT64
+# prefixes, 6to4 and Teredo.
+EMBEDDED_V6 = tuple(ipaddress.ip_network(n) for n in ('::/96', '::ffff:0:0/96', '::ffff:0:0:0/96', '64:ff9b::/96',
+                                                      '64:ff9b:1::/48', '2002::/16', '2001::/32'))
 LOG_FORMAT = 'aieh-provider-tunnel-log/1'
 RUN_FORMAT = 'aieh-provider-tunnel-run/1'
 RUN_NAME = 'provider-tunnel.json'
@@ -455,6 +457,9 @@ class _BoundedLog:
         size = len(line.encode('utf-8')) + 1
         if not force and self.totals['bytes'] + size > self.ceiling:
             self.totals['dropped'] += 1
+            if self.totals['dropped'] == 1:
+                # once, past the ceiling: what the census reads to report UNKNOWN (round 2 NIT1)
+                self._emit('log-ceiling-reached', {'ceiling_bytes': self.ceiling}, force=True)
             return
         self.totals['bytes'] += size
         self._out(line)
@@ -908,18 +913,19 @@ def own_created() -> float | None:
     return process_facts(os.getpid())[1] if os.name == 'nt' else None
 
 
-def wait_exit(pid: int, ceiling: float) -> bool:
-    """Wait on the process's own end (its handle), at most CEILING seconds. True when it has ended."""
+def wait_exit(pid: int, ceiling: float) -> str:
+    """Wait on the process's own end (its handle), at most CEILING seconds: 'ended', 'timeout', or 'unknown' when it
+    cannot be waited on (access denied is unknown, never ended: round 2 NIT3)."""
     if os.name != 'nt':
         deadline = time.monotonic() + ceiling
         while pid_alive(pid) and time.monotonic() < deadline:
             threading.Event().wait(STOP_POLL_S)
-        return not pid_alive(pid)
-    handle, _ = _open_process(pid)
+        return 'timeout' if pid_alive(pid) else 'ended'
+    handle, error = _open_process(pid)
     if handle is None:
-        return True
+        return 'unknown' if error == ERROR_ACCESS_DENIED else 'ended'
     try:
-        return _kernel()[2].WaitForSingleObject(handle, int(ceiling * 1000)) == 0
+        return 'ended' if _kernel()[2].WaitForSingleObject(handle, int(ceiling * 1000)) == 0 else 'timeout'
     finally:
         _close(handle)
 
@@ -1084,23 +1090,36 @@ def stop(ctx: Context) -> dict:
         write_new(run_dir / STOP_NAME, {'asked_at': now_iso(), 'pid': record['pid']})
     except FileExistsError:
         pass                                                      # already asked
-    if not wait_exit(record['pid'], STOP_WAIT_S):
+    waited = wait_exit(record['pid'], STOP_WAIT_S)
+    if waited == 'unknown':
+        raise TunnelError('TUNNEL_RUN_RECORD_UNKNOWN', f'pid {record["pid"]} cannot be waited on (access denied)')
+    if waited != 'ended':
         raise TunnelError('TUNNEL_STOP_TIMEOUT', f'pid {record["pid"]} still runs after {STOP_WAIT_S} s')
     return {'result': 'stopped', 'pid': record['pid'], 'port': record['port']}
 
 
 def log_peers(lines) -> dict:
     """{ORIGIN: sorted upstream peer addresses} from the log's upstream-connect lines."""
-    peers = set()
+    return log_facts(lines)[0]
+
+
+def log_facts(lines) -> tuple[dict, bool]:
+    """({ORIGIN: sorted upstream peer addresses} from the log's upstream-connect lines, whether the log reached its
+    ceiling (its log-ceiling-reached line: later lines, upstream peers included, were dropped))."""
+    peers, ceiling = set(), False
     for line in lines:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        if isinstance(entry, dict) and entry.get('event') == 'upstream-connect' and \
-                isinstance(entry.get('peer'), dict) and isinstance(entry['peer'].get('address'), str):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get('event') == 'log-ceiling-reached':
+            ceiling = True
+        if entry.get('event') == 'upstream-connect' and isinstance(entry.get('peer'), dict) and \
+                isinstance(entry['peer'].get('address'), str):
             peers.add(entry['peer']['address'])
-    return {ORIGIN: sorted(peers)}
+    return {ORIGIN: sorted(peers)}, ceiling
 
 
 CENSUS_FORMAT = 'aieh-provider-tunnel-census/1'
@@ -1110,7 +1129,8 @@ CENSUS_RULE = (
     'listener, a wildcard or IPv6 listener, or the declared one missing: FAIL); (2) owns no UDP endpoint; (3) owns '
     'no other TCP connection but an inbound one on its listener from a loopback address, or an outbound one to port '
     '443 of an address its log recorded as an upstream peer (upstream-connect lines). Tables that cannot be read: '
-    'UNKNOWN, never PASS (inference_census.py\'s judgement, S-03.2).')
+    'UNKNOWN, never PASS (inference_census.py\'s judgement, S-03.2). A log that reached its size ceiling (its '
+    'log-ceiling-reached line: later peers may be unrecorded) turns a PASS into UNKNOWN (log.ceiling_reached).')
 
 
 def census(ctx: Context) -> dict:
@@ -1126,8 +1146,8 @@ def census(ctx: Context) -> dict:
     try:
         if not isinstance(name, str) or not LOG_NAME.fullmatch(name):
             raise ValueError('no log file named')
-        peers = log_peers((Path(ctx.logs()) / name).read_text(encoding='utf-8').splitlines())
-        log = {'readable': True, 'file': name, 'peers': peers}
+        peers, ceiling = log_facts((Path(ctx.logs()) / name).read_text(encoding='utf-8').splitlines())
+        log = {'readable': True, 'file': name, 'peers': peers, 'ceiling_reached': ceiling}
     except (OSError, ValueError) as exc:
         peers, log = None, {'readable': False, 'file': name, 'reason': type(exc).__name__}
     if endpoints is None:
@@ -1137,6 +1157,11 @@ def census(ctx: Context) -> dict:
         judged = census_module.judge(endpoints, pid=record['pid'], listeners={(LOOPBACK, record['port'])},
                                      origins={ORIGIN: ORIGIN_PORT}, peers=peers)
         tables['rows'] = len(endpoints)
+    if log.get('ceiling_reached'):
+        judged['unknown'] = list(judged['unknown']) + ['the log reached its size ceiling: later upstream peers may be '
+                                                       'unrecorded']
+        if judged['verdict'] == 'PASS':
+            judged['verdict'] = 'UNKNOWN'
     return {'format': CENSUS_FORMAT, 'verdict': judged['verdict'], 'rule': CENSUS_RULE, 'observed_at': observed_at,
             'tunnel': {'pid': record['pid'], 'port': record['port'], 'log': name}, 'tables': tables, 'log': log,
             'endpoints': judged['endpoints'], 'violations': judged['violations'], 'unknown': judged['unknown']}

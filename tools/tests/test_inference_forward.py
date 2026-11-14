@@ -900,6 +900,12 @@ class NativeForward(ProcessLedger, ForwardBase):
             self.assertEqual(guest.configured_broker_ports(), {'control_port': 18431, 'inference_port': 18432})
         with mock.patch.object(paths, 'resolve', return_value=types.SimpleNamespace(components={})):
             self.assertIsNone(guest.configured_broker_ports())
+        # round 2 NIT4: an unreadable config.yml refuses the native start with the tunnel's own code
+        with mock.patch.object(paths, 'resolve', side_effect=paths.PathsError('CONFIG_NOT_A_MAPPING', 'x')), \
+                self.assertRaises(guest.Refused) as cm:
+            self.start(name, tunnel=guest.TunnelAccess(PROFILE, tunnel_run_dir(self)))
+        self.assertEqual(cm.exception.code, 'TUNNEL_PORT_CONFIG')
+        self.assertEqual(self.threads, [])
 
 
 class JobScriptAgainstTheTunnel(unittest.TestCase):

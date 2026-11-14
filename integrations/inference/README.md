@@ -852,9 +852,10 @@ request that is not a CONNECT (a URL may carry a credential) or the server name 
 reason, the first **20** refused connection lines of each **60 s** window are written verbatim; the rest of that
 window are counted and written as one `refusals-suppressed` line per reason when the window closes (or at the stop).
 Admitted connections and their `upstream-connect` lines are never aggregated. Past **64 MiB** per log file (one file
-per `serve`) every further line is dropped and counted, `upstream-connect` lines included, so a census over a later
-connection then fails closed (its peer is unrecorded); the `tunnel-stop` line is always written and carries the
-totals. A flood of refusals therefore costs at most 20 lines per reason per minute plus one count line.
+per `serve`) every further line is dropped and counted, `upstream-connect` lines included; the first drop writes one
+`log-ceiling-reached` line, and from then on the census reports UNKNOWN (`log.ceiling_reached`), never PASS, since a
+later upstream peer may be unrecorded (a violation it sees stays FAIL); the `tunnel-stop` line is always written and
+carries the totals. A flood of refusals therefore costs at most 20 lines per reason per minute plus one count line.
 
 **Lifecycle.** `serve --profile PROFILE_DIR` runs in the foreground of the session that starts it (a process with
 no console starts it with `CREATE_NO_WINDOW`), writes its run record
@@ -880,7 +881,10 @@ tunnel's declared port only for a profile that declares the provider-tunnel endp
 (`TUNNEL_PORT_CONFLICT`, also on the brokered start), and starts only once the tunnel's run record names its own,
 live process on that port (`TUNNEL_NOT_READY`); the forward's record names the target (`ports.tunnel`), one forward
 at a time (`FORWARD_TARGET_DIFFERS`). The brokered start is otherwise unchanged (`FORWARD_PORT_REFUSED`,
-`CONTROL_PORT_REFUSED`, `BROKER_NOT_READY`).
+`CONTROL_PORT_REFUSED`, `BROKER_NOT_READY`). **The native start's one dependency on `config.yml`:** to compare, it
+reads the broker's two ports, and nothing else, from `components.inference_broker`, through the managed root's
+paths resolver (no broker module, no credential); no broker configured is no conflict, and a `config.yml` that
+cannot be read refuses the start (`TUNNEL_PORT_CONFIG`).
 
 **From a job** (the inference sweep's tunnel rows, with the forward held to the tunnel): the admitted CONNECT
 completes a TLS handshake verified for `api.anthropic.com` and sends nothing after it; another host, another port,

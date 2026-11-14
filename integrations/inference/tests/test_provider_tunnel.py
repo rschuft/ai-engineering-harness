@@ -457,7 +457,8 @@ class Origin(unittest.TestCase):
         # review NIT d: the IPv6 forms that embed or translate an IPv4 address, refused whatever they embed
         for bad in ('127.0.0.1', '10.0.2.2', '172.17.0.1', '169.254.1.1', '::1', 'fd00::1', '::ffff:127.0.0.1',
                     '::ffff:160.79.104.10', '::7f00:1', '::a04f:680a', '64:ff9b::7f00:1', '64:ff9b::a04f:680a',
-                    '64:ff9b:1::a04f:680a', '2002:7f00:1::', '2002:a04f:680a::', '2001::1', '2001:0:a04f:680a::'):
+                    '64:ff9b:1::a04f:680a', '2002:7f00:1::', '2002:a04f:680a::', '2001::1', '2001:0:a04f:680a::',
+                    '::ffff:0:a04f:680a', '::ffff:0:7f00:1'):              # IPv4-translated (round 2 NIT2)
             with mock.patch.object(T.socket, 'getaddrinfo', return_value=answer('160.79.104.10', bad)), \
                     self.assertRaises(T.Refused) as ctx:
                 T.resolve_origin('api.anthropic.com', 443)
@@ -747,7 +748,9 @@ class LogBound(unittest.TestCase):
         self.assertTrue(0 < len(kept) < 20)
         self.assertEqual(log.lines[-1]['event'], 'tunnel-stop')
         self.assertEqual(log.lines[-1]['log']['dropped'], 20 - len(kept))
-        self.assertLessEqual(sum(len(json.dumps(x)) for x in log.lines[:-1]), 600)
+        reached = [line for line in log.lines if line['event'] == 'log-ceiling-reached']
+        self.assertEqual([x['ceiling_bytes'] for x in reached], [600])       # once, at the first drop
+        self.assertLessEqual(sum(len(json.dumps(x)) for x in log.lines if x['event'] == 'upstream-connect'), 600)
 
     def test_a_refusal_flood_through_the_tunnel_is_bounded(self):
         log = T.MemoryLog(refusal_lines=5)
@@ -826,6 +829,25 @@ class RunRecordIdentity(unittest.TestCase):
             self.assertEqual(T.process_state(self.record()), 'unknown')
 
     @unittest.skipUnless(os.name == 'nt', 'process identity is verified on Windows')
+    def test_wait_exit_never_reads_access_denied_as_ended(self):
+        """Round 2 NIT3: a process that cannot be waited on is unknown, and stop says so."""
+        with mock.patch.object(T, '_open_process', return_value=(None, T.ERROR_ACCESS_DENIED)):
+            self.assertEqual(T.wait_exit(os.getpid(), 0.1), 'unknown')
+        with mock.patch.object(T, '_open_process', return_value=(None, 87)):          # no such process
+            self.assertEqual(T.wait_exit(os.getpid(), 0.1), 'ended')
+        self.assertEqual(T.wait_exit(os.getpid(), 0.05), 'timeout')               # this process runs on
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ctx = T.Context(run_dir=lambda: tmp, logs=lambda: tmp, out=mock.Mock(), err=mock.Mock())
+            T.write_new(tmp / T.RUN_NAME, self.record())
+            with mock.patch.object(T, 'wait_exit', return_value='unknown'), self.assertRaises(T.TunnelError) as cm:
+                T.stop(ctx)
+            self.assertEqual(cm.exception.code, 'TUNNEL_RUN_RECORD_UNKNOWN')
+            with mock.patch.object(T, 'wait_exit', return_value='timeout'), self.assertRaises(T.TunnelError) as cm:
+                T.stop(ctx)
+            self.assertEqual(cm.exception.code, 'TUNNEL_STOP_TIMEOUT')
+
+    @unittest.skipUnless(os.name == 'nt', 'process identity is verified on Windows')
     def test_serve_stop_and_census_honour_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -878,6 +900,14 @@ class Census(unittest.TestCase):
                           E('tcp', 4, 'ESTABLISHED', '10.0.0.5', 50004, '160.79.104.10', 80, pid)):
                 self.assertEqual(run(base + [extra])['verdict'], 'FAIL', extra)
             self.assertEqual(run(base[1:])['verdict'], 'FAIL')     # the listener missing
+            # round 2 NIT1: a log that reached its ceiling may have dropped a peer: never PASS
+            with log.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({'event': 'log-ceiling-reached', 'ceiling_bytes': 1}) + '\n')
+            reached = run(base)
+            self.assertEqual((reached['verdict'], reached['log']['ceiling_reached']), ('UNKNOWN', True))
+            self.assertIn('size ceiling', ' '.join(reached['unknown']))
+            self.assertEqual(run(base + [E('udp', 4, None, '127.0.0.1', 5353, None, None, pid)])['verdict'],
+                             'FAIL')                                 # a violation stays FAIL
 
 
 if __name__ == '__main__':

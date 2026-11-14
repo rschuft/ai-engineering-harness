@@ -7225,7 +7225,8 @@ def configured_broker_ports():
     try:
         raw = paths.resolve().components.get('inference_broker')
     except paths.PathsError as exc:
-        raise Refused('BROKER_CONFIG', f'config.yml: {exc}') from None
+        raise Refused('TUNNEL_PORT_CONFIG', f'config.yml could not be read for the broker\'s ports (the native '
+                      f'start compares them with the tunnel\'s): {exc}') from None
     if not isinstance(raw, dict):
         return None
     return {key: raw.get(key) for key in ('control_port', 'inference_port')}
