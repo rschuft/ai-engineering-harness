@@ -550,7 +550,7 @@ class TheRealCensus(unittest.TestCase):
             client = http.client.HTTPConnection('127.0.0.1', self.inference, timeout=CEILING_S)
             try:
                 client.request('POST', '/v1/messages', body=json.dumps({'model': 'syn-gated', 'stream': True}),
-                               headers={'x-api-key': grant['token']})
+                               headers={'x-api-key': grant['token'], 'Content-Type': 'application/json'})
                 answer = client.getresponse()
                 answer.read1(65536)
                 seen['first_read'].set()

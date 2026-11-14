@@ -283,7 +283,7 @@ class Drain(Started):
             client = http.client.HTTPConnection('127.0.0.1', rig.inference, timeout=CEILING_S)
             try:
                 client.request('POST', '/v1/messages', body=json.dumps({'model': 'syn-gated', 'stream': True}),
-                               headers={'x-api-key': grant['token']})
+                               headers={'x-api-key': grant['token'], 'Content-Type': 'application/json'})
                 answer = client.getresponse()
                 seen['status'] = answer.status
                 seen['first'] = answer.read1(65536)
@@ -395,7 +395,8 @@ class Drain(Started):
         handler = type('H', (), {'command': 'POST', 'path': '/v1/chat/completions'})()
         body = json.dumps({'model': S.MODEL_A}).encode()
         admission = rig.broker.admit('POST', '/v1/chat/completions', S.headers(
-            S.auth('openai-chat', grant['token']), ('Content-Length', str(len(body)))), lambda n: body, flight)
+            S.auth('openai-chat', grant['token']), ('Content-Type', 'application/json'),
+            ('Content-Length', str(len(body)))), lambda n: body, flight)
         self.assertIn(id(flight), rig.broker._flights)
 
         def connect(origin, timeout):
@@ -503,7 +504,7 @@ class InAProcessOfItsOwn(unittest.TestCase):
             client = http.client.HTTPConnection('127.0.0.1', inference, timeout=CEILING_S)
             try:
                 client.request('POST', '/v1/messages', body=json.dumps({'model': 'syn-gated', 'stream': True}),
-                               headers={'x-api-key': grant['token']})
+                               headers={'x-api-key': grant['token'], 'Content-Type': 'application/json'})
                 answer = client.getresponse()
                 answer.read1(65536)
                 seen['first_read'].set()

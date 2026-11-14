@@ -91,7 +91,8 @@ class Handler:
 
     def __init__(self, broker, token, *, family='anthropic-messages', body=None, client_gone=False):
         body = json.dumps(body or {'model': S.MODEL_A}).encode()
-        self.headers = S.headers(S.auth(family, token), ('Content-Length', str(len(body))))
+        self.headers = S.headers(S.auth(family, token), ('Content-Type', 'application/json'),
+                                 ('Content-Length', str(len(body))))
         self.rfile, self.wfile, self.lines = io.BytesIO(body), io.BytesIO(), []
         if client_gone:
             class Gone(io.BytesIO):
@@ -419,7 +420,8 @@ class Stopping(Case):
         body = json.dumps({'model': S.MODEL_A})
 
         def post():
-            client.request('POST', '/v1/messages', body=body, headers={'x-api-key': token})
+            client.request('POST', '/v1/messages', body=body, headers={'x-api-key': token,
+                                                                       'Content-Type': 'application/json'})
             answer = client.getresponse()
             answer.read()
             return answer.status

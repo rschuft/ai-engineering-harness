@@ -277,7 +277,9 @@ class Rig:
 
 
 def request(port: int, method: str, path: str, body=None, header_pairs=(), *, host=None, raw_body=None):
-    """One HTTP request to 127.0.0.1:PORT; (status, headers, body bytes)."""
+    """One HTTP request to 127.0.0.1:PORT; (status, headers, body bytes). A JSON BODY is sent with
+    Content-Type: application/json unless HEADER_PAIRS names one (as a client does: the broker refuses a body without
+    it); a RAW_BODY is sent with the headers given only."""
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=30)
     try:
         data = raw_body if raw_body is not None else (None if body is None else json.dumps(body).encode())
@@ -285,6 +287,8 @@ def request(port: int, method: str, path: str, body=None, header_pairs=(), *, ho
         if host is not None:
             connection.putheader('Host', host)
         names = {name.lower() for name, _ in header_pairs}
+        if body is not None and raw_body is None and 'content-type' not in names:
+            connection.putheader('Content-Type', 'application/json')
         for name, value in header_pairs:
             connection.putheader(name, value)
         if data is not None and 'content-length' not in names and 'transfer-encoding' not in names:

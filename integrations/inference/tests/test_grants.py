@@ -441,7 +441,7 @@ class TestAdmission(Fixture):
                 ({'model': S.MODEL_B}, 'MODEL_NOT_ALLOWED'),
                 ({'model': S.MODEL_C}, 'MODEL_NOT_ALLOWED'),
                 ({'body': {'model': S.MODEL_A, 'input': grant['token']}}, 'TOKEN_IN_REQUEST'),
-                ({'extra': [('X-Trace', 'id ' + grant['token'])]}, 'TOKEN_IN_REQUEST')):
+                ({'extra': [('User-Agent', 'id ' + grant['token'])]}, 'TOKEN_IN_REQUEST')):
             with self.subTest(kwargs=kwargs, expected=expected):
                 self.assertEqual(self.refused(grant, **kwargs), expected)
         self.assertEqual(self.broker._by_fingerprint[grant['token_fingerprint']].requests, 0)
@@ -606,7 +606,7 @@ class TestSettledBeforeTheLastByte(Fixture):
                 self.broker._connect = lambda origin, timeout: connection
                 body = json.dumps({'model': S.MODEL_A}).encode()
                 handler = FakeHandler(self.rig.guard, body, content_length=str(len(body)),
-                                      authorization=f'Bearer {grant["token"]}')
+                                      content_type='application/json', authorization=f'Bearer {grant["token"]}')
                 handler.command, handler.path = 'POST', '/v1/chat/completions'
                 seen = []
 

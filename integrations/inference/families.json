@@ -1,6 +1,6 @@
 {
   "format": "aieh-inference-families/1",
-  "description": "The inference broker's declared API families (decision 0015 as amended, amendment 1 points 1 and 3). Each family is passed through untranslated to its one upstream origin. Its routes are the exact method and path pairs admitted; its query is refuse (a request target with a query is refused) or the exact whole query strings admitted, each compared byte for byte with the target's raw query (S-03.3); the auth shape is the header that carries the credential, inbound (the attempt token) and outbound (the provider key); usage names the extractor that reads the provider's usage counts. Every route set is provisional: it is pinned from observed traffic at the plan leaf that first runs the family. No upstream, provider or model is declared here: the Owner sets them in components.inference_broker of config.yml, and the model allowlists ship empty (no wildcard; model names are verified, never assumed).",
+  "description": "The inference broker's declared API families (decision 0015 as amended, amendment 1 points 1 and 3). Each family is passed through untranslated to its one upstream origin. Its routes are the exact method and path pairs admitted; its query is refuse (a request target with a query is refused) or the exact whole query strings admitted, each compared byte for byte with the target's raw query (S-03.3); headers are the request header names (and name prefixes) forwarded, every other request header being stripped (S-03.3; an allowlist change after the discovery run is a reviewed change); the auth shape is the header that carries the credential, inbound (the attempt token) and outbound (the provider key); usage names the extractor that reads the provider's usage counts. Every route set is provisional: it is pinned from observed traffic at the plan leaf that first runs the family. No upstream, provider or model is declared here: the Owner sets them in components.inference_broker of config.yml, and the model allowlists ship empty (no wildcard; model names are verified, never assumed).",
   "families": [
     {
       "id": "anthropic-messages",
@@ -11,6 +11,7 @@
       ],
       "query": ["beta=true"],
       "auth": {"header": "x-api-key", "scheme": null},
+      "headers": {"names": ["content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent", "x-app"], "prefixes": ["x-stainless-"]},
       "usage": "anthropic-messages"
     },
     {
@@ -22,6 +23,7 @@
       ],
       "query": "refuse",
       "auth": {"header": "authorization", "scheme": "Bearer"},
+      "headers": {"names": ["content-type", "accept", "user-agent", "openai-beta"], "prefixes": ["x-stainless-"]},
       "usage": "openai-responses"
     },
     {
@@ -33,6 +35,7 @@
       ],
       "query": "refuse",
       "auth": {"header": "authorization", "scheme": "Bearer"},
+      "headers": {"names": ["content-type", "accept", "user-agent", "openai-beta"], "prefixes": ["x-stainless-"]},
       "usage": "openai-chat"
     }
   ]

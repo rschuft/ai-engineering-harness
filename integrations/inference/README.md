@@ -63,6 +63,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
 | `tests/test_census.py` | The live census: every verdict branch of its rule on synthetic tables, the four table layouts and a fake `iphlpapi`, the broker's pid in its status and start receipt, the `upstream-connect` line written at connect time, the command's record and exit codes; on Windows a real census of `serve` in a process of its own (PASS idle and with a request in flight, FAIL on an extra listener, connection or UDP socket in the broker's process) |
 | `tests/test_body.py` | Strict bodies (S-03.3, the security review's B1, N4, N6): a key repeated at any depth refused `BODY_DUPLICATE_KEY` on the inference listener with nothing forwarded (the `model` allowlist and the reach rule bypasses) and `CONTROL_BODY_INVALID` on the control listener; a case-folded `mcp_servers` or `container`; a `Content-Length` of non-ASCII digits |
+| `tests/test_headers.py` | The forwarded-header allowlist per family (S-03.3, the security review's S1): the shipped declarations and the refusal of one that names or covers a never-forwarded or account-scope header; only declared headers reach each fake upstream, every other one stripped and named; `HEADER_VALUE_INVALID` (a folded header), `CONTENT_ENCODING_REFUSED`, `CONTENT_TYPE_REFUSED`, nothing forwarded |
 | `tests/serve_child.py` | The child process of `test_stop.py` and `test_census.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -81,6 +82,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
  "routes": [{"method": "POST", "path": "/v1/messages"}],
  "query": ["beta=true"],
  "auth": {"header": "x-api-key", "scheme": null},
+ "headers": {"names": ["content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent", "x-app"],
+             "prefixes": ["x-stainless-"]},
  "usage": "anthropic-messages"}
 ```
 
@@ -101,6 +104,15 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
   `beta=true&beta=true`, `beta=true&x=1`, `beta=%74rue`, a trailing `&`, a `#`): `QUERY_NOT_ALLOWED`. An admitted
   query is forwarded unchanged. `anthropic-messages` ships exactly `["beta=true"]` (the OA-12 package, row P:
   only the form observed at S-03.3's discovery run is pinned); the two OpenAI families ship `refuse`.
+- `headers` (S-03.3, the security review's S1): the request header names (lower case) and name prefixes (ending
+  with `-`) the family forwards; every other request header is stripped and named in the audit. `anthropic-messages`
+  declares `content-type`, `accept`, `anthropic-version`, `anthropic-beta`, `user-agent`, `x-app` and the prefix
+  `x-stainless-`; the two OpenAI families `content-type`, `accept`, `user-agent`, `openai-beta` and the prefix
+  `x-stainless-`. A declaration that names or covers a header the broker never forwards (a credential-bearing or
+  hop-by-hop header, `Host`, `Content-Length`, `Accept-Encoding`, `Connection`) or an account-scope header is
+  refused (`DECLARATION_INVALID`). The lists are written from the clients' public shapes: S-03.3's discovery run
+  records the header names Claude Code actually sends (its audit's `stripped_headers`), and changing an allowlist
+  after it is a reviewed change.
 - `auth`: the header that carries the credential, read inbound (the attempt token) and written outbound (the
   provider key), with its scheme (`null` or `Bearer`).
 - `usage`: the extractor (`anthropic-messages`, `openai-responses` or `openai-chat`). Counts are `input`
@@ -282,16 +294,21 @@ family's auth header; the method and path are in that family's route set (and th
 broker's own stop has not begun (`BROKER_STOPPING`) and, for a bound family, the envelope holds; the body has one
 `Content-Length` of ASCII digits (no chunked body) within
 `max_request_bytes`, is a JSON object read strictly (a key repeated in any object, at any depth and after escapes
-are decoded, is refused `BODY_DUPLICATE_KEY`: the broker must check the document the provider reads) and names a `model` that is in both the token's list and the family's
-allowlist; the body asks the provider to reach or run nothing outside the request ([Provider-side
-reach](#provider-side-reach)); and the token appears nowhere in what would be forwarded (target, headers, body). The request is
-then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
-body; the client's headers except hop-by-hop ones, `Host`, `Content-Length`, `Accept-Encoding` (the broker
-asks for `identity`, so that usage can be read) and every credential-bearing header (`Authorization`,
-`X-Api-Key`, `Api-Key`, `Proxy-Authorization`, `Cookie`, `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`) and every
-header that selects the provider account's scope, whose lower-cased name starts with `anthropic-workspace` or
-`anthropic-organization` (S-03.3: stripped, not refused; the audit line names them); then the family's auth
-header with the provider key. The answer is streamed back as it arrives (status, headers,
+are decoded, is refused `BODY_DUPLICATE_KEY`: the broker must check the document the provider reads) and names
+a `model` that is in both the token's list and the family's allowlist; no header value holds a CR or LF
+(`HEADER_VALUE_INVALID`), the body is not declared encoded (`Content-Encoding` absent or `identity`, else
+`CONTENT_ENCODING_REFUSED`) and its `Content-Type` is one `application/json` with at most a `charset=utf-8`
+parameter, present whenever there is a body (else `CONTENT_TYPE_REFUSED`); the body asks the provider to reach or
+run nothing outside the request ([Provider-side reach](#provider-side-reach)); and the token appears nowhere in
+what would be forwarded (target, forwarded headers, body). The request is then counted, and passed through
+unchanged to the family's one upstream origin: the same method, target and body; of the client's headers, **only
+those the family declares** (`headers` in `families.json`, [above](#the-declared-families); an allowlist since
+the security review's S1), and never a hop-by-hop one, `Host`, `Content-Length`, `Accept-Encoding` (the broker
+asks for `identity`, so that usage can be read), a credential-bearing header (`Authorization`, `X-Api-Key`,
+`Api-Key`, `Proxy-Authorization`, `Cookie`, `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`) or a header that selects
+the provider account's scope (a name starting with `anthropic-workspace` or `anthropic-organization`; no
+declaration may name or cover one). Every other header is stripped, not refused, and its name recorded in the
+audit line (`stripped_headers`); then the family's auth header with the provider key. The answer is streamed back as it arrives (status, headers,
 body; chunked when the upstream gives no length), its usage read on the way. Accounting and the audit line
 are written before the answer's last bytes, so a client's next request already meets them. An upstream error
 status is passed through as it is.
@@ -399,8 +416,9 @@ stop); plus `broker-start`, `upstream-connect` (`attempt_id`, `family`, `origin`
 `{address, port}`: written when an upstream connection is made), `broker-stop` (`stopped_by`, `requests_cut`,
 `live_grants_ended`) and
 `handler-error` lines. A request refused `PROVIDER_REACH_REFUSED` adds `reach` (`rule` and `name`); an admitted
-request whose account-scope headers were stripped adds `stripped_headers` (`names`, in the bounded name grammar
-below, and the count of the others, `unrecorded`), never a value. An admitted
+request whose headers were stripped (any not declared by its family, except `Host`, `Content-Length`,
+`Accept-Encoding`, `Connection` and its auth header, which the broker consumes) adds `stripped_headers` (`names`,
+in the bounded name grammar below, and the count of the others, `unrecorded`), never a value. An admitted
 request's line has its declared route and admitted model. A refused request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
 fake upstream) has its path, its query parameter **names** (sorted, at most 16) and, when it presented a
 grant's token, the `model` of its JSON body (read, if the refusal came first, from the body the refusal
@@ -749,7 +767,8 @@ Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL
 `EXPOSURE_FOUND` (500).
 Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
 `TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
-`BODY_NOT_JSON`, `BODY_DUPLICATE_KEY`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`, `PROVIDER_REACH_REFUSED` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
+`BODY_NOT_JSON`, `BODY_DUPLICATE_KEY`, `HEADER_VALUE_INVALID`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`,
+`PROVIDER_REACH_REFUSED` (400), `CONTENT_ENCODING_REFUSED`, `CONTENT_TYPE_REFUSED` (415), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
 (411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
 Credential enter: `PROVIDER_ID_INVALID`, `KEY_CONSOLE_REQUIRED`, `KEY_NOT_KEY_SHAPED`, `KEY_ENTRY_CANCELLED`

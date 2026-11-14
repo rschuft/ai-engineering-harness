@@ -136,7 +136,10 @@ class TestPassThrough(unittest.TestCase):
                 self.assertEqual(dict((n.lower(), v) for n, v in received['headers'])['host'],
                                  f'127.0.0.1:{upstream.port}')
                 self.assertIn(('Accept-Encoding', 'identity'), received['headers'])
-                self.assertIn('anthropic-version', names)
+                if family == 'anthropic-messages':
+                    self.assertIn('anthropic-version', names)       # declared by its family: forwarded
+                else:
+                    self.assertNotIn('anthropic-version', names)    # not declared by the OpenAI families: stripped
                 self.assertFalse(any(grant['token'] in value for _, value in received['headers']))
                 self.assertNotIn(grant['token'].encode(), received['body'])
                 answer = RIG.broker.grant_status(grant['token_fingerprint'])
@@ -344,16 +347,19 @@ class TestAudit(unittest.TestCase):
             'upstream_status', 'latency_ms', 'usage', 'code'}
 
     def test_one_line_per_request_without_body_header_token_or_key(self):
+        """The admitted request's undeclared header is stripped and named (stripped_headers), never its value."""
         grant = issue(family='openai-responses')
-        status, _, answer = infer(grant, 'openai-responses', extra=[('X-Synthetic-Header', 'header-value-5e1f')])
+        status, _, answer = infer(grant, 'openai-responses', extra=[('X-Audit-Probe', 'header-value-5e1f')])
         self.assertEqual(status, 200)
         self.assertEqual(infer(grant, 'openai-responses', model=S.MODEL_B)[0], 403)
         lines = RIG.audit_lines()
         mine = [line for line in lines if line.get('token_fingerprint') == grant['token_fingerprint']]
         self.assertEqual(len(mine), 2)
-        for line in mine:
-            self.assertEqual(set(line), self.KEYS)
         ok, refused = mine
+        self.assertEqual(set(ok), self.KEYS | {'stripped_headers'})
+        self.assertEqual(ok['stripped_headers'], {'names': ['x-audit-probe'], 'unrecorded': 0})
+        self.assertEqual(set(refused), self.KEYS)
+        self.assertNotIn('header-value-5e1f', RIG.audit.path.read_text(encoding='utf-8'))
         request = json.dumps({'model': S.MODEL_A, 'stream': False, 'input': S.PROMPT_MARKER}).encode()
         self.assertEqual({k: ok[k] for k in ('format', 'event', 'attempt_id', 'conversation_id', 'family', 'method',
                                              'path', 'model', 'request_bytes', 'response_bytes', 'status',

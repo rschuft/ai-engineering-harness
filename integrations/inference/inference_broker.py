@@ -196,6 +196,7 @@ PROVIDER_ID = re.compile(r'[a-z0-9][a-z0-9._-]{0,63}')
 MODEL_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}')
 WILDCARD = re.compile(r'[*?\[\]]')
 HEADER_NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
+HEADER_PREFIX = re.compile(r'[a-z0-9][a-z0-9-]{0,62}-')     # a declared forwarded-header prefix ends with '-'
 HOST_NAME = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*')
 ROUTE_PATH = re.compile(r'/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+')
 # A declared whole query string (S-03.3): name=value pairs of plain characters joined by '&', compared byte for byte
@@ -228,8 +229,12 @@ NOT_FORWARDED = HOP_BY_HOP | frozenset({'host', 'content-length', 'accept-encodi
                                         'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip'})
 NOT_RELAYED = HOP_BY_HOP | frozenset({'content-length'})
 # S-03.3 (OA-12 package section 3 point 5): request headers that select the provider account's scope (a workspace or an
-# organization) are never forwarded, whatever follows the prefix: stripped, not refused, and named in the audit.
+# organization) are never forwarded, whatever follows the prefix: stripped, not refused, and named in the audit. Since
+# the security review's S1 a family forwards only the request headers it declares (families.json, headers), and no
+# declaration may name or cover these.
 ACCOUNT_SCOPE_PREFIXES = ('anthropic-workspace', 'anthropic-organization')
+# The request headers the broker itself consumes or sets again: never forwarded and never audited as stripped.
+CONSUMED = frozenset({'host', 'content-length', 'accept-encoding', 'connection'})
 
 # Every stable code: (HTTP status on a listener, remedy).
 CODES = {
@@ -335,6 +340,10 @@ CODES = {
     'BODY_LENGTH_INVALID': (400, 'send one valid Content-Length'),
     'BODY_TOO_LARGE': (413, 'send a body no larger than max_request_bytes'),
     'BODY_NOT_JSON': (400, 'send the body as one uncompressed JSON object'),
+    'HEADER_VALUE_INVALID': (400, 'send no header value holding a CR or LF (no obsolete line folding)'),
+    'CONTENT_ENCODING_REFUSED': (415, 'send the body uncompressed: no Content-Encoding, or identity'),
+    'CONTENT_TYPE_REFUSED': (415, 'send the body with one Content-Type: application/json, optionally with '
+                                  'charset=utf-8 and no other parameter'),
     'BODY_DUPLICATE_KEY': (400, 'send each key of a JSON object once, at every depth: a body whose objects repeat a '
                                 'key is read differently by different parsers'),
     'MODEL_MISSING': (400, 'send the model as a string field "model"'),
@@ -456,13 +465,22 @@ class Family:
     provider: str | None = None
     upstream: Origin | None = None
     models: tuple = ()
+    header_names: frozenset = frozenset()     # the request header names forwarded (lower case)
+    header_prefixes: tuple = ()               # and every name starting with one of these
 
     def describe(self) -> dict:
         return {'id': self.id, 'status': self.status,
                 'routes': [{'method': m, 'path': p} for m, p in sorted(self.routes)], 'query': self.query_rule(),
                 'auth': {'header': self.auth_header, 'scheme': self.auth_scheme}, 'usage': self.usage,
+                'headers': {'names': sorted(self.header_names), 'prefixes': list(self.header_prefixes)},
                 'provider': self.provider, 'upstream': None if self.upstream is None else self.upstream.text(),
                 'models': list(self.models)}
+
+    def forwards(self, name: str) -> bool:
+        """Whether the family forwards a request header of lower-case NAME: a declared name, or one starting with a
+        declared prefix (never an account-scope header: the declarations cannot cover one)."""
+        return (name in self.header_names or name.startswith(self.header_prefixes)) \
+            and not name.startswith(ACCOUNT_SCOPE_PREFIXES)
 
     def query_rule(self):
         """The query rule as declared: 'refuse', or the sorted list of the whole query strings admitted."""
@@ -515,7 +533,7 @@ def load_declarations(path: Path = FAMILIES_PATH) -> dict:
     families = {}
     for index, entry in enumerate(data['families']):
         where = f'families[{index}]'
-        _exact_keys(entry, ('id', 'status', 'consumer', 'routes', 'query', 'auth', 'usage'), (),
+        _exact_keys(entry, ('id', 'status', 'consumer', 'routes', 'query', 'auth', 'headers', 'usage'), (),
                     'DECLARATION_INVALID', where)
         if not isinstance(entry['id'], str) or not FAMILY_ID.fullmatch(entry['id']) or entry['id'] in families:
             raise bad(f'{where}.id must be a distinct lower-case id')
@@ -549,9 +567,32 @@ def load_declarations(path: Path = FAMILIES_PATH) -> dict:
             raise bad(f'{where}.auth is a lower-case header name and the scheme null or Bearer')
         if entry['usage'] not in USAGE_KINDS:
             raise bad(f'{where}.usage must be one of {list(USAGE_KINDS)}')
+        names, prefixes = _declared_headers(entry['headers'], where, bad)
         families[entry['id']] = Family(entry['id'], entry['status'], frozenset(routes), query,
-                                       auth['header'], auth['scheme'], entry['usage'])
+                                       auth['header'], auth['scheme'], entry['usage'], header_names=names,
+                                       header_prefixes=prefixes)
     return families
+
+
+def _declared_headers(node, where: str, bad) -> tuple[frozenset, tuple]:
+    """A family's forwarded request headers (S-03.3, the security review's S1): {names, prefixes}, each a list of
+    distinct lower-case names (HEADER_NAME) and prefixes (HEADER_PREFIX, ending with '-'). None may name a header the
+    broker never forwards (NOT_FORWARDED, its own CONSUMED ones) or cover one, nor name, cover or fall under an
+    account-scope prefix."""
+    _exact_keys(node, ('names', 'prefixes'), (), 'DECLARATION_INVALID', f'{where}.headers')
+    names, prefixes = node['names'], node['prefixes']
+    if not isinstance(names, list) or not names or not isinstance(prefixes, list):
+        raise bad(f'{where}.headers: names is a non-empty list, prefixes a list')
+    if not all(isinstance(n, str) and HEADER_NAME.fullmatch(n) for n in names) \
+            or not all(isinstance(p, str) and HEADER_PREFIX.fullmatch(p) for p in prefixes) \
+            or len(set(names)) != len(names) or len(set(prefixes)) != len(prefixes):
+        raise bad(f'{where}.headers: distinct lower-case header names, and prefixes ending with -')
+    never = NOT_FORWARDED | CONSUMED
+    if any(n in never or n.startswith(ACCOUNT_SCOPE_PREFIXES) for n in names) \
+            or any(n.startswith(p) for n in never for p in prefixes) \
+            or any(a.startswith(p) or p.startswith(a) for a in ACCOUNT_SCOPE_PREFIXES for p in prefixes):
+        raise bad(f'{where}.headers names or covers a header the broker never forwards or an account-scope header')
+    return frozenset(names), tuple(prefixes)
 
 
 def _refuse_secret_shaped(node, prefix: str) -> None:
@@ -1286,7 +1327,7 @@ class Admission:
     model: str
     body: bytes
     headers: list
-    stripped: tuple = ()     # the account-scope header names stripped (lower case, sorted, distinct)
+    stripped: tuple = ()     # the header names stripped (lower case, sorted, distinct)
 
 
 @dataclasses.dataclass(eq=False)
@@ -1718,23 +1759,46 @@ class Broker:
         return body
 
     def _forward_headers(self, headers, family: Family) -> tuple[list, tuple]:
-        """(the headers forwarded, the account-scope header names stripped): never a NOT_FORWARDED header, one the
-        Connection header names, an auth header of any family, or one whose name starts with an
-        ACCOUNT_SCOPE_PREFIXES prefix (the provider account's scope is the key's, never the client's)."""
+        """(the headers forwarded, the header names stripped): only a header the family declares (Family.forwards,
+        families.json: an allowlist since the security review's S1), and never a NOT_FORWARDED header, one the
+        Connection header names, an auth header of any family, or an account-scope header (the provider account's
+        scope is the key's, never the client's). Every other header is stripped and named, except the ones the
+        broker itself consumes or sets again (CONSUMED and the family's auth header)."""
         named = {v.strip().lower() for value in headers.get_all('connection') or [] for v in value.split(',')}
         dropped = NOT_FORWARDED | named | {f.auth_header for f in self.config.families.values()}
-        forward, scoped = [], set()
+        quiet = CONSUMED | {family.auth_header}
+        forward, stripped = [], set()
         for name, value in headers.items():
             lower = name.lower()
-            if lower.startswith(ACCOUNT_SCOPE_PREFIXES):
-                scoped.add(lower)
-            elif lower not in dropped:
+            if family.forwards(lower) and lower not in dropped:
                 forward.append((name, value))
-        return forward, tuple(sorted(scoped))
+            elif lower not in quiet:
+                stripped.add(lower)
+        return forward, tuple(sorted(stripped))
+
+    def _header_shape(self, headers, body: bytes, grant: Grant) -> None:
+        """Refused before anything is forwarded (the security review's S1): a header value holding a CR or LF
+        (obsolete line folding included); a Content-Encoding other than absent or identity; a Content-Type other
+        than one application/json with at most a charset=utf-8 parameter (case-insensitive), or none on a request
+        with a body."""
+        if any('\r' in str(value) or '\n' in str(value) for _, value in headers.items()):
+            raise self._refuse('HEADER_VALUE_INVALID', 'a header value holds a CR or LF', grant)
+        encodings = headers.get_all('content-encoding') or []
+        if encodings and (len(encodings) != 1 or encodings[0].strip().lower() != 'identity'):
+            raise self._refuse('CONTENT_ENCODING_REFUSED', 'the body is declared encoded', grant)
+        types = headers.get_all('content-type') or []
+        if not types:
+            if body:
+                raise self._refuse('CONTENT_TYPE_REFUSED', 'a body without a Content-Type', grant)
+            return
+        parts = [part.strip().lower() for part in types[0].split(';')] if len(types) == 1 else []
+        if not parts or parts[0] != 'application/json' or len(parts) > 2 \
+                or (len(parts) == 2 and parts[1] != 'charset=utf-8'):
+            raise self._refuse('CONTENT_TYPE_REFUSED', 'not one application/json Content-Type', grant)
 
     def stripped_names(self, names: tuple) -> dict:
-        """What an admitted request's audit line records of the account-scope headers stripped from it: their names
-        in OBSERVED_WORD's grammar (sorted, at most OBSERVED_NAMES), the others counted, never a value."""
+        """What an admitted request's audit line records of the headers stripped from it: their names in
+        OBSERVED_WORD's grammar (sorted, at most OBSERVED_NAMES), the others counted, never a value."""
         kept = [name for name in names if self._recordable('audit stripped header', name, OBSERVED_WORD)]
         return {'names': kept[:OBSERVED_NAMES], 'unrecorded': len(names) - len(kept[:OBSERVED_NAMES])}
 
@@ -1761,6 +1825,7 @@ class Broker:
             self._not_stopping(grant)
             self._envelope(family, grant)
         body = self._read_body(headers, read, grant)
+        self._header_shape(headers, body, grant)
         try:
             document = strict_json(body)
         except DuplicateKey:
