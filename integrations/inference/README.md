@@ -55,6 +55,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, expiry or selection, another target, a non-canonical manifest, a receipt over a `/1` document, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection refusals); the retired spending keys refused; the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, no budget (an answer without usage, a cut stream and an upstream error stop nothing), revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
+| `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
+| `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
 | `tests/test_key_search.py` | `inference_key_search.py`: its forms (the standard encodings at every alignment, the body, the fragments), a copy across a read boundary, every positive control for keys of 16 to 128 body characters and each control failing when the view it controls is broken, the gzip, SQLite, HTTP, tar, tree and environment views with their incomplete cases, the command line (a pipe only, every refusal without the key, a planted copy found, nothing printed, logged or written) |
@@ -229,6 +231,7 @@ Owner's account can call it (disclosed, decision 0013 point 6).
 | `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` (1 to 200 printable characters, `valid_revoker`); or, in place of `token_fingerprint`, `conversation_id` and `attempt_id` (E-05.6: the attempt's one grant, for a dispatcher that lost the issue's answer) | 200: the grant, revoked, with its revocation receipt; by conversation and attempt with no grant, 200 `tombstoned` (`aieh-inference-attempt-tombstone/1`: the attempt is tombstoned and its issue is refused from then on, `GRANT_ATTEMPT_REVOKED`); `GRANT_UNKNOWN` when no grant has that fingerprint, or when the attempt's grant ended with an earlier run or is of another conversation; `GRANT_ALREADY_REVOKED` |
 | `GET /v1/grants/<fingerprint>` | | the grant: state, lifetime, counts, usage, receipts |
 | `GET /v1/status` | | listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
+| `POST /v1/stop` | an empty JSON object `{}` | 202: `aieh-inference-broker-stop/1` (`state` `stopping`, `began`: whether this call began the stop, `stopped_by`); the stop begins before the answer is sent and `serve` is woken after it ([The stop](#the-stop)) |
 
 A token is `aieh-inf-` and 43 random URL-safe characters. The broker keeps only its sha256 digest and its
 fingerprint (`sha256:` and 16 hex digits). One grant per attempt, durably: its receipt
@@ -285,7 +288,8 @@ limits.
 **The stop.** The broker's own stop sets a stopping state under its lock first; from then on a request is
 refused `BROKER_STOPPING` (503) at admission, before anything of it is written upstream, so a handler still alive
 after the listeners stop (a keep-alive connection) forwards nothing more. After the stop the audit is closed, so
-such a refusal is not answered: the connection is closed instead.
+such a refusal is not answered: the connection is closed instead. How a stop is asked and how it ends:
+[The stop](#the-stop).
 
 **Egress.** `connect_upstream` is the one place that opens a connection, to the configured upstream origin of
 the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a
@@ -297,14 +301,40 @@ opens nothing else (no cost map, telemetry or update check). This is a code-path
 no other socket can take the port), and do no name lookup. Neither writes a log of its own: the audit is the
 broker's log.
 
+## The stop
+
+S-03.2 fix-forward, required before the Owner's act A2 (the OA-12 package, section 5 item 1): `serve` used to wait
+indefinitely, which a Ctrl-C does not interrupt on Windows (measured by the architect on CPython 3.12.10), so the
+only stop was a kill.
+
+- **The stop event.** The broker owns one stop event. `serve` waits on it in slices of `STOP_POLL_S` (0.25 s), the
+  interval at which the interpreter can run a signal handler: a functional bound, not a wait for work.
+- **Asking for it.** SIGINT (Ctrl-C), SIGBREAK (Ctrl-Break, Windows) and SIGTERM, where the platform has them,
+  set it; so does `POST /v1/stop` on the control listener, under the same rules as every control call (direct
+  loopback caller, `application/json`), which is the stop that works from a session with no console:
+  `inference_control.py stop`. The control stop begins the stop before it answers, and wakes `serve` only once
+  its answer is sent.
+- **The clean stop.** From its start every new request is refused `BROKER_STOPPING`; both listeners close;
+  requests already admitted are given at most `STOP_DRAIN_CEILING_S` (5 s) to finish; each one still running is
+  then cut (its client's connection first, so that no further byte and no terminating chunk reaches it, then its
+  upstream connection) and audited with code `BROKER_STOPPED`, never as an upstream answer; the pending
+  revocation receipts and the `broker-stop` audit line (`stopped_by`: the signal's name, `control` or `stop`;
+  `requests_cut`; `live_grants_ended`) are written; `serve` prints its status and exits 0. It never waits on a
+  client or an upstream beyond those ceilings (a cut request's own thread gets at most `STOP_CUT_CEILING_S`, 2 s,
+  to finish its audit line).
+- **A second interrupt** during a stop that has not finished exits at once with exit code 3 (`FORCED_EXIT`),
+  writing nothing further. One after the stop has finished is ignored.
+
+The broker is not supervised (OA-12 package section 3, assumption 8): nothing restarts it.
+
 ## Audit
 
 One append-only JSON line per request (`aieh-inference-audit/1`) in a new file per broker run,
 `<managed root>/persistent/logs/inference/audit-<stamp>-<random>.jsonl`: `time`, `attempt_id`,
 `conversation_id`, `token_fingerprint`, `family`, `method`, `path`, `query_names`, `model`, `unrecorded`,
 `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and `code` (the refusal
-code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`); plus `broker-start`, `broker-stop` and
-`handler-error` lines. An admitted request's line has its declared route and admitted model. A refused
+code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`, `BROKER_STOPPED`: cut by the broker's stop); plus
+`broker-start`, `broker-stop` (`stopped_by`, `requests_cut`, `live_grants_ended`) and `handler-error` lines. An admitted request's line has its declared route and admitted model. A refused
 request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
 fake upstream) has its path, its query parameter **names** (sorted, at most 16) and, when it presented a
 grant's token, the `model` of its JSON body (read, if the refusal came first, from the body the refusal
@@ -344,7 +374,7 @@ broker only through this module. `dispatcher_ports` reads `control_port` and `in
 `load_config` (refusing what the broker refuses, and a missing port with `CONFIG_INCOMPLETE`);
 `forward_target` gives the port a forward session may target and refuses the control listener's port
 (`CONTROL_PORT_REFUSED`) and any other (`FORWARD_PORT_REFUSED`); `ControlClient` calls the control
-listener on `127.0.0.1` as it admits callers (status, `GET /v1/grants/<fingerprint>`, revocation) and
+listener on `127.0.0.1` as it admits callers (status, `GET /v1/grants/<fingerprint>`, revocation, the stop) and
 passes the broker's refusal code on (`CONTROL_UNREACHABLE` and `CONTROL_ANSWER_INVALID` otherwise);
 `token_fingerprint` checks a token's shape (`TOKEN_SHAPE_INVALID`) and returns only its fingerprint. The
 dispatcher's own issuance and revocation for the D1 stage, the token reaching that stage's attempt through the
@@ -574,7 +604,8 @@ credential provider holding a synthetic key) and has never read a real entry.
 <tools python> -I -B integrations/inference/inference_broker.py config            # validate and print the configuration
 <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]   # the live envelope and its manifest
 <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   # key on stdin
-<tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until Ctrl+C
+<tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until stopped
+<tools python> -I -B integrations/inference/inference_control.py stop             # the stop from any session
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
 <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
@@ -589,7 +620,8 @@ credential provider holding a synthetic key) and has never read a real entry.
     --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
 ```
 
-Exit 0 done, 1 failed, 2 refused (a stable code with its remedy). `serve` and `credential-set` act on the
+Exit 0 done, 1 failed, 2 refused (a stable code with its remedy); `serve` exits 3 on a second interrupt during
+its stop. `serve` and `credential-set` act on the
 managed root, its `config.yml` and the real credential provider: Owner acts, not run in this slice. The
 qualification launcher acts on the managed root and its `config.yml` too (never on a credential provider); it,
 the fake upstream and `issue` are part of the Owner's act A2 and have not run outside a test process.
@@ -686,6 +718,9 @@ every family.
   `issue` command's pipe check with PowerShell's and Git Bash's pipes is not observed.
 - Linux and macOS (the listeners' exclusive binding is Windows-specific; elsewhere the default no-reuse
   binding applies).
+- The stop from a real console: a Ctrl-C or Ctrl-Break typed in the Owner's own console window (the tests send
+  `CTRL_BREAK_EVENT` to a child with a hidden console of its own, and raise SIGINT, SIGBREAK and SIGTERM in the
+  test process); SIGTERM from another process; the stop on Linux and macOS.
 - The provider envelope (S-03.5 slice 1) outside a test process: a real envelope manifest, its authorization by
   the Owner through the recorder against a real Gitea, `serve` started on it, and any request through `serve` to
   a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture

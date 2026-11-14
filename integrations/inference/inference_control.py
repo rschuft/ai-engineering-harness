@@ -8,7 +8,8 @@ the broker, and this module is all of them:
   own configuration loader (dispatcher_ports): the forward session targets the inference listener only, and
   forward_target refuses the control listener's port and any port that is not the inference listener's;
 - a call of the control listener on 127.0.0.1 (ControlClient): the broker's status, one grant's state by its
-  token fingerprint, and revocation (decision 0015 section 3.3: the dispatcher revokes at attempt end). The
+  token fingerprint, revocation (decision 0015 section 3.3: the dispatcher revokes at attempt end), and the
+  broker's stop (POST /v1/stop: the stop that works from a session with no console; the stop command). The
   dispatcher's own issuance and revocation for the D1 stage are E-05.6's (integrations/dispatch/dispatch_inputs.py:
   dispatch and end_attempt, through ControlClient); every other stage's create secrets stay A-01.2's and E-03.1's;
 - the fingerprint of an attempt token (token_fingerprint), after checking its shape, so that a record carries
@@ -21,6 +22,11 @@ never kept; standard error carries only the grant's attempt id and the token's f
 
   <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID
       --model NAME --ttl-s SECONDS [--attempt-id UUID] | <the command that reads it>
+
+  <tools python> -I -B integrations/inference/inference_control.py stop
+
+asks the broker to stop (the clean stop of inference_broker.py serve); it prints the broker's answer and returns
+once the broker has answered, not once the process has exited.
 
 A grant carries its lifetime only, never a request or token budget (retired by S-03.6; the broker refuses an
 issue request that carries one, BUDGET_RETIRED).
@@ -173,6 +179,10 @@ class ControlClient:
             raise ControlError('TOKEN_SHAPE_INVALID', 'not a token fingerprint')
         return self.call('GET', f'/v1/grants/{fingerprint}')
 
+    def stop(self) -> dict:
+        """Ask the broker to stop (POST /v1/stop with an empty JSON object): answered before its listeners close."""
+        return self.call('POST', '/v1/stop', {})
+
     def revoke(self, fingerprint: str, trigger: str, revoker: str) -> dict:
         return self.call('POST', '/v1/grants/revoke', {'token_fingerprint': fingerprint, 'trigger': trigger,
                                                        'revoker': revoker})
@@ -238,8 +248,18 @@ def main(argv=None, context: Context | None = None) -> int:
     issue.add_argument('--model', action='append', required=True, dest='models',
                        help="a model of the family's allowlist (repeatable)")
     issue.add_argument('--ttl-s', type=int, required=True, help='the lifetime in seconds')
+    sub.add_parser('stop', help='ask the broker to stop (the clean stop; for a broker run from a session with no '
+                                'console); prints its answer')
     args = parser.parse_args(argv)
     ctx = context or Context(component=managed_component, out=sys.stdout, err=sys.stderr)
+    if args.command == 'stop':
+        try:
+            answer = ControlClient(dispatcher_ports(ctx.component())['control_port']).stop()
+        except (ControlError, broker.paths.PathsError) as exc:
+            ctx.err.write(f'inference-control: {exc}\n')
+            return 2
+        ctx.out.write(json.dumps(answer, sort_keys=True) + '\n')
+        return 0
     try:
         token_pipe(ctx.out)
         ports = dispatcher_ports(ctx.component())

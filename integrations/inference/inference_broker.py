@@ -61,12 +61,21 @@ The envelope carries no spending limit and the broker enforces no cumulative cap
 per-run ledger in the integration store and their refusals (decision 0021 amendment 1); spending is bounded by
 the provider account's own limits. Once the broker's own stop begins, a new request is refused BROKER_STOPPING.
 
+The stop (S-03.2, before the Owner's act A2): serve waits on the broker's one stop event in slices of STOP_POLL_S,
+so that an interrupt is delivered on every platform (an indefinite wait ignores Ctrl-C on Windows). SIGINT,
+SIGBREAK (Windows) and SIGTERM, where the platform has them, and the control listener's POST /v1/stop (the stop
+from a session with no console; inference_control.py stop) set it. From then on every new request is refused
+BROKER_STOPPING; the listeners close; requests already admitted are given at most STOP_DRAIN_CEILING_S to finish,
+then cut (their audit line says BROKER_STOPPED, never an upstream answer); the broker-stop audit line and the
+pending receipts are written, and serve exits 0. A second interrupt during a stop that has not finished exits at
+once with FORCED_EXIT, writing nothing further.
+
   <tools python> -I -B integrations/inference/inference_broker.py config
   <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]
   <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   (key on stdin)
   <tools python> -I -B integrations/inference/inference_broker.py serve
 
-Exit 0 done, 1 failed, 2 refused (a stable code).
+Exit 0 done, 1 failed, 2 refused (a stable code), 3 forced (serve: a second interrupt during the stop).
 """
 from __future__ import annotations
 
@@ -82,6 +91,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import socketserver
 import ssl
@@ -128,6 +138,16 @@ REVOCATION_FORMAT = 'aieh-inference-revocation/1'
 # grant receipt key, so that no grant of that attempt is ever registered after it (Broker.revoke).
 TOMBSTONE_FORMAT = 'aieh-inference-attempt-tombstone/1'
 START_FORMAT = 'aieh-inference-broker-start/1'
+STOP_FORMAT = 'aieh-inference-broker-stop/1'     # the control listener's answer to POST /v1/stop
+# The stop (S-03.2): serve's wait on the stop event runs in slices of STOP_POLL_S, the interval at which the
+# interpreter can run a signal handler (a functional bound, not a wait for work); the stop gives requests already
+# admitted at most STOP_DRAIN_CEILING_S to finish, then cuts them, and gives a cut request's own thread at most
+# STOP_CUT_CEILING_S to finish writing its audit line. A second interrupt during the stop exits FORCED_EXIT.
+STOP_POLL_S = 0.25
+STOP_DRAIN_CEILING_S = 5.0
+STOP_CUT_CEILING_S = 2.0
+STOP_SIGNALS = ('SIGINT', 'SIGBREAK', 'SIGTERM')
+FORCED_EXIT = 3
 AUDIT_FORMAT = 'aieh-inference-audit/1'
 STATUS_FORMAT = 'aieh-inference-broker-status/1'
 CONFIG_FORMAT = 'aieh-inference-config/1'
@@ -237,8 +257,8 @@ CODES = {
     'BROKER_STOPPING': (503, 'the broker is stopping: no new request is admitted; send it again once the broker '
                              'has been started again'),
     # the control listener
-    'CONTROL_ROUTE_UNKNOWN': (404, 'use POST /v1/grants, POST /v1/grants/revoke, GET /v1/grants/<fingerprint> or '
-                                   'GET /v1/status'),
+    'CONTROL_ROUTE_UNKNOWN': (404, 'use POST /v1/grants, POST /v1/grants/revoke, GET /v1/grants/<fingerprint>, '
+                                   'GET /v1/status or POST /v1/stop'),
     'CONTROL_CALLER_REFUSED': (403, 'call the control listener directly on 127.0.0.1 with its port as the Host, '
                                     'with no Origin header'),
     'CONTROL_CONTENT_TYPE': (415, 'send the body as application/json'),
@@ -1091,6 +1111,34 @@ class Admission:
     headers: list
 
 
+@dataclasses.dataclass(eq=False)
+class Flight:
+    """One request on the inference listener from its admission until it is settled (counted and audited once):
+    what the stop needs to cut it. LINE is its audit line, STARTED its monotonic start; the pass-through records
+    the upstream connection, the status sent and the bytes sent as it goes. CUT is set, under the broker's lock,
+    by a stop that cut it; SETTLED once its accounting is claimed."""
+    line: dict
+    started: float
+    handler: object = None
+    grant: Grant | None = None
+    connection: object = None
+    status: int | None = None
+    upstream_status: int | None = None
+    sent: int = 0
+    cut: bool = False
+    settled: bool = False
+
+    def interrupt(self) -> None:
+        """Shut the client's socket first (so that nothing more, a stream's terminating chunk included, reaches
+        it), then the upstream's (so that a pass-through blocked on the upstream wakes)."""
+        for sock in (getattr(self.handler, 'connection', None), getattr(self.connection, 'sock', None)):
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
 def _uuid(value, code: str, what: str) -> str:
     try:
         if isinstance(value, str) and str(uuid.UUID(value)) == value:
@@ -1166,7 +1214,17 @@ class Broker:
         self.listeners: dict = {}
         self.start_receipt = None
         self._stopped = False
-        self._stopping = False   # set by stop(), under _lock, first: from then on no request is admitted
+        self._stopping = False   # set by request_stop(), under _lock, first: from then on no request is admitted
+        # The stop (S-03.2): stop_event is the broker's one stop event (serve waits on it); stop_by names what asked
+        # first; stop_finished is set at the end of stop(). _flights holds every admitted request not yet settled
+        # (Flight), _settled is notified as each settles; drain_ceiling_s bounds the stop's wait for them.
+        self.stop_event = threading.Event()
+        self.stop_finished = threading.Event()
+        self.stop_by: str | None = None
+        self.drain_ceiling_s = STOP_DRAIN_CEILING_S
+        self._flights: dict[int, Flight] = {}
+        self._settled = threading.Condition(self._lock)
+        self._after_stop: list = []
 
     # -- readiness
 
@@ -1385,6 +1443,23 @@ class Broker:
                 grant.refused += 1
         return InferenceError(code, detail, grant=grant)
 
+    def request_stop(self, by: str, *, wake: bool = True) -> bool:
+        """Begin the stop: from now on every new request is refused BROKER_STOPPING. WAKE sets the stop event, on
+        which serve waits (the control listener's stop sets it only once its answer is sent). True when this call
+        began the stop; False when it had already begun (BY is then not recorded)."""
+        with self._lock:
+            first = not self._stopping
+            self._stopping = True
+            if first:
+                self.stop_by = by
+        if wake:
+            self.stop_event.set()
+        return first
+
+    def after_stop(self, call: Callable) -> None:
+        """Run CALL at the very end of stop() (serve's wait restores the signal handlers it installed)."""
+        self._after_stop.append(call)
+
     def _not_stopping(self, grant: Grant) -> None:
         """Under the lock: once the broker's own stop has begun, no request is admitted (BROKER_STOPPING), before
         anything of it is written upstream."""
@@ -1455,10 +1530,11 @@ class Broker:
         stripped = NOT_FORWARDED | named | {f.auth_header for f in self.config.families.values()}
         return [(name, value) for name, value in headers.items() if name.lower() not in stripped]
 
-    def admit(self, method: str, target: str, headers, read: Callable) -> Admission:
+    def admit(self, method: str, target: str, headers, read: Callable, flight: Flight | None = None) -> Admission:
         """Admit one inference request or refuse it with a stable code: the token first, then the route, the
         broker's stop and the envelope, the body and its model, then the token's absence from what is forwarded.
-        The request is counted (information only) atomically at the end."""
+        The request is counted (information only) atomically at the end, and FLIGHT (serve_inference's) registered
+        with it, so that a stop that begins after it finds it."""
         token, carriers = self._presented(headers)
         with self._lock:
             grant = self._grants.get(digest(token)) if TOKEN_SHAPE.fullmatch(token) else None
@@ -1503,6 +1579,9 @@ class Broker:
             grant.requests += 1
             grant.in_flight += 1
             grant.bytes_in += len(body)
+            if flight is not None:
+                flight.grant = grant
+                self._flights[id(flight)] = flight
         return Admission(grant, family, method, target, path, model, body, forward)
 
     def _recordable(self, what: str, text: str, shape: re.Pattern) -> bool:
@@ -1555,17 +1634,14 @@ class Broker:
                 'response_bytes': 0, 'status': None, 'upstream_status': None, 'latency_ms': None, 'usage': None,
                 'code': None}
         captured = []
-
-        def audit(**fields):
-            line.update(fields, latency_ms=round((time.monotonic() - started) * 1000, 1))
-            self.audit.write(line)
+        flight = Flight(line, started, handler)
 
         def read(length: int) -> bytes:
             handler.body_consumed = True
             captured.append(handler.rfile.read(length))
             return captured[-1]
         try:
-            admission = self.admit(handler.command, handler.path, handler.headers, read)
+            admission = self.admit(handler.command, handler.path, handler.headers, read, flight)
         except InferenceError as exc:
             body = None
             if exc.grant is not None:
@@ -1573,40 +1649,54 @@ class Broker:
                             token_fingerprint=exc.grant.fingerprint, family=exc.grant.family)
                 body = captured[0] if captured else _drain(handler)
             line.update(self.observed_request(handler.path, body))
-            audit(status=exc.status, code=exc.code)
+            line.update(status=exc.status, code=exc.code, latency_ms=round((time.monotonic() - started) * 1000, 1))
+            self.audit.write(line)
             _send_refusal(handler, exc)
             return
         grant, family = admission.grant, admission.family
         line.update(attempt_id=grant.attempt_id, conversation_id=grant.conversation_id,
                     token_fingerprint=grant.fingerprint, family=family.id, path=admission.path,
                     model=admission.model, request_bytes=len(admission.body))
-        settled = []
+        try:
+            self._relay(handler, admission, flight)
+        finally:
+            self._settle(flight, 'unknown', 0, None, None, 'BROKER_ERROR')
+
+    def _settle(self, flight: Flight, usage, sent: int, status, upstream_status, code) -> None:
+        """Count FLIGHT's answer in its grant's summary (information only: nothing here refuses, closes or narrows
+        a grant) and write its audit line, once: whoever claims it first (its pass-through, or the stop that cut
+        it) settles it. It leaves the broker's flights only after its line is written, so that a stop waiting for
+        it does not close the audit under it."""
+        with self._lock:
+            if flight.settled:
+                return
+            flight.settled = True
+            grant = flight.grant
+            grant.in_flight -= 1
+            grant.bytes_out += sent
+            if isinstance(usage, dict):
+                grant.input_tokens += usage['input']
+                grant.output_tokens += usage['output']
+                grant.total_tokens += usage['total']
+            elif upstream_status is not None and 200 <= upstream_status < 300:
+                grant.unknown_usage += 1
+        try:
+            flight.line.update(status=status, upstream_status=upstream_status, response_bytes=sent, usage=usage,
+                               code=code, latency_ms=round((time.monotonic() - flight.started) * 1000, 1))
+            self.audit.write(flight.line)
+        finally:
+            with self._lock:
+                self._flights.pop(id(flight), None)
+                self._settled.notify_all()
+
+    def _relay(self, handler, admission: Admission, flight: Flight) -> None:
+        """Send the admitted request to the family's upstream and stream the answer back as it arrives; FLIGHT is
+        settled before the answer's last bytes are sent. A flight the stop cut sends nothing more: neither the
+        request upstream nor any byte (a terminating chunk included) to the client."""
+        family = admission.family
 
         def settle(usage, sent: int, status, upstream_status, code) -> None:
-            """Count the answer in the grant's summary (information only: nothing here refuses, closes or narrows
-            a grant) and write its audit line, once."""
-            if settled:
-                return
-            settled.append(True)
-            with self._lock:
-                grant.in_flight -= 1
-                grant.bytes_out += sent
-                if isinstance(usage, dict):
-                    grant.input_tokens += usage['input']
-                    grant.output_tokens += usage['output']
-                    grant.total_tokens += usage['total']
-                elif upstream_status is not None and 200 <= upstream_status < 300:
-                    grant.unknown_usage += 1
-            audit(status=status, upstream_status=upstream_status, response_bytes=sent, usage=usage, code=code)
-        try:
-            self._relay(handler, admission, settle)
-        finally:
-            settle('unknown', 0, None, None, 'BROKER_ERROR')
-
-    def _relay(self, handler, admission: Admission, settle: Callable) -> None:
-        """Send the admitted request to the family's upstream and stream the answer back as it arrives; settle
-        is called before the answer's last bytes are sent."""
-        family = admission.family
+            self._settle(flight, usage, sent, status, upstream_status, code)
         headers = list(admission.headers) + [('Host', family.upstream.authority),
                                              ('Content-Length', str(len(admission.body))),
                                              ('Accept-Encoding', 'identity')]
@@ -1616,6 +1706,11 @@ class Broker:
         connection = None
         try:
             connection = self._connect(family.upstream, self.config.upstream_timeout_s)
+            with self._lock:
+                flight.connection, cut = connection, flight.cut
+            if cut:
+                connection.close()
+                return                                   # the stop cut it before anything was sent upstream
             connection.putrequest(admission.method, admission.target, skip_host=True, skip_accept_encoding=True)
             for name, value in headers:
                 connection.putheader(name, value)
@@ -1626,13 +1721,18 @@ class Broker:
                 connection.close()
             error = InferenceError('UPSTREAM_UNREACHABLE', type(exc).__name__, grant=admission.grant)
             settle('unknown', 0, error.status, None, error.code)
-            _send_refusal(handler, error)
+            if not flight.cut:
+                _send_refusal(handler, error)
             return
         status, total = response.status, response.length
+        flight.upstream_status = status
         reader = UsageReader(family.usage, response.getheader('content-type'))
         sent, code = 0, None
         try:
+            if flight.cut:
+                raise OSError('cut by the stop')
             handler.send_response_only(status, response.reason)
+            flight.status = status
             for name, value in response.getheaders():
                 if name.lower() not in NOT_RELAYED:
                     handler.send_header(name, value)
@@ -1649,6 +1749,9 @@ class Broker:
                     code = 'UPSTREAM_STREAM_BROKEN'
                     handler.close_connection = True
                     break
+                if flight.cut:                           # the stop cut it: no further byte, no terminating chunk
+                    handler.close_connection = True
+                    break
                 if not data:
                     if chunked:
                         settle(reader.finish(), sent, status, status, None)
@@ -1659,6 +1762,7 @@ class Broker:
                     settle(reader.finish(), sent + len(data), status, status, None)
                 handler.wfile.write(b'%x\r\n%s\r\n' % (len(data), data) if chunked else data)
                 sent += len(data)
+                flight.sent = sent
         except OSError:
             code = 'CLIENT_GONE'
             handler.close_connection = True
@@ -1715,29 +1819,60 @@ class Broker:
         self._servers.clear()
 
     def stop(self) -> None:
-        """Stop both listeners, write the pending receipts, and close the journal and the audit. Live grants
-        end with the process (an audit line counts them)."""
+        """The clean stop: refuse every new request (BROKER_STOPPING), close both listeners, give the requests
+        already admitted at most drain_ceiling_s to finish and cut the rest (BROKER_STOPPED), write the pending
+        receipts and the broker-stop audit line, and close the journal and the audit. Live grants end with the
+        process (the broker-stop line names them). It never waits on a client or an upstream beyond its ceilings."""
         if self._stopped:
             return
         self._stopped = True
-        with self._lock:
-            # From here no request is admitted (BROKER_STOPPING), before anything of it is written upstream: a
-            # handler still alive after the listeners stop (a keep-alive connection) forwards nothing more.
-            self._stopping = True
-        stoppers = [threading.Thread(target=server.shutdown) for server in self._servers]
-        for stopper in stoppers:
-            stopper.start()
-        for stopper in stoppers:
-            stopper.join()
-        self._close_servers()
+        # From here no request is admitted (BROKER_STOPPING), before anything of it is written upstream: a handler
+        # still alive after the listeners stop (a keep-alive connection) forwards nothing more.
+        self.request_stop('stop')
         try:
-            self.housekeeping()
-            with self._lock:
-                live = [g.fingerprint for g in self._grants.values() if g.revocation is None]
-            self.audit.write({'event': 'broker-stop', 'live_grants_ended': live})
+            stoppers = [threading.Thread(target=server.shutdown) for server in self._servers]
+            for stopper in stoppers:
+                stopper.start()
+            for stopper in stoppers:
+                stopper.join()
+            self._close_servers()
+            try:
+                cut = self._drain()
+                self.housekeeping()
+                with self._lock:
+                    live = [g.fingerprint for g in self._grants.values() if g.revocation is None]
+                self.audit.write({'event': 'broker-stop', 'stopped_by': self.stop_by, 'requests_cut': cut,
+                                  'live_grants_ended': live})
+            finally:
+                self.journal.close()
+                self.audit.close()
         finally:
-            self.journal.close()
-            self.audit.close()
+            self.stop_finished.set()
+            for call in self._after_stop:
+                call()
+
+    def _wait_flights(self, ceiling: float) -> None:
+        """Wait until no admitted request is unsettled, for at most CEILING seconds, in slices of STOP_POLL_S so
+        that an interrupt is delivered meanwhile (a second interrupt then exits at once)."""
+        deadline = time.monotonic() + ceiling
+        with self._lock:
+            while self._flights and (left := deadline - time.monotonic()) > 0:
+                self._settled.wait(min(left, STOP_POLL_S))
+
+    def _drain(self) -> int:
+        """The stop's wait for the requests already admitted, bounded by drain_ceiling_s; then each one still
+        unsettled is cut: marked under the lock, its client's and its upstream's sockets shut, and settled here
+        with BROKER_STOPPED (never as an upstream answer). Returns how many were cut."""
+        self._wait_flights(self.drain_ceiling_s)
+        with self._lock:
+            remaining = [flight for flight in self._flights.values() if not flight.settled]
+            for flight in remaining:
+                flight.cut = True
+        for flight in remaining:
+            flight.interrupt()
+            self._settle(flight, 'unknown', flight.sent, flight.status, flight.upstream_status, 'BROKER_STOPPED')
+        self._wait_flights(STOP_CUT_CEILING_S)          # a settle its own thread had already claimed
+        return len(remaining)
 
 
 class _Server(http.server.ThreadingHTTPServer):
@@ -1839,6 +1974,10 @@ class _ControlHandler(_Handler):
             elif self.command == 'POST' and path in ('/v1/grants', '/v1/grants/revoke'):
                 body = self._json_body()
                 status, payload = (201, broker.issue(body)) if path == '/v1/grants' else (200, broker.revoke(body))
+            elif self.command == 'POST' and path == '/v1/stop':
+                _exact_keys(self._json_body(), (), (), 'CONTROL_BODY_INVALID', 'the stop request')
+                self._stop(broker)
+                return
             else:
                 raise InferenceError('CONTROL_ROUTE_UNKNOWN', f'{self.command} is not a control route here')
         except InferenceError as exc:
@@ -1849,6 +1988,18 @@ class _ControlHandler(_Handler):
             _send_refusal(self, InferenceError('EXPOSURE_FOUND', 'the answer was withheld', refusal=False))
             return
         _send_json(self, status, payload, close=False)
+
+    def _stop(self, broker: Broker) -> None:
+        """POST /v1/stop (the stop from a session with no console): the stop begins at once (every new request is
+        refused BROKER_STOPPING), the answer is sent, and only then is serve woken to close the listeners."""
+        first = broker.request_stop('control', wake=False)
+        try:
+            _send_json(self, 202, {'format': STOP_FORMAT, 'state': 'stopping', 'began': first,
+                                   'stopped_by': broker.stop_by}, close=True)
+        except OSError:
+            self.close_connection = True
+        finally:
+            broker.stop_event.set()
 
     def _json_body(self):
         if (self.headers.get('content-type') or '').split(';')[0].strip().lower() != 'application/json':
@@ -1943,11 +2094,65 @@ class Context:
     clock: Callable = time.time  # serve: the broker's clock (the envelope's expiry, at start and at admission)
 
 
-def _wait_for_interrupt(broker: Broker) -> None:
+def stop_signal_handler(ask: Callable[[str], bool], finished: threading.Event | None = None, *,
+                        exit: Callable = os._exit) -> Callable:   # noqa: A002 - the forced exit, injectable
+    """The handler of STOP_SIGNALS: the first interrupt asks the stop (ASK, with the signal's name, answers whether
+    it began the stop); one during a stop that has not finished (FINISHED unset) exits at once with FORCED_EXIT,
+    writing nothing further; one after the stop has finished is ignored (the process is ending)."""
+    def handler(signum, frame):
+        if finished is not None and finished.is_set():
+            return
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = f'signal {signum}'
+        if not ask(name):
+            exit(FORCED_EXIT)
+    return handler
+
+
+def install_stop_signals(ask: Callable[[str], bool], finished: threading.Event | None = None) -> Callable:
+    """Install stop_signal_handler for each of STOP_SIGNALS the platform has (only the main thread can); returns
+    the call that restores the previous handlers (a no-op off the main thread)."""
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    handler, previous = stop_signal_handler(ask, finished), {}
+    for name in STOP_SIGNALS:
+        number = getattr(signal, name, None)
+        if number is not None:
+            previous[number] = signal.signal(number, handler)
+
+    def restore():
+        if threading.current_thread() is threading.main_thread():
+            for number, old in previous.items():
+                signal.signal(number, old)
+    return restore
+
+
+def _wait_for_interrupt(served) -> None:
+    """serve's wait (and the qualification's fake upstream's): until the stop is asked, by an interrupt (SIGINT,
+    SIGBREAK, SIGTERM where the platform has them) or, for a broker, by the control listener's POST /v1/stop. It
+    waits on the stop event in slices of STOP_POLL_S, the interval at which the interpreter runs a signal handler
+    (an indefinite wait ignores Ctrl-C on Windows). For a broker the handlers stay until its stop has finished, so
+    that a second interrupt during the stop exits at once; for anything else they are restored when it returns."""
+    if isinstance(served, Broker):
+        event, finished = served.stop_event, served.stop_finished
+        restore = install_stop_signals(served.request_stop, finished)
+        served.after_stop(restore)
+    else:
+        event, finished = threading.Event(), None
+
+        def ask(by: str) -> bool:
+            first = not event.is_set()
+            event.set()
+            return first
+        restore = install_stop_signals(ask)
     try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        pass
+        while not event.wait(STOP_POLL_S):
+            pass
+    finally:
+        if finished is None:
+            restore()
 
 
 def managed_context() -> Context:
@@ -2019,7 +2224,8 @@ def main(argv=None, context: Context | None = None) -> int:
     cred = sub.add_parser('credential-set', help='store the provider key, read from standard input only, as the '
                                                  'entry "AIEH model provider"; prints its fingerprint')
     cred.add_argument('--provider', required=True, help='the provider id (the entry\'s user name)')
-    sub.add_parser('serve', help='run the broker on its two loopback listeners until interrupted')
+    sub.add_parser('serve', help='run the broker on its two loopback listeners until stopped (Ctrl-C, Ctrl-Break, '
+                                 'SIGTERM, or inference_control.py stop)')
     args = parser.parse_args(argv)
     guard = BrokerGuard()
     report, message, code = None, '', 0
