@@ -57,7 +57,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, expiry or selection, another target, a non-canonical manifest, a receipt over a `/1` document, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection refusals); the retired spending keys refused; the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, no budget (an answer without usage, a cut stream and an upstream error stop nothing), revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
-| `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
+| `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one; the security review's stop findings: a body read straddling the stop's start refused (M01), the cut wait (M25), a request cut while its upstream connection is made sends nothing (S3), a cut request claimed before it is interrupted (N1), a pass-through blocked on the upstream ends with the stop on Windows (N2), the handler that sets only a flag and no deadlock at a 0 s slice (S4), the ceilings within 3 s |
 | `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `tools` that is not a list or an entry that is not an object, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`); a body nested too deeply to parse refused `BODY_NOT_JSON` over the wire (a control body `CONTROL_BODY_INVALID`; an upstream answer unknown usage), never a handler error |
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
@@ -400,18 +400,28 @@ only stop was a kill.
 - **The stop event.** The broker owns one stop event. `serve` waits on it in slices of `STOP_POLL_S` (0.25 s), the
   interval at which the interpreter can run a signal handler: a functional bound, not a wait for work.
 - **Asking for it.** SIGINT (Ctrl-C), SIGBREAK (Ctrl-Break, Windows) and SIGTERM, where the platform has them,
-  set it; so does `POST /v1/stop` on the control listener, under the same rules as every control call (direct
+  ask for it: the handler records the signal's name in a plain flag and touches nothing else (no lock, no event:
+  an `Event.set()` inside a handler can deadlock against the main thread's own wait on it, the security review's
+  S4), and `serve`'s loop, at its next slice, begins the stop from the main thread. On Windows the C runtime
+  delivers every console control event other than Ctrl-C, the console's close included, as SIGBREAK, so the same
+  handler receives it (not tested: a close event cannot be generated by a test); Windows ends a closing console's
+  processes about 5 s after the event, and documents that it ends them as soon as the handler returns, which the C
+  runtime's handler does at once, so a stop on a console close is not assured (not verified). So does `POST /v1/stop` on the control listener, under the same rules as every control call (direct
   loopback caller, `application/json`), which is the stop that works from a session with no console:
   `inference_control.py stop`. The control stop begins the stop before it answers, and wakes `serve` only once
   its answer is sent.
 - **The clean stop.** From its start every new request is refused `BROKER_STOPPING`; both listeners close;
-  requests already admitted are given at most `STOP_DRAIN_CEILING_S` (5 s) to finish; each one still running is
-  then cut (its client's connection first, so that no further byte and no terminating chunk reaches it, then its
-  upstream connection) and audited with code `BROKER_STOPPED`, never as an upstream answer; the pending
+  requests already admitted are given at most `STOP_DRAIN_CEILING_S` (2 s) to finish; each one still running is
+  then cut: marked cut and its settlement claimed under the broker's lock first (so that its own pass-through,
+  woken by the cut, cannot settle it as an upstream failure), then its client's connection shut (no further byte
+  and no terminating chunk reaches it), then its upstream connection shut and closed (on Windows a shutdown alone
+  does not wake a pass-through blocked on the upstream; the handle is closed), and audited with code
+  `BROKER_STOPPED`, never as an upstream answer. A request whose upstream connection was still being made when it
+  was cut is aborted as soon as the connection is made, before any byte is sent (the security review's S3); the pending
   revocation receipts and the `broker-stop` audit line (`stopped_by`: the signal's name, `control` or `stop`;
   `requests_cut`; `live_grants_ended`) are written; `serve` prints its status and exits 0. It never waits on a
-  client or an upstream beyond those ceilings (a cut request's own thread gets at most `STOP_CUT_CEILING_S`, 2 s,
-  to finish its audit line).
+  client or an upstream beyond those ceilings (a cut request's own thread gets at most `STOP_CUT_CEILING_S`, 1 s,
+  to finish its audit line: 3 s in all, within the about 5 s Windows gives a closing console).
 - **A second interrupt** during a stop that has not finished exits at once with exit code 3 (`FORCED_EXIT`),
   writing nothing further. One after the stop has finished is ignored.
 

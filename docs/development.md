@@ -839,7 +839,7 @@ Three host-side tools for S-03.2's guest qualification (slice 4, [record](../evi
 
 The broker's stop (S-03.2 fix-forward before act A2; [inference README](../integrations/inference/README.md#the-stop)) is built and tested offline, with a real `CTRL_BREAK_EVENT` to `serve` in a child process of the test on Windows; a Ctrl-C typed in a real console is **not yet verified**. `serve` stops on SIGINT (Ctrl-C), SIGBREAK (Ctrl-Break) or SIGTERM, or on:
 
-- `<tools python> -I -B integrations/inference/inference_control.py stop`: asks the control listener to stop the broker (`POST /v1/stop`), the stop that works from a session with no console; prints the broker's answer. The broker refuses every new request from then on, closes its listeners, gives requests already admitted at most 5 s, cuts the rest (audited `BROKER_STOPPED`), writes its stop audit line and exits 0; a second interrupt during the stop exits at once with 3.
+- `<tools python> -I -B integrations/inference/inference_control.py stop`: asks the control listener to stop the broker (`POST /v1/stop`), the stop that works from a session with no console; prints the broker's answer. The broker refuses every new request from then on, closes its listeners, gives requests already admitted at most 2 s, cuts the rest (audited `BROKER_STOPPED`), writes its stop audit line and exits 0; a second interrupt during the stop exits at once with 3.
 
 The provider-key containment search of S-03.2's proof as amended (slice 5, [record](../evidence/S-03.2-slice5-key-containment-search.md)) is built and tested in process only and is **not yet verified** against a live broker or guest:
 

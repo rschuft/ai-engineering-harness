@@ -29,6 +29,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import broker_support as S
@@ -134,6 +135,7 @@ class StopEvent(Started):
 
         broker = object.__new__(IB.Broker)
         broker.stop_event, broker.stop_finished, broker._after_stop = Event(), threading.Event(), []
+        broker._stopping = broker._stop_done = False
         broker.request_stop = lambda by, wake=True: True
         IB._wait_for_interrupt(broker)
         self.assertEqual(waits, [IB.STOP_POLL_S] * 3)
@@ -146,9 +148,15 @@ class StopEvent(Started):
 
 
 class Interrupts(Started):
+    def handler(self, rig, exits):
+        pending = IB.StopRequest()
+        return pending, IB.stop_signal_handler(pending, lambda: rig.broker._stopping, lambda: rig.broker._stop_done,
+                                               exit=exits.append)
+
     def test_each_stop_signal_of_the_platform_stops_the_wait(self):
-        """A real signal, raised in this process's main thread, runs the installed handler: the stop begins, named
-        by the signal; the handlers stay until the stop has finished, then the previous ones are restored."""
+        """A real signal, raised in this process's main thread, runs the installed handler, which records its name;
+        the wait's loop then begins the stop, named by the signal; the handlers stay until the stop has finished,
+        then the previous ones are restored."""
         names = [name for name in IB.STOP_SIGNALS if hasattr(signal, name)]
         self.assertIn('SIGINT', names)
         self.assertIn('SIGTERM', names)
@@ -159,36 +167,59 @@ class Interrupts(Started):
                 number = getattr(signal, name)
                 before = signal.getsignal(number)
                 rig = self.rig()
-                restore = IB.install_stop_signals(rig.broker.request_stop, rig.broker.stop_finished)
+                pending = IB.StopRequest()
+                restore = IB.install_stop_signals(pending, lambda: rig.broker._stopping,
+                                                  lambda: rig.broker._stop_done)
                 rig.broker.after_stop(restore)
                 self.addCleanup(restore)                     # once more, should a check below fail first
                 self.assertIsNot(signal.getsignal(number), before)        # installed: raising it is safe
                 signal.raise_signal(number)                  # its handler runs before raise_signal returns
+                self.assertEqual(pending.asked, name)
+                self.assertFalse(rig.broker.stop_event.is_set())          # the handler set nothing else
+                IB.wait_for_stop(rig.broker, pending)                     # the main thread begins the stop
                 self.assertEqual(rig.broker.stop_by, name)
                 self.assertTrue(rig.broker.stop_event.is_set())
                 self.assertIsNot(signal.getsignal(number), before)        # kept during the stop
                 rig.broker.stop()
                 self.assertEqual(signal.getsignal(number), before)        # restored once it has finished
 
+    def test_the_handler_touches_only_its_flag(self):
+        """The security review's S4: no lock and no event in the handler. A broker whose lock and event would fail if
+        touched: the handler records the name and returns."""
+        class Untouchable:
+            def __getattr__(self, name):
+                raise AssertionError(f'the handler touched {name}')
+        exits = []
+        pending = IB.StopRequest()
+        handler = IB.stop_signal_handler(pending, lambda: False, lambda: False, exit=exits.append)
+        broker = Untouchable()
+        handler(signal.SIGINT, None)
+        self.assertEqual((pending.asked, exits), ('SIGINT', []))
+        self.assertIsInstance(broker, Untouchable)
+
     def test_a_second_interrupt_during_the_stop_exits_at_once_writing_nothing(self):
         rig = self.rig()
         exits = []
-        handler = IB.stop_signal_handler(rig.broker.request_stop, rig.broker.stop_finished, exit=exits.append)
+        pending, handler = self.handler(rig, exits)
         handler(signal.SIGINT, None)
-        self.assertEqual((rig.broker.stop_by, exits), ('SIGINT', []))
+        self.assertEqual((pending.asked, exits), ('SIGINT', []))
         written = rig.audit.lines
-        handler(signal.SIGINT, None)
+        handler(signal.SIGINT, None)                                     # before the loop saw the first
         self.assertEqual(exits, [IB.FORCED_EXIT])
+        IB.wait_for_stop(rig.broker, pending)
+        self.assertEqual(rig.broker.stop_by, 'SIGINT')
+        handler(signal.SIGINT, None)                                     # during the stop
+        self.assertEqual(exits, [IB.FORCED_EXIT] * 2)
         self.assertNotEqual(IB.FORCED_EXIT, 0)
         self.assertEqual(rig.audit.lines, written)                       # nothing further written
         rig.broker.stop()
         handler(signal.SIGINT, None)                                     # after the stop: ignored
-        self.assertEqual(exits, [IB.FORCED_EXIT])
+        self.assertEqual(exits, [IB.FORCED_EXIT] * 2)
 
     def test_an_interrupt_after_a_control_stop_is_the_second(self):
         rig = self.rig()
         exits = []
-        handler = IB.stop_signal_handler(rig.broker.request_stop, rig.broker.stop_finished, exit=exits.append)
+        _, handler = self.handler(rig, exits)
         IC.ControlClient(rig.control).stop()
         handler(signal.SIGBREAK if hasattr(signal, 'SIGBREAK') else signal.SIGINT, None)
         self.assertEqual(exits, [IB.FORCED_EXIT])
@@ -197,12 +228,52 @@ class Interrupts(Started):
     def test_off_the_main_thread_nothing_is_installed(self):
         before = signal.getsignal(signal.SIGINT)
         seen = []
-        worker = threading.Thread(target=lambda: seen.append(IB.install_stop_signals(lambda by: True)))
+        worker = threading.Thread(target=lambda: seen.append(IB.install_stop_signals(IB.StopRequest())))
         worker.start()
         worker.join(CEILING_S)
         self.assertEqual(len(seen), 1)
         seen[0]()
         self.assertEqual(signal.getsignal(signal.SIGINT), before)
+
+    def test_no_deadlock_at_a_zero_slice(self):
+        """The security review's S4, its probe's pattern (probe_signal_event.py): the wait at a 0 s slice, so that the
+        main thread is almost always inside the stop event's wait, and SIGINT raised from another thread, many
+        rounds, in a process of its own with a watchdog. Event.set() in the handler deadlocked there within a few
+        rounds; the handler that sets a plain flag does not."""
+        proc = subprocess.run([sys.executable, '-I', '-B', '-c', NO_DEADLOCK, str(S.HERE), '400'],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=CEILING_S * 2,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('no deadlock in 400 rounds', proc.stdout)
+
+
+NO_DEADLOCK = """
+import os, signal, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import broker_support as S
+IB = S.IB
+rounds, progress = int(sys.argv[2]), [0, time.monotonic()]
+
+def watchdog():
+    while True:
+        time.sleep(1.0)
+        if time.monotonic() - progress[1] > 10:
+            print(f'DEADLOCK after {progress[0]} rounds', flush=True)
+            os._exit(7)
+threading.Thread(target=watchdog, daemon=True).start()
+for i in range(rounds):
+    broker = object.__new__(IB.Broker)
+    broker._lock, broker.stop_event, broker.stop_finished = threading.RLock(), threading.Event(), threading.Event()
+    broker._stopping = broker._stop_done = False
+    broker.stop_by, broker._after_stop = None, []
+    threading.Thread(target=lambda: (time.sleep(0.0005), signal.raise_signal(signal.SIGINT)), daemon=True).start()
+    IB._wait_for_interrupt(broker, poll_s=0)
+    assert broker.stop_by == 'SIGINT', broker.stop_by
+    for call in broker._after_stop:
+        call()
+    progress[0], progress[1] = i + 1, time.monotonic()
+print(f'no deadlock in {rounds} rounds', flush=True)
+"""
 
 
 # ---------------------------------------------------------------- the control listener's stop
@@ -408,6 +479,202 @@ class Drain(Started):
         self.assertEqual(sent, ['closed'])
         rig.broker._settle(flight, 'unknown', 0, None, None, 'BROKER_STOPPED')     # as the stop would
         self.assertEqual(rig.broker._flights, {})
+
+
+# ---------------------------------------------------------------- the independent security review's stop findings
+
+
+class Silent:
+    """An upstream that accepts connections and never reads or answers (held open until the test's cleanup)."""
+
+    def __init__(self, case):
+        self.sock = socket.socket()
+        self.sock.bind(('127.0.0.1', 0))
+        self.sock.listen(4)
+        self.origin = f'http://127.0.0.1:{self.sock.getsockname()[1]}'
+        self.accepted, self.held = threading.Event(), []
+        case.addCleanup(self.close)
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        try:
+            connection, _ = self.sock.accept()
+        except OSError:
+            return
+        self.held.append(connection)
+        self.accepted.set()
+
+    def close(self):
+        for connection in self.held:
+            connection.close()
+        self.sock.close()
+
+
+class ReviewFindings(Started):
+    def returning(self, rig) -> threading.Event:
+        """Set once an inference handler's serve_inference has returned (its pass-through thread is done)."""
+        returned, original = threading.Event(), rig.broker.serve_inference
+
+        def serve_inference(handler):
+            try:
+                original(handler)
+            finally:
+                returned.set()
+        rig.broker.serve_inference = serve_inference
+        return returned
+
+    def send(self, rig, grant, family='anthropic-messages'):
+        """One request on its own thread (any answer, or the error that ended it, ignored)."""
+        def run():
+            try:
+                S.request(rig.inference, 'POST', S.ROUTE[family], {'model': S.MODEL_A}, [S.auth(family, grant['token'])])
+            except (OSError, http.client.HTTPException):
+                pass
+        return self.thread(run)
+
+    def stopped_lines(self, rig) -> list:
+        return [(line['code'], line['status'], line['upstream_status']) for line in request_lines(rig)]
+
+    def test_m01_a_body_read_that_straddles_the_start_of_the_stop_is_refused(self):
+        """The registration-time BROKER_STOPPING check (the review's M01): the stop begins while the body is read,
+        after the first check; the request is refused and never registered or counted, so nothing is forwarded."""
+        rig = self.rig()
+        grant = rig.issue()
+        body = json.dumps({'model': S.MODEL_A}).encode()
+
+        def read(length):
+            rig.broker.request_stop('test: during the body read')
+            return body
+        headers = S.headers(S.auth('openai-chat', grant['token']), ('Content-Type', 'application/json'),
+                            ('Content-Length', str(len(body))))
+        with self.assertRaises(IB.InferenceError) as caught:
+            rig.broker.admit('POST', '/v1/chat/completions', headers, read, IB.Flight({'event': 'request'}, 0.0))
+        self.assertEqual(caught.exception.code, 'BROKER_STOPPING')
+        held = rig.broker._by_fingerprint[grant['token_fingerprint']]
+        self.assertEqual((held.requests, held.in_flight, held.refused), (0, 0, 1))
+        self.assertEqual(rig.broker._flights, {})
+
+    def test_m25_the_stop_waits_for_a_settle_its_own_thread_claimed(self):
+        """The cut wait (the review's M25): a request whose own pass-through has claimed its settlement but not yet
+        written its audit line when the drain ends is not cut; the stop waits for its line (within
+        STOP_CUT_CEILING_S) before it writes the broker-stop line and closes the audit."""
+        upstream = self.fake('openai-chat')
+        rig = self.rig({'openai-chat': upstream.origin})
+        grant = rig.issue()
+        rig.broker.drain_ceiling_s = 0                       # the drain's own wait ends at once
+        writing, release = threading.Event(), threading.Event()
+        original = rig.audit.write
+
+        def write(record):
+            if record.get('event') == 'request':
+                writing.set()
+                release.wait(CEILING_S)                     # the line is held until the stop waits for it
+            original(record)
+        rig.audit.write = write
+        waiting = threading.Event()
+
+        class Watched:
+            """The broker's settle condition, telling the test when the stop waits on it."""
+            def __init__(self, condition):
+                self.condition = condition
+
+            def wait(self, timeout=None):
+                waiting.set()
+                return self.condition.wait(timeout)
+
+            def notify_all(self):
+                self.condition.notify_all()
+        rig.broker._settled = Watched(rig.broker._settled)
+        client = self.send(rig, grant, 'openai-chat')
+        self.assertTrue(writing.wait(CEILING_S))             # claimed by its own thread, its line held
+        stopper = threading.Thread(target=rig.broker.stop, daemon=True)
+        stopper.start()
+        waiting.wait(IB.STOP_CUT_CEILING_S * 3)              # the stop waits for it (never, without the cut wait)
+        release.set()
+        stopper.join(CEILING_S)
+        client.join(CEILING_S)
+        self.assertFalse(stopper.is_alive())
+        events = [(line['event'], line.get('code')) for line in lines_of(rig) if line['event'] != 'upstream-connect']
+        self.assertEqual(events, [('broker-start', None), ('request', None), ('broker-stop', None)])
+        self.assertEqual([line['requests_cut'] for line in lines_of(rig) if line['event'] == 'broker-stop'], [0])
+
+    def test_s3_a_request_cut_while_its_connection_is_made_sends_nothing(self):
+        """The review's S3 (probe_cut_connect.py): the upstream connect is held at a gate; the stop's drain ends and
+        cuts the request; then the gate opens and the connection is made. Nothing is sent: the upstream receives
+        no request, even after the gate opened and the pass-through ended."""
+        upstream = self.fake()
+        entered, gate = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+
+        class SlowConnect(IB._UpstreamHTTPConnection):
+            def connect(self):
+                entered.set()
+                gate.wait(CEILING_S)
+                super().connect()
+        rig = self.rig({'anthropic-messages': upstream.origin},
+                       connect=lambda origin, timeout: SlowConnect(origin.host, origin.port, timeout=timeout))
+        returned = self.returning(rig)
+        grant = rig.issue(family='anthropic-messages')
+        rig.broker.drain_ceiling_s = 0.2
+        client = self.send(rig, grant)
+        self.assertTrue(entered.wait(CEILING_S))
+        self.stop_within_ceiling(rig)
+        gate.set()
+        self.assertTrue(returned.wait(CEILING_S))            # the pass-through has finished
+        client.join(CEILING_S)
+        self.assertEqual(upstream.requests, [])
+        self.assertEqual(self.stopped_lines(rig), [('BROKER_STOPPED', None, None)])
+
+    def test_n1_a_cut_request_is_claimed_before_it_is_interrupted(self):
+        """The review's N1 (probe_cut_settle.py): the drain's interrupt wakes the pass-through, which tries to settle
+        the request as its own failure before the drain settles it; the drain claimed it first, so it is audited
+        BROKER_STOPPED and counted once."""
+        silent = Silent(self)
+        rig = self.rig({'anthropic-messages': silent.origin})
+        grant = rig.issue(family='anthropic-messages')
+        rig.broker.drain_ceiling_s = 0.2
+        attempted, original_settle, stopping = threading.Event(), rig.broker._settle, threading.current_thread()
+
+        def settle(*args):
+            if threading.current_thread() is not stopping:
+                attempted.set()                              # the woken pass-through's own settle
+            original_settle(*args)
+        rig.broker._settle = settle
+        original_interrupt = IB.Flight.interrupt
+
+        def interrupt(flight):
+            original_interrupt(flight)
+            attempted.wait(CEILING_S)                        # the pass-through tries first
+        client = self.send(rig, grant)
+        self.assertTrue(silent.accepted.wait(CEILING_S))
+        with unittest.mock.patch.object(IB.Flight, 'interrupt', interrupt):
+            rig.broker.stop()
+        client.join(CEILING_S)
+        self.assertTrue(attempted.is_set())
+        self.assertEqual(self.stopped_lines(rig), [('BROKER_STOPPED', None, None)])
+        held = rig.broker._by_fingerprint[grant['token_fingerprint']]
+        self.assertEqual((held.requests, held.in_flight), (1, 0))
+
+    def test_n2_a_pass_through_blocked_on_the_upstream_ends_with_the_stop(self):
+        """The review's N2 (probe_cut_leak.py): on Windows a shutdown alone left the pass-through blocked until the
+        upstream closed its end (its timeout is upstream_timeout_s, 600 s by default). Closing the handle ends it:
+        the thread returns within the ceiling while the upstream still holds its end open."""
+        silent = Silent(self)
+        rig = self.rig({'anthropic-messages': silent.origin})
+        returned = self.returning(rig)
+        grant = rig.issue(family='anthropic-messages')
+        rig.broker.drain_ceiling_s = 0.2
+        client = self.send(rig, grant)
+        self.assertTrue(silent.accepted.wait(CEILING_S))
+        self.stop_within_ceiling(rig)
+        self.assertTrue(returned.wait(10), 'the pass-through still blocked on the upstream')
+        self.assertEqual(len(silent.held), 1)                 # the upstream never closed its end
+        client.join(CEILING_S)
+        self.assertEqual(self.stopped_lines(rig), [('BROKER_STOPPED', None, None)])
+
+    def test_the_ceilings_fit_a_closing_console(self):
+        self.assertLessEqual(IB.STOP_DRAIN_CEILING_S + IB.STOP_CUT_CEILING_S, 3.0)
+        self.assertEqual(self.rig().broker.drain_ceiling_s, IB.STOP_DRAIN_CEILING_S)
 
 
 # ---------------------------------------------------------------- serve in a process of its own (Windows)

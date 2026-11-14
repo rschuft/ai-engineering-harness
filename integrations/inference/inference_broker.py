@@ -167,8 +167,8 @@ STOP_FORMAT = 'aieh-inference-broker-stop/1'     # the control listener's answer
 # admitted at most STOP_DRAIN_CEILING_S to finish, then cuts them, and gives a cut request's own thread at most
 # STOP_CUT_CEILING_S to finish writing its audit line. A second interrupt during the stop exits FORCED_EXIT.
 STOP_POLL_S = 0.25
-STOP_DRAIN_CEILING_S = 5.0
-STOP_CUT_CEILING_S = 2.0
+STOP_DRAIN_CEILING_S = 2.0     # with STOP_CUT_CEILING_S at most 3 s: Windows gives a closing console about 5 s
+STOP_CUT_CEILING_S = 1.0
 STOP_SIGNALS = ('SIGINT', 'SIGBREAK', 'SIGTERM')
 FORCED_EXIT = 3
 AUDIT_FORMAT = 'aieh-inference-audit/1'
@@ -1261,6 +1261,10 @@ class AuditLog:
 _TLS = None
 
 
+class CutByStop(OSError):
+    """Raised by the connect hook when the stop cut the request while its upstream connection was being made."""
+
+
 class _UpstreamConnection:
     """The upstream connection's connect hook (S-03.2): once http.client has made the connection (at the first
     request; building it opens nothing), on_connect, when the pass-through set it, is called with the socket, so
@@ -1390,13 +1394,29 @@ class Flight:
 
     def interrupt(self) -> None:
         """Shut the client's socket first (so that nothing more, a stream's terminating chunk included, reaches
-        it), then the upstream's (so that a pass-through blocked on the upstream wakes)."""
-        for sock in (getattr(self.handler, 'connection', None), getattr(self.connection, 'sock', None)):
-            if sock is not None:
-                try:
-                    sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
+        it), then shut and close the upstream's, so that a pass-through blocked on the upstream wakes. On Windows a
+        shutdown alone does not wake a thread blocked in recv (measured: it stays until the peer closes), and
+        socket.close() is deferred while http.client's response holds a makefile of it: the handle is detached
+        from the socket object and closed (socket.close(fd)), which ends the blocked call; the object is left
+        closed, so later calls on it fail."""
+        client = getattr(self.handler, 'connection', None)
+        if client is not None:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        upstream = getattr(self.connection, 'sock', None)
+        if upstream is not None:
+            try:
+                upstream.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                handle = upstream.detach()
+                if handle is not None and handle >= 0:
+                    socket.close(handle)
+            except OSError:
+                pass
 
 
 def _uuid(value, code: str, what: str) -> str:
@@ -1480,6 +1500,7 @@ class Broker:
         # (Flight), _settled is notified as each settles; drain_ceiling_s bounds the stop's wait for them.
         self.stop_event = threading.Event()
         self.stop_finished = threading.Event()
+        self._stop_done = False     # a plain flag beside stop_finished: what a signal handler may read
         self.stop_by: str | None = None
         self.drain_ceiling_s = STOP_DRAIN_CEILING_S
         self._flights: dict[int, Flight] = {}
@@ -1988,18 +2009,28 @@ class Broker:
         it) settles it. It leaves the broker's flights only after its line is written, so that a stop waiting for
         it does not close the audit under it."""
         with self._lock:
-            if flight.settled:
+            if not self._claim(flight, usage, sent, upstream_status):
                 return
-            flight.settled = True
-            grant = flight.grant
-            grant.in_flight -= 1
-            grant.bytes_out += sent
-            if isinstance(usage, dict):
-                grant.input_tokens += usage['input']
-                grant.output_tokens += usage['output']
-                grant.total_tokens += usage['total']
-            elif upstream_status is not None and 200 <= upstream_status < 300:
-                grant.unknown_usage += 1
+        self._finish(flight, usage, sent, status, upstream_status, code)
+
+    def _claim(self, flight: Flight, usage, sent: int, upstream_status) -> bool:
+        """Under the lock: claim FLIGHT's settlement and count it in its grant, once; False when already claimed."""
+        if flight.settled:
+            return False
+        flight.settled = True
+        grant = flight.grant
+        grant.in_flight -= 1
+        grant.bytes_out += sent
+        if isinstance(usage, dict):
+            grant.input_tokens += usage['input']
+            grant.output_tokens += usage['output']
+            grant.total_tokens += usage['total']
+        elif upstream_status is not None and 200 <= upstream_status < 300:
+            grant.unknown_usage += 1
+        return True
+
+    def _finish(self, flight: Flight, usage, sent: int, status, upstream_status, code) -> None:
+        """Write a claimed FLIGHT's audit line, then let it leave the broker's flights."""
         try:
             flight.line.update(status=status, upstream_status=upstream_status, response_bytes=sent, usage=usage,
                                code=code, latency_ms=round((time.monotonic() - flight.started) * 1000, 1))
@@ -2032,7 +2063,7 @@ class Broker:
                 connection.close()
                 return                                   # the stop cut it before anything was sent upstream
             if isinstance(connection, _UpstreamConnection):
-                connection.on_connect = lambda sock: self._connected(sock, admission)
+                connection.on_connect = lambda sock: self._connected(sock, admission, flight)
             connection.putrequest(admission.method, admission.target, skip_host=True, skip_accept_encoding=True)
             for name, value in headers:
                 connection.putheader(name, value)
@@ -2092,16 +2123,23 @@ class Broker:
             connection.close()
         settle(reader.finish() if code is None else 'unknown', sent, status, status, code)
 
-    def _connected(self, sock, admission: Admission) -> None:
+    def _connected(self, sock, admission: Admission, flight: Flight | None = None) -> None:
         """The upstream-connect audit line, at connect time (S-03.2): the peer the connection reached (IP and port)
         and its local address, with the origin, family and attempt; never a secret. A line that cannot be written
-        leaves the connection unrecorded, which the live census judges FAIL, never PASS."""
+        leaves the connection unrecorded, which the live census judges FAIL, never PASS. Then, before any byte is
+        sent (the security review's S3): a FLIGHT the stop cut while it was connecting is aborted here (CutByStop,
+        an OSError: the connection is closed and nothing is sent; the stop has settled it BROKER_STOPPED)."""
         try:
             self.audit.write({'event': 'upstream-connect', 'attempt_id': admission.grant.attempt_id,
                               'family': admission.family.id, 'origin': admission.family.upstream.text(),
                               'peer': socket_address(sock.getpeername()), 'local': socket_address(sock.getsockname())})
         except (OSError, ValueError):
             pass
+        if flight is not None:
+            with self._lock:
+                cut = flight.cut
+            if cut:
+                raise CutByStop('the stop cut the request while its upstream connection was made')
 
     # -- the listeners
 
@@ -2181,6 +2219,7 @@ class Broker:
                 self.journal.close()
                 self.audit.close()
         finally:
+            self._stop_done = True
             self.stop_finished.set()
             for call in self._after_stop:
                 call()
@@ -2195,18 +2234,23 @@ class Broker:
 
     def _drain(self) -> int:
         """The stop's wait for the requests already admitted, bounded by drain_ceiling_s; then each one still
-        unsettled is cut: marked under the lock, its client's and its upstream's sockets shut, and settled here
-        with BROKER_STOPPED (never as an upstream answer). Returns how many were cut."""
+        unsettled is cut: marked and its settlement claimed under the lock, then its client's and its upstream's
+        sockets shut (the upstream's closed), and settled here with BROKER_STOPPED (never as an upstream answer).
+        Returns how many were cut."""
         self._wait_flights(self.drain_ceiling_s)
-        with self._lock:
-            remaining = [flight for flight in self._flights.values() if not flight.settled]
-            for flight in remaining:
-                flight.cut = True
-        for flight in remaining:
+        cut = []
+        with self._lock:                # marked cut and claimed before anything is interrupted: a woken pass-through
+            for flight in list(self._flights.values()):         # can no longer settle it as its own failure
+                if not flight.settled:
+                    flight.cut = True
+                    sent, status, upstream_status = flight.sent, flight.status, flight.upstream_status
+                    self._claim(flight, 'unknown', sent, upstream_status)
+                    cut.append((flight, sent, status, upstream_status))
+        for flight, sent, status, upstream_status in cut:
             flight.interrupt()
-            self._settle(flight, 'unknown', flight.sent, flight.status, flight.upstream_status, 'BROKER_STOPPED')
+            self._finish(flight, 'unknown', sent, status, upstream_status, 'BROKER_STOPPED')
         self._wait_flights(STOP_CUT_CEILING_S)          # a settle its own thread had already claimed
-        return len(remaining)
+        return len(cut)
 
 
 class _Server(http.server.ThreadingHTTPServer):
@@ -2565,29 +2609,42 @@ class Context:
     console: object = None
 
 
-def stop_signal_handler(ask: Callable[[str], bool], finished: threading.Event | None = None, *,
+class StopRequest:
+    """The stop a signal handler asked for: ASKED is the signal's name once one arrived. The handler touches only
+    this plain attribute (no lock, no Event): Event.set() inside a handler can deadlock against the main thread's own
+    wait on that event (the security review's S4); serve's wait reads it and begins the stop from the main thread."""
+
+    def __init__(self):
+        self.asked: str | None = None
+
+
+def stop_signal_handler(pending: StopRequest, stopping: Callable[[], bool], finished: Callable[[], bool], *,
                         exit: Callable = os._exit) -> Callable:   # noqa: A002 - the forced exit, injectable
-    """The handler of STOP_SIGNALS: the first interrupt asks the stop (ASK, with the signal's name, answers whether
-    it began the stop); one during a stop that has not finished (FINISHED unset) exits at once with FORCED_EXIT,
-    writing nothing further; one after the stop has finished is ignored (the process is ending)."""
+    """The handler of STOP_SIGNALS. The first interrupt records its name in PENDING, and nothing else; one that
+    arrives once a stop was asked (PENDING, or STOPPING: a plain read, the control listener's stop included) and
+    before it has finished exits at once with FORCED_EXIT, writing nothing further; one after the stop has
+    FINISHED is ignored (the process is ending). STOPPING and FINISHED read plain attributes only."""
     def handler(signum, frame):
-        if finished is not None and finished.is_set():
+        if finished():
+            return
+        if pending.asked is not None or stopping():
+            exit(FORCED_EXIT)
             return
         try:
-            name = signal.Signals(signum).name
+            pending.asked = signal.Signals(signum).name
         except ValueError:
-            name = f'signal {signum}'
-        if not ask(name):
-            exit(FORCED_EXIT)
+            pending.asked = f'signal {signum}'
     return handler
 
 
-def install_stop_signals(ask: Callable[[str], bool], finished: threading.Event | None = None) -> Callable:
+def install_stop_signals(pending: StopRequest, stopping: Callable[[], bool] = lambda: False,
+                         finished: Callable[[], bool] = lambda: False) -> Callable:
     """Install stop_signal_handler for each of STOP_SIGNALS the platform has (only the main thread can); returns
-    the call that restores the previous handlers (a no-op off the main thread)."""
+    the call that restores the previous handlers (a no-op off the main thread). On Windows the C runtime delivers
+    Ctrl-C as SIGINT and every other console control event (Ctrl-Break, and the console's close) as SIGBREAK."""
     if threading.current_thread() is not threading.main_thread():
         return lambda: None
-    handler, previous = stop_signal_handler(ask, finished), {}
+    handler, previous = stop_signal_handler(pending, stopping, finished), {}
     for name in STOP_SIGNALS:
         number = getattr(signal, name, None)
         if number is not None:
@@ -2600,30 +2657,37 @@ def install_stop_signals(ask: Callable[[str], bool], finished: threading.Event |
     return restore
 
 
-def _wait_for_interrupt(served) -> None:
+def wait_for_stop(served, pending: StopRequest, poll_s: float = STOP_POLL_S) -> None:
+    """The main thread's loop of serve's wait: in slices of POLL_S, until the stop is asked. A broker's stop event
+    is set by its control listener's stop, or here, from the main thread, once a signal recorded its name in
+    PENDING (request_stop takes the lock and sets the event: never inside the handler)."""
+    if isinstance(served, Broker):
+        while not served.stop_event.wait(poll_s):
+            if pending.asked is not None:
+                served.request_stop(pending.asked)
+    else:
+        idle = threading.Event()        # never set: the slice at which a signal handler runs
+        while pending.asked is None:
+            idle.wait(poll_s)
+
+
+def _wait_for_interrupt(served, poll_s: float = STOP_POLL_S) -> None:
     """serve's wait (and the qualification's fake upstream's): until the stop is asked, by an interrupt (SIGINT,
     SIGBREAK, SIGTERM where the platform has them) or, for a broker, by the control listener's POST /v1/stop. It
-    waits on the stop event in slices of STOP_POLL_S, the interval at which the interpreter runs a signal handler
-    (an indefinite wait ignores Ctrl-C on Windows). For a broker the handlers stay until its stop has finished, so
-    that a second interrupt during the stop exits at once; for anything else they are restored when it returns."""
+    waits in slices of POLL_S, the interval at which the interpreter runs a signal handler (an indefinite wait ignores
+    Ctrl-C on Windows). For a broker the handlers stay until its stop has finished, so that a second interrupt during
+    the stop exits at once; for anything else they are restored when it returns."""
+    pending = StopRequest()
     if isinstance(served, Broker):
-        event, finished = served.stop_event, served.stop_finished
-        restore = install_stop_signals(served.request_stop, finished)
+        restore = install_stop_signals(pending, lambda: served._stopping, lambda: served._stop_done)
         served.after_stop(restore)
-    else:
-        event, finished = threading.Event(), None
-
-        def ask(by: str) -> bool:
-            first = not event.is_set()
-            event.set()
-            return first
-        restore = install_stop_signals(ask)
+        wait_for_stop(served, pending, poll_s)
+        return
+    restore = install_stop_signals(pending)
     try:
-        while not event.wait(STOP_POLL_S):
-            pass
+        wait_for_stop(served, pending, poll_s)
     finally:
-        if finished is None:
-            restore()
+        restore()
 
 
 def managed_context() -> Context:
