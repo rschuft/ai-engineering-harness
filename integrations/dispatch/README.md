@@ -980,6 +980,20 @@ check also with the native secrets admitted, the artifact reader); the one share
 codes; each own refusal on its own fact, no detail repeating the token; the independent review's admission probes
 (`ReviewProbes`); the pin.
 
+**Disclosed (the independent review of E-05.11's driver, `tools/guest.py native-qualification`):**
+
+- N5: an interrupt (Ctrl-C) or an uncaught exception during a run still runs the teardown; the native token lives only
+  in the driver's memory and is dropped; no record is written for that run.
+- N7: every Agent Server call of the run carries the token into the guest's API probe (in the probe's text on ssh's
+  standard input), which redacts it from the answer and counts it; the token is held in memory until the run ends.
+- N9: the container guard's refusal counters are the REJECT rows of both families (iptables and ip6tables) summed,
+  from the preconditions (before the create) to the teardown; the profile declares no IPv6, so the ip6tables rows are
+  expected to stay at 0.
+- N-c: an interrupt during the teardown's DELETE itself can leave the conversation; destroying the disposable guest
+  removes it.
+- N-d: a create still starting when its presence is read after a lost answer may appear after a 404 DELETE;
+  destroying the disposable guest removes it.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json

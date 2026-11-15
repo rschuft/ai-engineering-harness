@@ -16944,8 +16944,10 @@ NATIVE_QUALIFICATION_RULE = (
     'Owner-run act that supplies their values on standard input, absent by an in-memory value search on the host over '
     'the container\'s environments and changed files and every answer of this run, with positive controls (without '
     'the act: UNKNOWN, the reason recorded); (12) the '
-    'conversation deleted, its container gone and no outer conversation left; (12a) the tunnel\'s log of the whole '
-    'run, read after the teardown, judged as (10); (13) E-05.9\'s outbound search over the redacted record and every '
+    'conversation deleted, its container gone and no outer conversation left; (12a) after a sent prompt, the tunnel\'s '
+    'log of the whole run, read after the teardown, judged as (10); (12b) the container guard\'s refusal counters '
+    '(iptables and ip6tables) from the preconditions, before the create, to the teardown: a rise is a stop, unread '
+    'is UNKNOWN; (13) E-05.9\'s outbound search over the redacted record and every '
     'Agent Server answer and container output of this run finds the token nowhere, with its positive controls; the '
     'record is redacted once and written redacted, a redaction being a stop. FAIL when a step observes a violation; otherwise UNKNOWN when a step is UNKNOWN. STOP (FAIL; '
     'the later steps are skipped, the persisted-token search, the Owner-credential step, the teardown and the '
@@ -17345,6 +17347,23 @@ def native_mask_verdict(markers, transcript):
     return 'UNKNOWN', dict(detail, reason='the transcript\'s token occurrences do not account for every marker')
 
 
+def native_guard_rejects(report):
+    """The container guard's refusal packets of both families (its REJECT rows of iptables and ip6tables, review N-a
+    and N9; the profile declares no IPv6, so the ip6tables rows are expected to stay at 0) from on-demand facts; None
+    when the iptables rows, or ip6tables rows that are reported, cannot be read."""
+    adm = report.get('admission') if isinstance(report, dict) and isinstance(report.get('admission'), dict) else {}
+    total = 0
+    for family in ('iptables', 'ip6tables'):
+        rows = adm.get(family)
+        if rows is None and family == 'ip6tables':
+            continue
+        if not isinstance(rows, list):
+            return None
+        total += sum(r.get('packets', 0) for r in rows if isinstance(r, dict) and r.get('target') == 'REJECT'
+                     and isinstance(r.get('packets', 0), int))
+    return total
+
+
 def read_owner_values(stream, act):
     """{credential id: value} of the Owner's own credentials for the in-memory value search, from STREAM (standard
     input; never argv, the environment or a file), one line '<credential id>=<value>' each of NATIVE_OWNER_CREDENTIALS,
@@ -17545,7 +17564,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
                   'host': None if host is None else {k: host.get(k) for k in (
                       'checks', 'member_count', 'provider_seen', 'provider_vanished', 'appeared')},
                   'host_vantage': 'guest root' if host is not None else host_gap,
-                  'container_guard_rejects': container_guard_rejects(report)}
+                  'container_guard_rejects': native_guard_rejects(report)}
         stops = acp_containment_stops(view, host, net)
         if net.get('attempted'):
             # review B1: a connect to any destination but the tunnel endpoint (refused or unanswered) is a direct
@@ -17583,6 +17602,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         if all(checks.values()):
             count = call('GET', '/api/conversations/count')
             report = facts()
+            memo['rejects_start'] = native_guard_rejects(report)       # review R1: the window's baseline
             checks['the outer server holds no conversation'] = ok_status(count) and count.get('body') == 0
             checks['no conversation container'] = report.get('containers') == []
         memo['ready'] = len(checks) == 4 and all(checks.values())
@@ -17675,7 +17695,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     def before_step():
         report = facts()
         memo['before'] = sets_now(report)
-        memo['rejects_before'] = container_guard_rejects(report)
+        memo['rejects_before'] = native_guard_rejects(report)
         verdict, detail = native_start_verdict(attempt_probe('start'), cs.NATIVE_NAMES)
         detail.update(sets=memo['before'], container_guard_rejects=memo['rejects_before'])
         return verdict, detail
@@ -17757,7 +17777,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         after = sets_now(report)
         sets = cc.sets_verdict(memo['before'], after, conversation_id=hex_id)
         memo['children'] = sets['delegation']['children_route']
-        memo['rejects_after'] = container_guard_rejects(report)
+        memo['rejects_after'] = native_guard_rejects(report)
         if sets['delegation']['outer_new']:
             stop('an outer-server conversation that was not expected', observed=sets['delegation']['outer_new'])
         detail.update(sets={'after': after, 'checks': sets['checks'], 'delegation': sets['delegation']},
@@ -17816,6 +17836,17 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         if verdict == 'PASS' and not all(isinstance(v, int) for v in rejects.values()):
             verdict = 'UNKNOWN'
         return verdict, detail
+
+    def guard_window_step():
+        """Review R1: the container guard's refusal counters from the preconditions (before the create) to the
+        teardown, so the provider's start-up is inside the window; a rise is a direct connection attempt."""
+        rejects = {'start': memo.get('rejects_start'), 'end': memo.get('rejects_end')}
+        if not all(isinstance(v, int) for v in rejects.values()):
+            return 'UNKNOWN', {'container_guard_rejects': rejects, 'reason': 'a counter could not be read'}
+        if rejects['end'] > rejects['start']:
+            stop(NATIVE_STOPS['direct'], container_guard_rejects=rejects, window='preconditions to teardown')
+            return 'FAIL', {'container_guard_rejects': rejects}
+        return 'PASS', {'container_guard_rejects': rejects, 'families': 'iptables and ip6tables'}
 
     def tunnel_whole_run_step():
         """Review S6: the tunnel's log of the whole run, read after the teardown, judged by the same rule."""
@@ -17923,6 +17954,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     def teardown_step():
         answer = call('DELETE', f'/api/conversations/{cid}')
         report = facts()
+        memo['rejects_end'] = native_guard_rejects(report)             # review R1: the window's end
         left = ours(report)
         count = call('GET', '/api/conversations/count')
         gone = ok_status(answer) or (answer.get('status') == 404 and not memo.get('created'))
@@ -17970,7 +18002,9 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
             run('(12) teardown: the conversation deleted, its container gone, no outer conversation left',
                 teardown_step, always=True, needs=('create_sent',))
             run('(12a) the tunnel\'s log of the whole run, after the teardown', tunnel_whole_run_step, always=True,
-                needs=('create_sent', 'log_name'))
+                needs=('create_sent', 'log_name', 'sent'))
+            run('(12b) the container guard\'s counters from the preconditions to the teardown', guard_window_step,
+                always=True, needs=('create_sent',))
         except BaseException:
             interrupted = True
             raise

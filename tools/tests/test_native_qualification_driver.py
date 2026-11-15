@@ -285,7 +285,7 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
         self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(1b)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)',
                                                     '(8)', '(9)', '(10)', '(10a)', '(11)', '(11a)', '(11b)', '(11c)',
-                                                    '(11d)', '(12)', '(12a)', '(13)'])
+                                                    '(11d)', '(12)', '(12a)', '(12b)', '(13)'])
         (before, _), (after, _) = self.tunnel.census_calls
         self.assertNotIn(('POST', '/api/conversations'), before)            # before the create: no model call
         self.assertIn(('POST', f'/api/conversations/{CID}/events'), after)
@@ -462,6 +462,56 @@ class DriverRun(unittest.TestCase):
         self.setUp()
         self.guest.rejects = 3          # unchanged counters: PASS (the control)
         self.assertEqual(self.step(self.run_driver(), 10)['verdict'], 'PASS')
+
+    def test_the_guard_window_spans_start_up_to_teardown(self):
+        """Review R1 (D1): a rise between the create and step (3), during the provider's start-up, is a stop (12b);
+        N-a (D1b): the ip6tables rows count too."""
+        orig, seen = self.guest.facts, {'created': False}
+
+        def facts():
+            report = orig()
+            seen['created'] = seen['created'] or self.guest.created
+            if seen['created']:              # counters only grow: from the provider's start-up on
+                report['admission']['iptables'][0]['packets'] = 40
+            return report
+        self.guest.facts = facts
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 10)['verdict'], self.step(out, '12b')['verdict']), ('PASS', 'FAIL'))
+        self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+        self.setUp()
+        orig6 = self.guest.facts
+
+        def facts6():
+            report = orig6()
+            report['admission']['ip6tables'] = [{'target': 'REJECT', 'packets': 50 if self.guest.sent else 0}]
+            return report
+        self.guest.facts = facts6
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 10)['verdict'], self.step(out, '12b')['verdict']), ('FAIL', 'FAIL'))
+
+    def test_the_guard_counters_of_both_families(self):
+        rows = lambda *packets: [{'target': 'REJECT', 'packets': n} for n in packets]
+        self.assertEqual(guest.native_guard_rejects({'admission': {'iptables': rows(3, 4)}}), 7)
+        self.assertEqual(guest.native_guard_rejects({'admission': {'iptables': rows(3), 'ip6tables': rows(2)}}), 5)
+        self.assertEqual(guest.native_guard_rejects({'admission': {'iptables': rows(3) + [
+            {'target': 'ACCEPT', 'packets': 9}]}}), 3)
+        for report in ({'admission': {}}, {'admission': {'iptables': rows(1), 'ip6tables': 'x'}}, {}, None):
+            self.assertIsNone(guest.native_guard_rejects(report))
+
+    def test_no_sent_turn_leaves_the_whole_run_log_unknown(self):
+        """Review N-b (D7): with no prompt sent, (12a) is not reached (UNKNOWN), never a FAIL for no connection."""
+        answer = self.guest.answer
+
+        def refused(method, path, body):
+            if method == 'POST' and path == f'/api/conversations/{CID}/events':
+                self.guest.calls.append((method, path))
+                return 500, {'detail': 'refused'}
+            return answer(method, path, body)
+        self.guest.answer = refused
+        out = self.run_driver(owner=False)
+        self.assertEqual((self.step(out, 4)['verdict'], self.step(out, '12a')['verdict']), ('FAIL', 'UNKNOWN'))
+        self.assertIn('not reached', self.step(out, '12a')['skipped'])
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')
 
     def test_a_lost_or_refused_create_answer_still_tears_down_and_searches(self):
         """Review S2 (P4): the create marked sent before the call; a 504 after the conversation was made, or a lost
