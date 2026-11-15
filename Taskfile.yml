@@ -681,13 +681,22 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
 
   gitea:demo:
-    desc: "The D1 demonstration repository (plan leaf E-05.1; <tools python> -I -B integrations/gitea/demo_repository.py <command>): pass -- files | seed --project CLONE --identity 'Name <email>' | place --project CLONE --identity 'Name <email>' | verify-placement --project CLONE --commit FULL | statement --out FILE | plan --outcome REF --out FILE; seed and place each make one commit in a clone of aieh-d1-demo (never this checkout), in process; the others read only or write one new file"
+    desc: "The D1 demonstration repository's content, prepared offline (plan leaf E-05.1; <tools python> -I -B integrations/gitea/demo_repository.py <command>): pass -- files | seed --repository DIR/aieh-d1-demo.git --identity 'Name <email>' | place --project CLONE --identity 'Name <email>' | commit-task --project CLONE --identity 'Name <email>' | sequence --project CLONE | verify-placement --project CLONE --commit FULL | statement --out FILE | plan --outcome REF --out FILE; seed makes a new local bare repository (C0), place and commit-task each one commit in its clone (never this checkout), in process; the others read only or write one new file"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/demo_repository.py {{.CLI_ARGS}}'
+
+  gitea:demo-host:
+    desc: "The D1 demo repository on the host Gitea (plan leaf E-05.1, OA-22 (h); <tools python> -I -B integrations/gitea/gitea_roles.py <command>): pass -- demo-repository --owner-act OA-22h --clone CLONE (the provisioning act as the site administrator: the organization, the repository, the push of main = C0 to C3, then settings, collaborators and rules, and the read-back; a second run on a verified repository writes nothing) | demo-verify [--main SHA] (read only; exit 0 verified, 1 drift, 2 unverified) | demo-clone --to DIR (a bare clone, read only)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
 
   gitea:protection-check:
     desc: "The protection check of decision 0012 point 6 (Owner decision OA-16; python -I -B integrations/gitea/protection_check.py <command>): pass -- verify OWNER/NAME [--base BRANCH] to read the admitted repository's protection as the read-only protection auditor (its Credential Manager entry, in memory) and print the verdict; exit 0 verified, 1 drift, 2 unverified or refused"

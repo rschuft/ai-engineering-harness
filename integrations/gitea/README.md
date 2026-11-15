@@ -25,11 +25,12 @@ supplies through the harness's fail-closed factory
 | Path | What |
 |---|---|
 | `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `restart`, `status`, `inspect`, `verify [--readiness]`, `identities`, `finalize-credentials`, `upgrade --to VERSION`, `recover`, `uninstall` (and the internal `supervise`); composes the platform adapter and its credential provider |
-| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `escape-probe`, `rotate ROLE`, `retire ROLE`, `status`; Owner act OA-30's module `authorization-repository --owner-act OA-30` (plan leaf E-05.7, [below](#the-authorization-repository-e-057-owner-act-oa-30)); one total declaration per repository (`DECLARATIONS`: `fixture_declaration()` and `authorization_declaration()`, from `protection_rules()`, `repository_settings()`, `collaborators()` and the teams) and the protection auditor's reach (`AUDITED_REPOSITORIES`) |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `escape-probe`, `rotate ROLE`, `retire ROLE`, `status`; E-05.1's `demo-repository --owner-act OA-22h --clone CLONE`, `demo-verify`, `demo-clone` ([below](#the-d1-demonstration-repository-e-051)); Owner act OA-30's module `authorization-repository --owner-act OA-30` (plan leaf E-05.7, [below](#the-authorization-repository-e-057-owner-act-oa-30)); one total declaration per repository (`DECLARATIONS`: `fixture_declaration()` and `authorization_declaration()`, from `protection_rules()`, `repository_settings()`, `collaborators()` and the teams) and the protection auditor's reach (`AUDITED_REPOSITORIES`) |
 | `protection_check.py` | The protection check before and after each protected merge (Owner decision OA-16; decision 0012 point 6): `verify OWNER/NAME`, and `verify()` for the authorization recorder ([below](#the-protection-check-oa-16)) |
 | `demo_repository.py` | The D1 demonstration repository's content and Work records (plan leaf E-05.1): `files`, `seed`, `place`, `verify-placement`, `statement`, `plan` ([below](#the-d1-demonstration-repository-e-051)) |
 | `demo/aieh-d1-demo/` | The demo repository's template tree (stored byte for byte: its `.gitattributes` is `* -text`) |
 | `tests/test_demo_repository.py` | The content, `seed`, `place`, `verify-placement`, the statement and the plan on throwaway repositories, and the Work records sequence rehearsed on a bare repository standing in for the host Gitea (Backlog.md as the fake; with `AIEH_BACKLOG` and `AIEH_OPENSPEC`, the pinned tools and Backlog.md's readiness) |
+| `tests/test_demo_provisioning.py` | The provisioning act, the verifier and the clone against `DemoGitea`, a fake of the site administrator's routes and the push: every write in order, the push before any collaborator or rule, the window, the read-back, the second run, each refusal and stop |
 | `tests/test_lifecycle.py` | The composition over the contract (F-06.2): the moved names, the platform asset key and `PLATFORM_MISMATCH`, both run-record formats, readiness, `inspect`, the transitions over a real SQLite database and `app.ini` in a temporary root, and the I7 scan of `main` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
 | `tests/test_authorization_live.py` | Opt-in (`AIEH_GITEA_AUTHZ=1`, `task gitea:authz`) allowed and forbidden calls of each bot token against the running Gitea. The protection auditor's writes (OA-16 Act C) are made non-mutating and must be refused by its scope: the fixture's routes on an absent repository, absent users and tokens, bodies Gitea rejects (`Required`), and `git push --dry-run` of a non-fast-forward to main and of deletions of absent branches; two are not sent and fail "not exercised" (the web sign-in form, the runner registration token; covered by the protection-audit negative phase). A circuit breaker sends no write of any role after the first unexpected acceptance and fails the run |
@@ -364,31 +365,66 @@ token-shaped is in it.
 
 ## The D1 demonstration repository (E-05.1)
 
-`demo_repository.py` writes the content plan leaf E-05.1 brings up in the D1 demo repository `aieh-d1-demo`
-(Owner decision OA-25), in a clone of it, never in this checkout. Each write is one commit made in process through
-the [repository-access module](../repository/README.md) (no git, no hook); the record of the leaf is
-[`evidence/E-05.1-demo-work-offline.md`](../../evidence/E-05.1-demo-work-offline.md).
+Plan leaf E-05.1 brings up the D1 demo repository `aieh-demo/aieh-d1-demo` (Owner decision OA-25; provisioning
+under OA-22 (h)). Its content is prepared offline, in a local repository, by `demo_repository.py`; the site
+administrator then provisions it on the host Gitea in one act (`gitea_roles.py demo-repository`). The rulings it
+follows are the engineering manager's of 2026-11-15 (E-05.1 dispatch 2, under OA-22 (h) and decision 0018 point 3):
+a private organization of its own, `aieh-demo`; the site administrator creates the organization and the repository,
+pushes `main` = C0 to C3 exactly as prepared, and only then applies the collaborators and the protection, after
+which nobody pushes `main`; the fixture's three qualified rules and settings plus Actions disabled; the protection
+auditor not added. The record of the leaf is [`evidence/E-05.1-demo-work-offline.md`](../../evidence/E-05.1-demo-work-offline.md).
+
+**The content, prepared offline** (`demo_repository.py`; `task gitea:demo -- ...`, tools interpreter):
 
 | Command | What it does |
 |---|---|
 | `files` | Prints what `seed` and `place` write, by path and sha256. Reads only. |
-| `seed --project CLONE --identity "Name <email>"` | Commits the initial content: the template tree [`demo/aieh-d1-demo/`](demo/aieh-d1-demo/) (the standard-library package `aieh_d1_demo`, one passing `unittest` test, a README, `.gitattributes` `* -text`, `.gitignore`, Backlog.md 1.55.3's `backlog/config.yml` as `backlog init` writes it, OpenSpec's `openspec/config.yaml`) and the catalog's `intent-driven` schema (`catalog/openspec/schemas/intent-driven/`, copied at seed time, never kept twice). No dependency, no `.claude/`, no `.mcp.json`. It writes on the repository's initialization commit only (a root commit, which a host's auto-initialization makes), whose files it may replace; an empty repository is refused (`PROJECT_EMPTY`), and on a later commit a template file that differs is refused (`CONTENT_DIFFERS`). A second run on seeded content writes nothing. |
-| `place --project CLONE --identity "Name <email>"` | Commits the change `openspec/changes/add-slugify/` byte for byte as planning stored it ([`evidence/D1-demo-design/`](../../evidence/D1-demo-design/), read only). Before the branch moves, the new commit's placement content (decision 0020 point 1, `input_recorder.read_design`) must be planning's `sha256:203a9c1e...a55745` (`PLACEMENT_CONTENT_MISMATCH`, nothing visible changes). A folder already present and equal is left as it is; one that differs is refused (`PLACEMENT_DIFFERS`), never overwritten. |
-| `verify-placement --project CLONE --commit FULL` | The change at that commit against the placement: its content and the files that differ, were added or are missing. Exit 0 when identical. After the acceptance recorder's commit it shows exactly what the recorder changed: `proposal.md` and `.openspec.yaml` differ and one `owner-decisions/` record is added. |
-| `statement --out FILE` | Writes the statement `acceptance_recorder.py record-from-log` takes (E-05.12): the Owner's words about the change, verbatim from the entry `owner-direction-d1-planning-2026-11-15`, after checking at the harness's committed `HEAD` that the recorder admits them. |
-| `plan --outcome REF --out FILE` | Writes the planning map of the change's one Backlog.md task (pointers to `proposal.md`, `specs/slugify/spec.md` and `design.md`) carrying the outcome reference the recorder minted, checked by the planning adapter. |
+| `seed --repository DIR.git --identity "Name <email>"` | **C0.** A new local bare repository (its name ends `aieh-d1-demo.git`) whose `main` is one root commit of the initial content: the template tree [`demo/aieh-d1-demo/`](demo/aieh-d1-demo/) (the standard-library package `aieh_d1_demo`, one passing `unittest` test, a README, `.gitattributes` `* -text`, `.gitignore`, Backlog.md 1.55.3's `backlog/config.yml` as `backlog init` writes it, OpenSpec's `openspec/config.yaml`) and the catalog's `intent-driven` schema (copied, never kept twice). No dependency, no `.claude/`, no `.mcp.json`. The repository-access module writes no root commit, so this one is written with Dulwich's object API (no git, no configuration read). An existing repository that is exactly that is reported; any other is refused (`SEED_DIFFERS`). |
+| `place --project CLONE --identity "Name <email>"` | **C1.** The change `openspec/changes/add-slugify/` byte for byte as planning stored it ([`evidence/D1-demo-design/`](../../evidence/D1-demo-design/), read only), in a work-tree clone of the seeded repository. Before the branch moves, the new commit's placement content (decision 0020 point 1, `input_recorder.read_design`) must be planning's `sha256:203a9c1e...a55745` (`PLACEMENT_CONTENT_MISMATCH`, nothing visible changes). A folder already present and equal is left as it is; one that differs is refused (`PLACEMENT_DIFFERS`). |
+| (`acceptance_recorder.py record-from-log`) | **C2.** The recorder's own commit (E-05.12). |
+| `commit-task --project CLONE --identity "Name <email>"` | **C3.** The one task file the planning adapter just created (`backlog/tasks/*.md`), committed alone; anything else in the work tree is refused (`TASK_NOT_ALONE`). |
+| `sequence --project CLONE` | Reads `main` against exactly C0 to C3: C0 the initial content (a root commit), C1 C0 and the placement, C2 the recorder's commit (the change's `proposal.md` and `.openspec.yaml` changed and one decision record added, nothing else), C3 one task file added. Exit 0 when it is. |
+| `verify-placement --project CLONE --commit FULL` | The change at that commit against the placement. Exit 0 when identical. At C2 it shows exactly what the recorder changed. |
+| `statement --out FILE` | The statement `record-from-log` takes: the Owner's words about the change, verbatim from the entry `owner-direction-d1-planning-2026-11-15`, checked first at the harness's committed `HEAD`. |
+| `plan --outcome REF --out FILE` | The planning map of the change's one task (pointers to `proposal.md`, `specs/slugify/spec.md`, `design.md`) carrying the minted outcome reference, checked by the planning adapter. |
 
-A clone made on a host whose git converts line endings (`core.autocrlf=true`) must set `core.autocrlf=false` in its
-own configuration (`git clone -c core.autocrlf=false ...`): the repository-access module reads the repository's own
-configuration only, and a host-initialized README checked out with CRLF endings is a local change it refuses to
-commit over. After `seed`, the repository's `.gitattributes` keeps every file's bytes on every host.
+The work tree is a clone of the seeded repository made with `git clone -c core.autocrlf=false`: the
+repository-access module reads the repository's own configuration only, and a file checked out with converted line
+endings is a local change it refuses to commit over. The repository's `.gitattributes` keeps every file's bytes.
 
-The tests (`tests/test_demo_repository.py`) rehearse the whole Work records sequence offline on a throwaway bare
-repository standing in for the host Gitea: seed, place, `record-from-log` from this checkout's committed log, the
-task created through the planning adapter at the recorder's commit with the outcome, and a fresh clone in which every
-pointer and the outcome resolve; with `AIEH_BACKLOG` and `AIEH_OPENSPEC` naming the pinned tools, the same with the
-real Backlog.md and OpenSpec and Backlog.md's readiness. Provisioning the repository on the host Gitea is not built:
-which declarations govern it is open (the record, section 2).
+**The provisioning act** (`gitea_roles.py demo-repository --owner-act OA-22h --clone CLONE`; `task gitea:demo-host`):
+as the site administrator by basic authentication with its harness-held password read into memory, no token
+minted. Before any write, each a refusal with nothing written: the clone's `main` is exactly C0 to C3
+(`CLONE_NOT_THE_SEQUENCE`), the planner, builder and reviewer bots and `aieh-owner` exist (`BOTS_MISSING`,
+`OWNER_MISSING`), the administrator holds no token (`ADMIN_HOLDS_TOKEN`). It reconciles first: an organization and
+repository that verify as declared with `main` at C3 are reported and nothing is written (a second run); an
+organization without the repository, or a repository in any other state, is refused (`DEMO_REPOSITORY_EXISTS`;
+`MAIN_NOT_THE_SEQUENCE` when `main` holds other commits), never adopted or overwritten. Otherwise, in order: the
+private organization; the empty repository (no auto-init); the push of the clone's `main` to `main` over smart HTTP
+through the repository-access module (it must then read C3; the window in which `main` takes a push opens here,
+with no collaborator and no rule yet, so only the site administrator can push); the settings; the collaborators; the
+three rules (the window closes with the last). The report names the window's start, its end and the pushed commit.
+Then the read-back (`demo_verify`, with `main` at C3; `READBACK_DIFFERENT`), no pull request, and no administrator
+token afterwards. A stop after a write sends nothing further and undoes and retries nothing; its report lists the
+writes in order. `demo_declaration()`: the fixture's `protection_rules()` and `repository_settings()` with
+`has_actions` false; collaborators the planner and builder (write: `work/*`'s push allowlist), the reviewer (read:
+`main`'s approvals allowlist) and `aieh-owner` (write: the merge allowlist), the accounts the rules name; the
+organization's Owners team; no deploy key. It is not in `DECLARATIONS`, which is the protection auditor's reach.
+
+**The verifier** (`gitea_roles.py demo-verify [--main C3]`): read-only, as the site administrator: the
+organization's visibility, and the repository's view (Actions included), rules, `main`, collaborators and their
+permissions, teams and deploy keys, judged by `protection_check.judge` (its comparison, called, with the rules read
+through its `_rule`); with `--main`, `main` at that commit over exactly four first-parent commits from a root. Exit 0
+verified, 1 drift, 2 unverified (a read that does not answer as expected) or refused. `demo-clone --to DIR` makes a
+local bare clone as the site administrator (read only on Gitea). The demo commands' output carries commit ids, so
+their no-exposure scan searches for the secret the act held (the administrator's password), not for the token shape
+a commit id has.
+
+The tests (`tests/test_demo_repository.py`, `tests/test_demo_provisioning.py`) rehearse the whole sequence offline:
+seed, place, `record-from-log` from this checkout's committed log, the task through the planning adapter at C2 with
+the outcome, `commit-task`, the sequence complete, pushed to a stand-in; a fresh clone in which every pointer and the
+outcome resolve (with `AIEH_BACKLOG` and `AIEH_OPENSPEC`, the pinned tools and Backlog.md's readiness); and the act
+and the verifier against a fake Gitea.
 
 ## The protection check (OA-16)
 
@@ -465,8 +501,8 @@ authorization repository (E-05.7), whose entry G-03.1 completes.
 ## Not yet verified
 
 - Anything but Windows 11 on x86_64 (Linux and macOS adapters: F-06.4, F-06.5).
-- The D1 demonstration repository on the host Gitea: nothing is provisioned there, and `demo_repository.py` has
-  run on throwaway repositories only (E-05.1).
+- The D1 demonstration repository on the host Gitea: nothing is provisioned there; `demo_repository.py`, the
+  provisioning act and the verifier have run on throwaway repositories and fakes only (E-05.1).
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).

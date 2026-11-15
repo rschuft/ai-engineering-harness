@@ -63,7 +63,6 @@ EXPECTED_TEMPLATE = [
     'openspec/config.yaml', 'openspec/schemas/intent-driven/schema.yaml',
     'openspec/schemas/intent-driven/templates/design.md', 'openspec/schemas/intent-driven/templates/proposal.md',
     'openspec/schemas/intent-driven/templates/spec.md', 'tests/test_package.py']
-INIT_README = b'# aieh-d1-demo\n\nThe host\'s initialization commit (a stand-in).\n'
 
 
 def refused(test, code, call, *args, **kwargs):
@@ -159,9 +158,28 @@ class DemoTests(unittest.TestCase):
         self.assertTrue(result.stderr.rstrip().endswith('OK'), result.stderr)
 
 
+TASK_FILE = 'backlog/tasks/task-1 - Implement-slugify.md'
+NOW = (1763164800, 0)  # 2026-11-15T00:00:00Z, so a seeded commit id is reproducible
+
+
+def build_sequence(root, task=b'---\nid: TASK-1\n---\n'):
+    """Under ROOT: the seeded bare repository aieh-d1-demo.git and its clone aieh-d1-demo whose main is C0 to C3 (the
+    seed, the placement, record-from-log from this checkout's committed log, read only, and one synthetic task file
+    committed by commit_task). Returns (clone, {C0..C3: commit id}, the record's outcome reference)."""
+    remote, clone = Path(root) / 'aieh-d1-demo.git', Path(root) / 'aieh-d1-demo'
+    DR.seed(remote, IDENTITY, now=NOW)
+    fx.git(root, 'clone', '--quiet', '-c', 'core.autocrlf=false', str(remote), str(clone))
+    DR.place(clone, IDENTITY)
+    recorded = A.record_from_log(clone, DR.CHANGE, 'O1', DR.statement(), recorded_by=RECORDED_BY, identity=IDENTITY)
+    fx.write(clone, {TASK_FILE: task})
+    DR.commit_task(clone, IDENTITY)
+    report = DR.sequence_report(clone)
+    assert report['complete'], report
+    return clone, report['commits'], recorded['reference']
+
+
 class Clone(unittest.TestCase):
-    """A throwaway bare repository standing in for the host Gitea, holding the host's initialization commit (a root
-    commit with a README, as Gitea's auto-init makes), and a clone of it named aieh-d1-demo."""
+    """A seeded bare repository aieh-d1-demo.git (seed) and a clone of it named aieh-d1-demo (prepare)."""
 
     def setUp(self):
         fx.require_repository_access()
@@ -170,15 +188,12 @@ class Clone(unittest.TestCase):
         ceiling = fx.ceiling(self.root)
         ceiling.start()
         self.addCleanup(ceiling.stop)
-        self.remote = self.root / 'gitea' / 'aieh-d1-demo.git'
-        self.remote.parent.mkdir()
-        fx.git(self.root, 'init', '--quiet', '--bare', '-b', 'main', str(self.remote))
-        init = self.root / 'init'
-        fx.git(self.root, 'clone', '--quiet', str(self.remote), str(init))
-        fx.write(init, {'README.md': INIT_README})
-        self.initial = fx.commit_all(init, 'Initial commit')
-        fx.git(init, 'push', '--quiet', 'origin', 'main')
+        self.remote = self.root / 'aieh-d1-demo.git'
+
+    def prepare(self):
+        self.seeded = DR.seed(self.remote, IDENTITY, now=NOW)['commit']
         self.project = self.clone('aieh-d1-demo')
+        return self.seeded
 
     def clone(self, name):
         target = self.root / name
@@ -192,7 +207,7 @@ class Clone(unittest.TestCase):
         """The id git gives DATA as a blob, its bytes unfiltered."""
         path = self.root / 'blob'
         path.write_bytes(data)
-        return fx.git(self.project, 'hash-object', '--no-filters', str(path))
+        return fx.git(self.root, 'hash-object', '--no-filters', str(path))
 
     def cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -200,38 +215,55 @@ class Clone(unittest.TestCase):
         return code, (json.loads(out.getvalue()) if out.getvalue() else None), err.getvalue()
 
 
-class SeedAndPlace(Clone):
-    def test_seed_writes_the_initial_content_on_the_initialization_commit_once(self):
-        result = DR.seed(self.project, IDENTITY)
-        self.assertEqual((result['result'], result['parent'], result['replaced']),
-                         ('committed', self.initial, ['README.md']))
-        self.assertEqual(self.head(), result['commit'])
+class Seed(Clone):
+    def test_seed_makes_one_root_commit_of_the_initial_content_once(self):
+        result = DR.seed(self.remote, IDENTITY, now=NOW)
+        self.assertEqual((result['result'], result['written']), ('created', EXPECTED_TEMPLATE))
+        commit = result['commit']
+        fx.git(self.remote, 'fsck', '--strict', '--no-progress')
+        self.assertEqual(fx.git(self.remote, 'rev-list', '--count', 'main'), '1')
+        self.assertEqual(fx.git(self.remote, 'symbolic-ref', 'HEAD'), 'refs/heads/main')
+        self.assertEqual(fx.git(self.remote, 'log', '-1', '--format=%an <%ae>|%cn <%ce>|%at|%s', 'main'),
+                         f'{IDENTITY}|{IDENTITY}|{NOW[0]}|{DR.SEED_MESSAGE}')
         for path, data in DR.template_files().items():
-            self.assertEqual(fx.git(self.project, 'rev-parse', f'{result["commit"]}:{path}'), self.blob_id(data), path)
-            self.assertEqual((self.project / path).read_bytes(), data, path)
-        self.assertEqual(fx.git(self.project, 'status', '--porcelain', '--untracked-files=all'), '')
-        again = DR.seed(self.project, IDENTITY)
-        self.assertEqual((again['result'], again['commit']), ('already present', result['commit']))
+            self.assertEqual(fx.git(self.remote, 'rev-parse', f'{commit}:{path}'), self.blob_id(data), path)
+        self.assertEqual(fx.git(self.remote, 'ls-tree', '-r', '--name-only', 'main').splitlines(), EXPECTED_TEMPLATE)
+        again = DR.seed(self.remote, IDENTITY, now=(NOW[0] + 60, 0))
+        self.assertEqual((again['result'], again['commit']), ('already present', commit))
+        project = self.clone('aieh-d1-demo')
+        self.assertEqual(fx.git(project, 'status', '--porcelain', '--untracked-files=all'), '')
+        for path, data in DR.template_files().items():
+            self.assertEqual((project / path).read_bytes(), data, path)
 
-    def test_seed_never_overwrites_a_later_commit(self):
-        DR.seed(self.project, IDENTITY)
+    def test_seed_refuses_anything_else(self):
+        refused(self, 'IDENTITY_INVALID', DR.seed, self.remote, 'no email')
+        refused(self, 'SEED_NAME', DR.seed, self.root / 'other.git', IDENTITY)
+        refused(self, 'SEED_NAME', DR.seed, self.root / 'missing' / 'aieh-d1-demo.git', IDENTITY)
+        self.remote.mkdir()
+        refused(self, 'SEED_DIFFERS', DR.seed, self.remote, IDENTITY)
+        fx.rmtree(self.remote)
+        self.prepare()
         fx.write(self.project, {'README.md': b'changed\n'})
-        changed = fx.commit_all(self.project, 'a later change')
-        error = refused(self, 'CONTENT_DIFFERS', DR.seed, self.project, IDENTITY)
-        self.assertEqual(error.details['paths'], ['README.md'])
-        self.assertEqual(self.head(), changed)
+        fx.commit_all(self.project, 'a later change')
+        fx.git(self.project, 'push', '--quiet', 'origin', 'main')
+        refused(self, 'SEED_DIFFERS', DR.seed, self.remote, IDENTITY)
 
-    def test_an_empty_repository_is_refused(self):
+
+class SeedAndPlace(Clone):
+    def setUp(self):
+        super().setUp()
+        self.prepare()
+
+    def test_an_unborn_repository_is_refused(self):
         empty = self.root / 'empty'
         fx.git(self.root, 'init', '--quiet', '-b', 'main', str(empty))
-        refused(self, 'PROJECT_EMPTY', DR.seed, empty, IDENTITY)
-        refused(self, 'PROJECT_UNAVAILABLE', DR.seed, self.root / 'missing', IDENTITY)
+        refused(self, 'PROJECT_EMPTY', DR.place, empty, IDENTITY)
+        refused(self, 'PROJECT_UNAVAILABLE', DR.place, self.root / 'missing', IDENTITY)
 
     def test_place_is_byte_for_byte_and_its_content_is_planning_s(self):
-        seeded = DR.seed(self.project, IDENTITY)['commit']
         result = DR.place(self.project, IDENTITY)
         self.assertEqual((result['result'], result['parent'], result['content'], result['identical']),
-                         ('committed', seeded, DR.PLANNED_CONTENT, True))
+                         ('committed', self.seeded, DR.PLANNED_CONTENT, True))
         for path, data in DR.design_files().items():
             self.assertEqual(fx.git(self.project, 'rev-parse', f'{result["commit"]}:{path}'),
                              self.blob_id(data), path)
@@ -245,7 +277,6 @@ class SeedAndPlace(Clone):
                                   result['commit'])[0], 0)
 
     def test_a_changed_change_folder_is_refused_never_overwritten(self):
-        DR.seed(self.project, IDENTITY)
         placed = DR.place(self.project, IDENTITY)['commit']
         fx.write(self.project, {f'{DR.CHANGE_PATH}/notes.md': b'an added file\n'})
         added = fx.commit_all(self.project, 'an added file')
@@ -257,27 +288,45 @@ class SeedAndPlace(Clone):
         self.assertEqual(DR.placement_report(self.project, placed)['identical'], True)
 
     def test_a_placement_whose_content_is_not_planning_s_changes_nothing(self):
-        seeded = DR.seed(self.project, IDENTITY)['commit']
         tampered = dict(DR.design_files())
         tampered[f'{DR.CHANGE_PATH}/design.md'] += b'\n'
         with mock.patch.object(DR, 'design_files', return_value=tampered):
             error = refused(self, 'PLACEMENT_CONTENT_MISMATCH', DR.place, self.project, IDENTITY)
         self.assertNotEqual(error.details['content'], DR.PLANNED_CONTENT)
-        self.assertEqual(self.head(), seeded)
+        self.assertEqual(self.head(), self.seeded)
         self.assertEqual(fx.git(self.project, 'status', '--porcelain', '--untracked-files=all'), '')
         self.assertFalse((self.project / DR.CHANGE_PATH).exists())
+
+    def test_commit_task_commits_the_one_task_file_alone(self):
+        placed = DR.place(self.project, IDENTITY)['commit']
+        fx.write(self.project, {TASK_FILE: b'task\n', 'stray.txt': b'x\n'})
+        refused(self, 'TASK_NOT_ALONE', DR.commit_task, self.project, IDENTITY)
+        self.assertEqual(((self.project / TASK_FILE).read_bytes(), self.head()), (b'task\n', placed))
+        (self.project / 'stray.txt').unlink()
+        fx.write(self.project, {'README.md': b'changed\n'})
+        refused(self, 'TASK_NOT_ALONE', DR.commit_task, self.project, IDENTITY)
+        fx.git(self.project, 'checkout', '--', 'README.md')
+        result = DR.commit_task(self.project, IDENTITY)
+        self.assertEqual((result['result'], result['parent'], result['written']), ('committed', placed, [TASK_FILE]))
+        self.assertEqual(fx.git(self.project, 'status', '--porcelain', '--untracked-files=all'), '')
+        self.assertEqual((self.project / TASK_FILE).read_bytes(), b'task\n')
+        self.assertEqual(fx.git(self.project, 'log', '-1', '--format=%an <%ae>|%s'),
+                         f'{IDENTITY}|{DR.TASK_MESSAGE}')
+        refused(self, 'TASK_NOT_ALONE', DR.commit_task, self.project, IDENTITY)  # nothing new
 
     def test_the_command_line(self):
         code, report, _ = self.cli('files')
         self.assertEqual((code, list(report['template']), report['design']['planned_content']),
                          (0, EXPECTED_TEMPLATE, DR.PLANNED_CONTENT))
-        code, result, _ = self.cli('seed', '--project', str(self.project), '--identity', IDENTITY)
-        self.assertEqual((code, result['result']), (0, 'committed'))
-        code, result, err = self.cli('seed', '--project', str(self.project), '--identity', 'no email')
+        code, result, _ = self.cli('seed', '--repository', str(self.remote), '--identity', IDENTITY)
+        self.assertEqual((code, result['result']), (0, 'already present'))
+        code, result, err = self.cli('place', '--project', str(self.project), '--identity', 'no email')
         self.assertEqual((code, result), (2, None))
         self.assertIn('IDENTITY_INVALID', err)
         code, result, _ = self.cli('place', '--project', str(self.project), '--identity', IDENTITY)
         self.assertEqual((code, result['content']), (0, DR.PLANNED_CONTENT))
+        code, result, _ = self.cli('sequence', '--project', str(self.project))
+        self.assertEqual((code, result['complete']), (1, False))
         out = self.root / 'plan.json'
         code, result, _ = self.cli('plan', '--outcome', 'outcome:6a1f0e2d-3c4b-4a59-8d7e-0f1e2d3c4b5a', '--out',
                                    str(out))
@@ -287,6 +336,41 @@ class SeedAndPlace(Clone):
                                      str(out))
         self.assertEqual((code, result), (2, None))
         self.assertIn('OUT_UNWRITABLE', err)
+
+
+class Sequence(Clone):
+    """sequence_report: main is exactly C0 to C3, each what it must be."""
+
+    def test_the_sequence_is_complete_and_anything_else_is_not(self):
+        clone, commits, reference = build_sequence(self.root)
+        self.project = clone
+        self.assertEqual(fx.git(clone, 'rev-list', '--first-parent', '--reverse', 'main').splitlines(),
+                         [commits[name] for name in ('C0', 'C1', 'C2', 'C3')])
+        self.assertTrue(reference.endswith('@' + commits['C2']))
+        code, result, _ = self.cli('sequence', '--project', str(clone))
+        self.assertEqual((code, result['complete'], result['task_file']), (0, True, TASK_FILE))
+        fx.write(clone, {'README.md': b'a fifth commit\n'})
+        fx.commit_all(clone, 'a fifth commit')
+        report = DR.sequence_report(clone)
+        self.assertEqual(report['complete'], False)
+        self.assertIn('not exactly C0 to C3', report['problems'][0])
+        fx.git(clone, 'reset', '--quiet', '--hard', commits['C3'])
+        self.assertTrue(DR.sequence_report(clone)['complete'])
+
+    def test_a_c3_or_c2_of_another_shape_is_not_the_sequence(self):
+        clone, commits, _ = build_sequence(self.root)
+        fx.git(clone, 'reset', '--quiet', '--hard', commits['C2'])
+        fx.write(clone, {TASK_FILE: b'task\n', 'extra.md': b'extra\n'})
+        fx.commit_all(clone, 'a task and something else')
+        report = DR.sequence_report(clone)
+        self.assertFalse(report['complete'])
+        self.assertTrue(report['problems'][0].startswith('C3 is not one task file'), report)
+        fx.git(clone, 'reset', '--quiet', '--hard', commits['C1'])
+        fx.write(clone, {f'{DR.CHANGE_PATH}/design.md': b'changed\n', TASK_FILE: b'task\n'})
+        fx.commit_all(clone, 'not the recorder')
+        fx.write(clone, {'backlog/tasks/task-2 - x.md': b'task\n'})
+        fx.commit_all(clone, 'a task')
+        self.assertTrue(DR.sequence_report(clone)['problems'][0].startswith('C2 is not the acceptance recorder'))
 
 
 class Statement(unittest.TestCase):
@@ -303,16 +387,16 @@ class Statement(unittest.TestCase):
 
 class Rehearsal(Clone):
     """The Work records sequence, offline, Backlog.md as the fake: seed, place, the Owner's acceptance from his
-    recorded statement, the task at the recorder's commit carrying the outcome, all pushed to the stand-in; then a
-    fresh clone in which the pointers and the outcome resolve."""
+    recorded statement, the task at the recorder's commit carrying the outcome and committed alone (C3); main is C0
+    to C3; pushed to the seeded repository standing in for the host Gitea; then a fresh clone in which the pointers and
+    the outcome resolve."""
 
     def backlog(self, project):
         return P.Backlog(FAKE_BACKLOG, project, runner=fake_backlog.InProcessRunner(FAKE_BACKLOG))
 
     def work_records(self, backlog, openspec=None):
-        DR.seed(self.project, IDENTITY)
+        self.prepare()
         placed = DR.place(self.project, IDENTITY)['commit']
-        fx.git(self.project, 'push', '--quiet', 'origin', 'main')
         recorded = A.record_from_log(self.project, DR.CHANGE, 'O1', DR.statement(), recorded_by=RECORDED_BY,
                                      identity=IDENTITY)
         accepted = recorded['commit']
@@ -329,11 +413,14 @@ class Rehearsal(Clone):
         self.assertTrue(all(P.Pointer.parse(p).revision == accepted for p in task['references'][:-1]))
         return placed, accepted, recorded['reference'], task
 
-    def publish(self, message):
-        fx.git(self.project, 'add', '--all')
-        fx.git(self.project, 'commit', '--quiet', '-m', message)
+    def publish(self):
+        """C3 by commit_task; main must then be the sequence; pushed to the stand-in."""
+        committed = DR.commit_task(self.project, IDENTITY)
+        sequence = DR.sequence_report(self.project)
+        self.assertTrue(sequence['complete'], sequence)
+        self.assertEqual(sequence['commits']['C3'], committed['commit'])
         fx.git(self.project, 'push', '--quiet', 'origin', 'main')
-        return self.head()
+        return committed['commit']
 
     def check_fresh(self, fresh, accepted, reference, task_id, backlog):
         report = P.resolve_tasks(P.Git(fresh), backlog(fresh), [task_id])
@@ -347,10 +434,17 @@ class Rehearsal(Clone):
 
     def test_the_sequence_on_a_stand_in_for_the_host_gitea(self):
         placed, accepted, reference, task = self.work_records(self.backlog)
-        tip = self.publish('Backlog.md (the fake): the task of add-slugify')
+        # The fake keeps its state in .fake-backlog.json: it stands in for the task file Backlog.md writes, as the one
+        # new file under backlog/tasks/, and is put back where the fake reads it in the fresh clone.
+        state = (self.project / fake_backlog.STATE).read_bytes()
+        for name in fake_backlog.FILES:
+            (self.project / name).unlink()
+        fx.write(self.project, {TASK_FILE: state})
+        tip = self.publish()
         self.assertEqual(fx.git(self.project, 'rev-parse', f'{tip}^'), accepted)
         fresh = self.clone('fresh')
         self.assertEqual(self.head(fresh), tip)
+        (fresh / fake_backlog.STATE).write_bytes((fresh / TASK_FILE).read_bytes())
         self.check_fresh(fresh, accepted, reference, task['id'], self.backlog)
         self.assertEqual(DR.placement_report(fresh, placed)['identical'], True)
 
@@ -376,8 +470,7 @@ class LiveRehearsal(Rehearsal):
 
     def test_the_sequence_on_a_stand_in_for_the_host_gitea(self):
         placed, accepted, reference, task = self.work_records(self.real_backlog, self.openspec_argv)
-        self.assertEqual(fx.git(self.project, 'status', '--porcelain', '--untracked-files=all').count('backlog/'), 1)
-        tip = self.publish('Backlog.md: the task of add-slugify (plan leaf E-05.1)')
+        tip = self.publish()
         fresh = self.clone('fresh')
         self.check_fresh(fresh, accepted, reference, task['id'], self.real_backlog)
         readiness = _load('planning_readiness', REPO / 'integrations' / 'planning' / 'planning_readiness.py')

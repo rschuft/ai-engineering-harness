@@ -30,11 +30,17 @@ no collaborators, whose rules the protection auditor's live negative test must b
 the fixture repository, and it refuses an existing escape-probe in any other state. `authorization-repository` is
 Owner act OA-30 (decision 0022; plan leaf E-05.7), acting the same way: it creates and declares the authorization
 repository (DECLARATIONS) and checks it once, read-only, as the protection auditor (authorization_repository).
+`demo-repository` is E-05.1's provisioning act under OA-22 (h), acting the same way: it creates the D1 demo
+repository, pushes the prepared main (C0 to C3) before any collaborator or rule, then declares it
+(demo_declaration) and reads it back; `demo-verify` is its read-only verifier as the site administrator.
 
   python -I -B integrations/gitea/gitea_roles.py provision      # the bot accounts and missing tokens
   python -I -B integrations/gitea/gitea_roles.py fixture        # organization, repository, protection
   python -I -B integrations/gitea/gitea_roles.py escape-probe   # the auditor's escape-probe repository
   python -I -B integrations/gitea/gitea_roles.py authorization-repository --owner-act OA-30   # Owner act OA-30
+  <tools python> -I -B integrations/gitea/gitea_roles.py demo-repository --owner-act OA-22h --clone DIR   # E-05.1
+  <tools python> -I -B integrations/gitea/gitea_roles.py demo-verify [--main SHA]   # read only, as the administrator
+  <tools python> -I -B integrations/gitea/gitea_roles.py demo-clone --to DIR       # a bare clone, read only
   python -I -B integrations/gitea/gitea_roles.py rotate ROLE    # revoke a token, prove it fails closed, re-issue
   python -I -B integrations/gitea/gitea_roles.py retire ROLE    # revoke a token, prove it fails closed, drop the entry
   python -I -B integrations/gitea/gitea_roles.py status         # entries, fingerprints, token checks
@@ -959,6 +965,323 @@ def _authorization_act(report, writes, provider, port, http, cli, receipts, chec
                          refusal=False)
 
 
+# ---------------------------------------------------------------- the D1 demo repository (E-05.1, OA-22 (h))
+
+# The engineering manager's rulings of 2026-11-15 (E-05.1 dispatch 2, under OA-22 (h) and decision 0018 point 3):
+# (a) a private organization of its own, aieh-demo; (b) the site administrator, in the one provisioning act, creates
+# the organization and the repository, pushes main = C0..C3 as prepared offline (demo_repository.py), and only then
+# applies the collaborators and the protection; afterwards nobody pushes main; (c) the fixture's three qualified rules
+# and settings, plus Actions disabled (decision 0016 section 7.2), the protection auditor NOT added (widening its reach
+# is an Owner act), verified read-only as the site administrator.
+DEMO_ORG, DEMO_REPO = 'aieh-demo', 'aieh-d1-demo'
+DEMO_REPOSITORY = f'{DEMO_ORG}/{DEMO_REPO}'
+DEMO_ACT = 'OA-22h'  # the command line's name for OA-22 (h)
+DEMO_ORG_SETTINGS = {'visibility': 'private', 'repo_admin_change_team_access': False}
+# The bots the qualified rules name: the planner and the builder on work/*'s push allowlist (write), the reviewer on
+# main's approvals allowlist (read); Gitea keeps on an allowlist only accounts with that access, so each is a
+# collaborator with it. aieh-owner writes (the merge allowlist). No verifier and no protection auditor.
+DEMO_ROLES = ('planner', 'builder', 'reviewer')
+COMMIT_ID = re.compile(r'[0-9a-f]{40}')
+
+
+def demo_collaborators() -> dict:
+    return {**{ROLES[role]['user']: ROLES[role]['permission'] for role in DEMO_ROLES}, host.OWNER: 'write'}
+
+
+def demo_declaration() -> dict:
+    """The demo repository's total declaration: the fixture's rules and settings, Actions disabled, the collaborators
+    the rules name (demo_collaborators), the organization's Owners team, no deploy key. It is not in DECLARATIONS:
+    that table is the protection auditor's reach, and the auditor is not a collaborator here; demo_verify reads the
+    repository as the site administrator and judges it with protection_check.judge."""
+    return {'base': DEFAULT_BRANCH, 'rules': protection_rules(),
+            'settings': {**repository_settings(), 'has_actions': False},
+            'collaborators': demo_collaborators(), 'teams': {'Owners': 'owner'}, 'deploy_keys': []}
+
+
+def _demo():
+    """demo_repository.py, loaded when a demo command needs it."""
+    if (module := sys.modules.get('aieh_gitea_demo_repository')) is None:
+        spec = importlib.util.spec_from_file_location('aieh_gitea_demo_repository', HERE / 'demo_repository.py')
+        module = sys.modules['aieh_gitea_demo_repository'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['aieh_gitea_demo_repository']
+            raise
+    return module
+
+
+def demo_url(port: int) -> str:
+    return f'http://{host.LOOPBACK}:{port}/{DEMO_REPOSITORY}.git'
+
+
+def _demo_history(read, repo, head, limit=8) -> list:
+    """The first-parent history of HEAD (newest first), each commit's parents counted, at most LIMIT commits."""
+    out, sha = [], head
+    while sha is not None and len(out) < limit:
+        commit = read(f'{repo}/git/commits/{sha}?stat=false&verification=false&files=false', dict, f'the commit {sha}')
+        parents = [p.get('sha') for p in commit.get('parents') or [] if isinstance(p, dict)]
+        out.append({'sha': sha, 'parents': len(parents)})
+        sha = parents[0] if parents else None
+    return out
+
+
+def demo_verify(api, main: str | None = None) -> dict:
+    """Read-only, as the site administrator (API: an Api or ActApi with basic authentication; GETs only): the
+    organization's settings, and the repository's view, rules, main, collaborators and their permissions, teams and
+    deploy keys, judged against demo_declaration by protection_check.judge (its comparison, called); with MAIN, also
+    main's head equal to MAIN over exactly four first-parent commits from a root (C0 to C3). Fails closed: a read
+    that does not answer as expected is unverified, any difference is drift."""
+    pc = _protection_check()
+    declared = demo_declaration()
+    repo = f'/repos/{DEMO_REPOSITORY}'
+
+    def read(path, kind, what):
+        status, payload = api.call('GET', path)
+        if status != 200:
+            raise pc.Unverifiable('READ_FAILED', f'{what}: GET {path} answered {status}')
+        if not isinstance(payload, kind):
+            raise pc.Unverifiable('VIEW_INVALID', f'{what}: a view of another kind')
+        return payload
+
+    try:
+        org = read(f'/orgs/{DEMO_ORG}', dict, 'the organization')
+        view = read(repo, dict, 'the repository')
+        if view.get('full_name') != DEMO_REPOSITORY:
+            raise pc.Unverifiable('VIEW_INVALID', f'the repository answers as {view.get("full_name")!r}')
+        rules = [pc._rule(rule, n) for n, rule in enumerate(read(f'{repo}/branch_protections', list, 'the rules'))]
+        branch = read(f'{repo}/branches/{DEFAULT_BRANCH}', dict, f'the branch {DEFAULT_BRANCH}')
+        if not isinstance(branch.get('protected'), bool) or \
+                not isinstance(branch.get('effective_branch_protection_name'), str):
+            raise pc.Unverifiable('VIEW_INVALID', f'the branch {DEFAULT_BRANCH}: protected or '
+                                  'effective_branch_protection_name is missing or of another type')
+        roster = read(f'{repo}/collaborators?{LIST_PAGE}', list, 'the collaborators')
+        collaborators_seen = {}
+        for entry in roster:
+            login = str(entry.get('login') if isinstance(entry, dict) else entry)
+            collaborators_seen[login] = read(f'{repo}/collaborators/{login}/permission', dict,
+                                             f'the permission of {login}').get('permission')
+        teams = {str(t.get('name')): t.get('permission') for t in read(f'{repo}/teams', list, 'the teams')
+                 if isinstance(t, dict)}
+        keys = read(f'{repo}/keys?{LIST_PAGE}', list, 'the deploy keys')
+        head = (branch.get('commit') or {}).get('id')
+        history = _demo_history(read, repo, head) if isinstance(head, str) and COMMIT_ID.fullmatch(head) else []
+        observed = {'auditor': {'login': host.SITE_ADMIN, 'read_as': 'the site administrator, basic authentication'},
+                    'repository': view, 'rules': rules, 'branch': branch, 'collaborators': collaborators_seen,
+                    'teams': teams, 'deploy_keys': [{k: key.get(k) for k in ('id', 'title', 'read_only')}
+                                                    if isinstance(key, dict) else {'malformed': True} for key in keys]}
+        expected = {'repository': DEMO_REPOSITORY, 'base': declared['base'], 'rules': declared['rules'],
+                    'settings': declared['settings'], 'collaborators': declared['collaborators'],
+                    'teams': declared['teams'], 'deploy_keys': declared['deploy_keys']}
+        verdict = pc.judge(expected, observed)
+    except pc.Unverifiable as exc:
+        return {'repository': DEMO_REPOSITORY, 'status': 'unverified', 'code': exc.code, 'problems': [exc.detail],
+                'read_as': host.SITE_ADMIN}
+    problems = list(verdict.problems)
+    for key, want in DEMO_ORG_SETTINGS.items():
+        if org.get(key) != want:
+            problems.append(f'the organization\'s {key} is {org.get(key)!r}, declared {want!r}')
+    if main is not None:
+        if head != main:
+            problems.append(f'main\'s head is {head!r}, not {main}')
+        if [h['parents'] for h in history] != [1, 1, 1, 0]:
+            problems.append(f'main is not exactly four first-parent commits from a root: {history}')
+    return {'repository': DEMO_REPOSITORY, 'status': 'drift' if problems else 'verified',
+            'code': 'DRIFT' if problems else 'VERIFIED', 'problems': problems, 'digest': verdict.digest,
+            'main': head, 'history': history, 'read_as': host.SITE_ADMIN}
+
+
+def _admin_credential(provider):
+    """The site administrator's basic-authentication credential for a push or a clone, read into memory."""
+    entry = provider.get(host.FINAL_TARGETS[host.SITE_ADMIN])
+    if entry is None or entry[0] != host.SITE_ADMIN:
+        raise GiteaError('ADMIN_NOT_FINALIZED', f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} is missing')
+    credential = _demo()._ra().Credential(host.SITE_ADMIN, entry[1])
+    del entry
+    return credential
+
+
+def _demo_push(clone, url, refspec, credential):
+    ra = _demo()._ra()
+    with ra.open_repository(Path(clone), config='repository', work_tree=False) as repo:
+        return repo.push(url, refspec, credential)
+
+
+def demo_repository(owner_act=None, clone=None, provider=None, run: Callable = subprocess.run,
+                    http: Callable = None, ctx=None, push: Callable | None = None) -> dict:
+    """E-05.1's provisioning act under OA-22 (h): the demo repository DEMO_REPOSITORY on the host Gitea, as the site
+    administrator (basic authentication, its harness-held password read into memory; no token minted). Refused
+    unless OWNER_ACT is DEMO_ACT.
+
+    Before any write, read-only, each a refusal with nothing written: the clone CLONE's main is exactly C0 to C3
+    (demo_repository.sequence_report; CLONE_NOT_THE_SEQUENCE); the bots the rules name and aieh-owner exist
+    (BOTS_MISSING, OWNER_MISSING); the administrator holds no token (ADMIN_HOLDS_TOKEN). Then it reconciles: an
+    organization and repository that verify as declared with main at C3 are reported, nothing written; an
+    organization without the repository, or a repository in any other state, is refused (DEMO_REPOSITORY_EXISTS;
+    MAIN_NOT_THE_SEQUENCE when main holds other commits), never adopted or overwritten. Otherwise, in order: the
+    private organization; the empty repository (no auto-init; default branch main); the push of the clone's main
+    (C0 to C3) to main, which must then be C3 (MAIN_NOT_EMPTY if Gitea's main already exists); the settings; the
+    collaborators; the three rules. The window in which main takes a push opens at the push and closes when the last
+    rule is applied; the report names its start, end and the pushed commit. Then the read-back (demo_verify, with
+    main at C3; READBACK_DIFFERENT), no pull request, and no administrator token afterwards. Any stop after a write
+    sends nothing further, undoes and retries nothing, and reports the writes in order. PUSH stands in for the
+    repository module's push in tests."""
+    if owner_act != DEMO_ACT:
+        raise GiteaError('OWNER_ACT_REQUIRED', f'this is the provisioning act of OA-22 (h): it runs only with '
+                         f'--owner-act {DEMO_ACT}; nothing was read or sent')
+    if clone is None:
+        raise GiteaError('CLONE_NOT_THE_SEQUENCE', 'name the clone whose main is C0 to C3 (--clone)')
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    report = {'owner_act': 'OA-22 (h)', 'repository': DEMO_REPOSITORY, 'state': 'checking; nothing written',
+              'actions': []}
+    writes = report['actions']
+    try:
+        _demo_act(report, writes, clone, provider, port, http, cli, push or _demo_push)
+    except Exception as exc:  # noqa: BLE001 - after a write, whatever stops the act is reported with its writes
+        if isinstance(exc, _LOST):
+            exc = GiteaError('ANSWER_LOST', f'the answer was lost ({type(exc).__name__}) '
+                             + ('after the writes' if writes else 'before any write'), refusal=not writes)
+        elif not isinstance(exc, GiteaError):
+            if not writes:
+                raise
+            exc = GiteaError('UNEXPECTED_ERROR', f'{type(exc).__name__}: {str(exc)[:200]}', refusal=False)
+        detail = exc.detail
+        if writes:
+            detail += '; the writes sent, in order: ' + json.dumps(writes)
+        error = GiteaError(exc.code, detail, refusal=exc.refusal and not writes, remedy=exc.remedy)
+        report['stopped'] = {'code': exc.code, 'detail': detail, 'after_writes': bool(writes)}
+        error.report = report
+        raise error from None
+    return report
+
+
+def _demo_act(report, writes, clone, provider, port, http, cli, push):
+    """demo_repository's steps, filling REPORT (see there)."""
+    DR = _demo()
+    try:
+        sequence = DR.sequence_report(clone)
+    except DR.DemoError as exc:
+        raise GiteaError('CLONE_NOT_THE_SEQUENCE', f'{exc.code}: {exc.message}; nothing was sent') from None
+    if not sequence['complete']:
+        raise GiteaError('CLONE_NOT_THE_SEQUENCE', 'the clone\'s main is not exactly C0 to C3: '
+                         + '; '.join(sequence['problems']) + '; nothing was sent')
+    tip = sequence['main']
+    report['sequence'] = sequence['commits']
+    users = cli.users()
+    missing = sorted({ROLES[role]['user'] for role in DEMO_ROLES} - set(users))
+    if missing:
+        raise GiteaError('BOTS_MISSING', f'run provision first: {missing}')
+    if host.OWNER not in users:
+        raise GiteaError('OWNER_MISSING', f'{host.OWNER} does not exist; run task gitea:identities')
+    declared = demo_declaration()
+    api = ActApi(admin_api(provider, port, http), writes)
+    report['admin_auth'] = {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
+                            f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'}
+    report['admin_tokens_before'] = _admin_tokens(api)
+    if report['admin_tokens_before'] != []:
+        raise GiteaError('ADMIN_HOLDS_TOKEN', f'{host.SITE_ADMIN}\'s tokens read {report["admin_tokens_before"]!r}, '
+                         'not none, before the act: nothing was written')
+    repo = f'/repos/{DEMO_REPOSITORY}'
+    status, payload = api.call('GET', f'/orgs/{DEMO_ORG}')
+    if status != 404:
+        require(status, 200, f'GET /orgs/{DEMO_ORG}', payload)
+        status, payload = api.call('GET', repo)
+        if status == 404:
+            raise GiteaError('DEMO_REPOSITORY_EXISTS', f'the organization {DEMO_ORG} exists without {DEMO_REPO}: an '
+                             'existing organization is never adopted; nothing was written')
+        require(status, 200, f'GET {repo}', payload)
+        found = demo_verify(api, main=tip)
+        report['verification'] = found
+        if found['status'] != 'verified':
+            code = 'MAIN_NOT_THE_SEQUENCE' if any(p.startswith('main') for p in found['problems']) \
+                else 'DEMO_REPOSITORY_EXISTS'
+            raise GiteaError(code, f'{DEMO_REPOSITORY} exists in another state ({found["code"]}); it is never adopted '
+                             'or overwritten, and nothing was written: ' + '; '.join(found['problems']))
+        report['state'] = 'already present; nothing written'
+        return
+
+    def call(method, path, body):
+        status, payload = api.call(method, path, body)
+        require(status, _SUCCESS, f'{method} {path}', payload)
+
+    report['state'] = 'creating'
+    call('POST', '/orgs', {'username': DEMO_ORG, **DEMO_ORG_SETTINGS,
+                           'description': 'The D1 demonstration (plan leaf E-05.1; OA-22 (h))'})
+    call('POST', f'/orgs/{DEMO_ORG}/repos', {'name': DEMO_REPO, 'private': True, 'auto_init': False,
+                                             'default_branch': declared['base'],
+                                             'description': 'The D1 demonstration repository (OA-25)'})
+    status, payload = api.call('GET', f'{repo}/branches/{declared["base"]}')
+    if status != 404:
+        raise GiteaError('MAIN_NOT_EMPTY', f'the new repository\'s {declared["base"]} answered {status}, not 404: '
+                         'nothing is pushed over it', refusal=False)
+    window = report['window'] = {'opened': now_stamp(), 'pushed_by': host.SITE_ADMIN, 'pushed': tip,
+                                 'pushes_main': 'the site administrator only (no collaborator, no rule yet)'}
+    refspec = f'refs/heads/main:refs/heads/{declared["base"]}'
+    entry = {'method': 'PUSH', 'path': f'{repo}.git {refspec}', 'status': 'sent, no answer yet'}
+    writes.append(entry)
+    credential = _admin_credential(provider)
+    try:
+        update = push(clone, demo_url(port), refspec, credential)
+    except Exception as exc:  # noqa: BLE001 - the repository module's refusal or failure, by its code
+        entry['status'] = f'{getattr(exc, "code", type(exc).__name__)}: may have been written'
+        raise GiteaError('PUSH_FAILED', f'the push of main answered {getattr(exc, "code", type(exc).__name__)}',
+                         refusal=False) from None
+    finally:
+        del credential
+    entry['status'] = 'pushed'
+    report['push'] = {'ref': getattr(update, 'name', None), 'old': getattr(update, 'old', None),
+                      'new': getattr(update, 'new', None)}
+    status, branch = api.call('GET', f'{repo}/branches/{declared["base"]}')
+    require(status, 200, f'GET {repo}/branches/{declared["base"]}', branch)
+    if (branch.get('commit') or {}).get('id') != tip:
+        raise GiteaError('PUSH_UNEXPECTED', f'main reads {(branch.get("commit") or {}).get("id")!r} after the push, '
+                         f'not {tip}', refusal=False)
+    call('PATCH', repo, declared['settings'])
+    for user, permission in declared['collaborators'].items():
+        call('PUT', f'{repo}/collaborators/{user}', {'permission': permission})
+    for rule in declared['rules']:
+        call('POST', f'{repo}/branch_protections', rule)
+    window['closed'] = now_stamp()
+    report['state'] = 'created'
+    found = report['verification'] = demo_verify(api, main=tip)
+    if found['status'] != 'verified':
+        raise GiteaError('READBACK_DIFFERENT', f'{DEMO_REPOSITORY} was created but reads back {found["code"]}; nothing '
+                         'further was sent: ' + '; '.join(found['problems']), refusal=False)
+    status, pulls = api.call('GET', f'{repo}/pulls?state=all&{LIST_PAGE}')
+    if status != 200 or pulls != []:
+        raise GiteaError('READBACK_DIFFERENT', f'the pull requests read {status} {str(pulls)[:120]}, not none',
+                         refusal=False)
+    report['admin_tokens_after'] = _admin_tokens(api)
+    if report['admin_tokens_after'] != []:
+        raise GiteaError('ADMIN_HOLDS_TOKEN', f'{host.SITE_ADMIN}\'s tokens afterwards read '
+                         f'{report["admin_tokens_after"]!r}, not none', refusal=False)
+
+
+def demo_check(provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
+               main: str | None = None) -> dict:
+    """The read-only verifier of the demo repository as the site administrator (demo_verify); writes nothing."""
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    if main is not None and not COMMIT_ID.fullmatch(main):
+        raise GiteaError('REFUSED', f'--main {main!r} is not a full commit id')
+    return demo_verify(admin_api(provider, port, http), main=main)
+
+
+def demo_clone(destination, provider=None, run: Callable = subprocess.run, ctx=None, clone: Callable | None = None):
+    """A new local bare clone of the demo repository, read as the site administrator over smart HTTP
+    (repository_access.clone; the password in memory); reads Gitea only."""
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    credential = _admin_credential(provider)
+    ra = _demo()._ra()
+    try:
+        refs = (clone or ra.clone)(demo_url(port), destination, credential)
+    except ra.RepositoryError as exc:
+        raise GiteaError(exc.code, exc.message, refusal=exc.code == 'REMOTE_REFUSED') from None
+    finally:
+        del credential
+    return {'repository': DEMO_REPOSITORY, 'clone': str(destination), 'refs': refs}
+
+
+DEMO_COMMANDS = ('demo-repository', 'demo-verify', 'demo-clone')
 TRIGGER ='owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
 
 
@@ -1133,6 +1456,20 @@ def main(argv=None) -> int:
              'verifies; refused unless --owner-act names the act; a second run on a verified repository writes nothing',
         description=f'This is Owner act {OWNER_ACT}. It runs only on the Owner\'s approval of that act.')
     auth.add_argument('--owner-act', help=f'must be {OWNER_ACT}: the Owner act this run performs')
+    demo = sub.add_parser(
+        'demo-repository',
+        help=f'E-05.1, OA-22 (h): create the private demo repository {DEMO_REPOSITORY} as the site administrator (basic '
+             'authentication, password in memory, no token minted), push the clone\'s main (C0 to C3), then apply its '
+             'settings, collaborators and protection rules and read it back; refused unless --owner-act names the act; '
+             'a second run on a verified repository writes nothing')
+    demo.add_argument('--owner-act', help=f'must be {DEMO_ACT}: OA-22 (h), the provisioning this run performs')
+    demo.add_argument('--clone', help='the local clone whose main is exactly C0 to C3 (demo_repository.py sequence)')
+    check = sub.add_parser('demo-verify', help=f'read {DEMO_REPOSITORY} as the site administrator and judge it against '
+                           'its declaration; writes nothing; exit 0 verified, 1 drift, 2 unverified or refused')
+    check.add_argument('--main', help='also require main to be this commit over C0 to C3')
+    copy_ = sub.add_parser('demo-clone', help=f'a new local bare clone of {DEMO_REPOSITORY}, read as the site '
+                           'administrator')
+    copy_.add_argument('--to', required=True, help='the new directory')
     rot =sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
     rot.add_argument('role', choices=sorted(ROLES))
     ret = sub.add_parser('retire', help='revoke a role token, prove it fails closed, delete its entry')
@@ -1158,6 +1495,13 @@ def main(argv=None) -> int:
             report = escape_probe()
         elif args.command == 'authorization-repository':
             report = authorization_repository(owner_act=args.owner_act)
+        elif args.command == 'demo-repository':
+            report = demo_repository(owner_act=args.owner_act, clone=args.clone)
+        elif args.command == 'demo-verify':
+            report = demo_check(main=args.main)
+            code = {'verified': 0, 'drift': 1}.get(report['status'], 2)
+        elif args.command == 'demo-clone':
+            report = demo_clone(args.to)
         elif args.command == 'rotate':
             report = rotate(args.role)
         elif args.command == 'retire':
@@ -1168,16 +1512,25 @@ def main(argv=None) -> int:
         message, code = f'gitea-roles: {exc}\n', 2
     except GiteaError as exc:
         message, code = f'gitea-roles: {redact(str(exc))}\n', 2 if exc.refusal else 1
-        if args.command == 'authorization-repository':
-            report = getattr(exc, 'report', None)  # OA-30's report so far: what it checked and wrote, in order
+        if args.command in ('authorization-repository', 'demo-repository'):
+            report = getattr(exc, 'report', None)  # the act's report so far: what it checked and wrote, in order
     finally:
         host.ACT_GUARD = None
     text = '' if report is None else json.dumps(report, indent=2, default=str) + '\n'
-    if args.command != 'authorization-repository':
+    demo = args.command in DEMO_COMMANDS
+    if args.command != 'authorization-repository' and not demo:
         text = redact(text)
     # The authorization-repository report carries sha256 digests (64 hex digits, which redact would cut) and no
     # commit id or token: it is shown as it is, and the scan below withholds it if anything token-shaped is in it.
-    scan = host.exposure_scan(guard, text, message)
+    # The demo commands read no token (the site administrator's password only, which the scan still searches for)
+    # and report commit ids (40 hex digits, the pushed C3 among them): they are scanned for the held secrets, not for
+    # the token shape a commit id has.
+    if demo:
+        guard.scan_text('report', text, token_shape=False)
+        guard.scan_text('message', message, token_shape=False)
+        scan = guard.report()
+    else:
+        scan = host.exposure_scan(guard, text, message)
     guard.clear()
     if scan['found_in']:
         exposure = GiteaError('EXPOSURE_FOUND', 'a secret the act held is in its ' + ' and '.join(scan['found_in']),
