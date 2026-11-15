@@ -15,12 +15,18 @@ that revision, a statement attributed to anyone but the Owner and the request it
 stable code and change nothing (neither the project repository nor the harness repository). P-04.1's paths are
 test_acceptance_recorder.py's, unchanged.
 
+The review rulings of 2026-11-15 (dispatch E-05.12-2), each with the reviewer's probe as a test: only an entry
+whose dated title begins "Owner " is the Owner's, and only its first run of "> " lines outside code fences is his
+block (R1; probes P1, P2, P3, P3b); the statement is at least 12 characters and names the change or the project
+repository (R2; P4, P4b, P4c); the request's own text is refused like its reference (R3; P6); the harness's HEAD
+is refs/heads/main, and its origin is recorded without userinfo (R4; P5, P8b); a reference to a missing object is
+HARNESS_UNAVAILABLE (N1; P8).
+
 The harness log is ``fixtures/recorded-statement-log.md``: a byte-for-byte copy of the real entry anchored
 ``owner-direction-d1-planning-2026-11-15`` (a multi-line verbatim block, the real target of E-05.1) among
 SYNTHETIC entries. Every statement recorded here is a test's: no Owner decision is recorded, and nothing is
-written to the real harness log, the demo repository or the managed data root. One test reads this checkout's
-own log at its HEAD, read-only, to show that the copy is the real entry and that the real entry admits E-05.1's
-statement.
+written to the real harness log, the demo repository or the managed data root. Two tests read this checkout's
+own log at its HEAD, read only.
 """
 import contextlib
 import datetime
@@ -49,11 +55,17 @@ PROPOSED, HAND = of.PROPOSED, of.HAND_ACCEPTED
 LOG_FIXTURE = HERE / 'fixtures' / 'recorded-statement-log.md'
 D1_DESIGN = of.REPO / 'evidence' / 'D1-demo-design' / 'openspec' / 'changes' / 'add-slugify'
 D1_CHANGE = 'add-slugify'
+# The project is a clone of the demo repository (its origin ends in aieh-d1-demo.git); the harness's origin
+# carries a user name, which the record leaves out.
+PROJECT_ORIGIN = 'https://example.invalid/demo/aieh-d1-demo.git'
+HARNESS_ORIGIN = 'https://fixture-user@example.invalid/harness/ai-engineering-harness.git'
+HARNESS_ORIGIN_RECORDED = 'https://example.invalid/harness/ai-engineering-harness.git'
 
 ANCHOR = 'owner-direction-d1-planning-2026-11-15'
-REF = f'harness:evidence/bootstrap-log.md#{ANCHOR}'
-REACCEPT = 'harness:evidence/bootstrap-log.md#fixture-owner-reaccept-2026-11-16'
-REQUEST = 'harness:evidence/bootstrap-log.md#owner-decision-oa-31-2026-11-14'  # add-slugify's Q1 source
+LOG_REF = 'harness:evidence/bootstrap-log.md#'
+REF = LOG_REF + ANCHOR
+REACCEPT = LOG_REF + 'fixture-owner-reaccept-2026-11-16'
+REQUEST = LOG_REF + 'owner-decision-oa-31-2026-11-14'  # add-slugify's Q1 source
 # E-05.1's statement: several lines of the entry's verbatim block, as the Owner wrote them (blank lines included).
 TEXT = ('Finalize and accept the OpenSpec change for\n'
         'aieh-d1-demo:\n'
@@ -66,8 +78,11 @@ TEXT = ('Finalize and accept the OpenSpec change for\n'
         'non-ASCII text.\n'
         '\n'
         'Keep the demonstration intentionally small.')
-REACCEPT_TEXT = 'SYNTHETIC FIXTURE, not an Owner decision: accept O1 again, as amended.'
+REACCEPT_TEXT = ('SYNTHETIC FIXTURE, not an Owner decision: accept O1 of qual-05-api-rate-limiting again, '
+                 'as amended.')
 REQUEST_TEXT = 'OA-25: use aieh-d1-demo, a small Python package with unittest tests.'
+QUAL05_REQUEST = ('Please add rate limiting to the public API so a single client can\'t take it down for everyone else. '
+                  'Use a fixed window of 100 requests per minute per IP.')
 OUTCOME = '6a1f0e2d-3c4b-4a59-8d7e-0f1e2d3c4b5a'
 
 
@@ -88,12 +103,14 @@ def worktree(repo):
     return out
 
 
-def build_harness(repo, log=None, commit=True):
+def build_harness(repo, log=None, commit=True, origin=None):
     """A throwaway harness repository at REPO holding LOG (the fixture log's bytes by default) as
-    evidence/bootstrap-log.md: committed, or (COMMIT false) only in the work tree beside a committed README.
-    Returns HEAD's commit, or None when nothing is committed."""
+    evidence/bootstrap-log.md: committed, or (COMMIT false) only in the work tree beside a committed README, on
+    main, with ORIGIN as its origin remote when given. Returns HEAD's commit, or None when nothing is committed."""
     Path(repo).mkdir(parents=True)
     fx.git(repo, 'init', '--quiet', '-b', 'main')
+    if origin:
+        fx.git(repo, 'remote', 'add', 'origin', origin)
     data = LOG_FIXTURE.read_bytes() if log is None else log
     if commit:
         fx.write(repo, {'README.md': b'Throwaway harness repository (E-05.12 fixture).\n',
@@ -101,6 +118,14 @@ def build_harness(repo, log=None, commit=True):
         return fx.commit_all(repo, 'The fixture log')
     fx.write(repo, {'evidence/bootstrap-log.md': data})
     return None
+
+
+def build_project(repo, origin=PROJECT_ORIGIN):
+    """The acceptance recorder's fixture project at REPO, with ORIGIN as its origin remote when given."""
+    design = of.build_project(repo)
+    if origin:
+        fx.git(repo, 'remote', 'add', 'origin', origin)
+    return design
 
 
 def add_d1_change(repo):
@@ -111,6 +136,13 @@ def add_d1_change(repo):
             files[f'openspec/changes/{D1_CHANGE}/{path.relative_to(D1_DESIGN).as_posix()}'] = path.read_bytes()
     fx.write(repo, files)
     return fx.commit_all(repo, 'The D1 demo design (a copy)')
+
+
+def committed_log(repo):
+    """(HEAD's commit, the log's text there) of the repository REPO, read only."""
+    with ra.open_repository(repo, config='repository', ceilings=[str(Path(repo).parent)]) as handle:
+        commit = handle.head().commit
+        return commit, handle.blob(commit, G.LOG).decode('utf-8')
 
 
 class Fixture(unittest.TestCase):
@@ -132,8 +164,8 @@ class Fixture(unittest.TestCase):
 
     @staticmethod
     def build(root):
-        design = of.build_project(root / 'p')
-        return design, build_harness(root / 'h')
+        design = build_project(root / 'p')
+        return design, build_harness(root / 'h', origin=HARNESS_ORIGIN)
 
     def setUp(self):
         if self.SHARED:
@@ -147,15 +179,16 @@ class Fixture(unittest.TestCase):
         ceiling.start()
         self.addCleanup(ceiling.stop)
 
-    def record(self, change=PROPOSED, item='O1', said=None, **kwargs):
+    def record(self, change=PROPOSED, item='O1', said=None, project=None, **kwargs):
         kwargs.setdefault('recorded_by', of.RECORDED_BY)
         kwargs.setdefault('identity', of.IDENTITY)
         kwargs.setdefault('now', LATER)
         kwargs.setdefault('harness', self.harness)
-        return A.record_from_log(self.repo, change, item, statement() if said is None else said, **kwargs)
+        return A.record_from_log(project or self.repo, change, item, statement() if said is None else said,
+                                 **kwargs)
 
-    def resolve(self, text, current=False):
-        resolver = R.ObjectiveResolver(self.repo)
+    def resolve(self, text, current=False, repo=None):
+        resolver = R.ObjectiveResolver(repo or self.repo)
         reference = L.parse(text)
         return resolver.current(reference) if current else resolver.resolve(reference)
 
@@ -219,8 +252,11 @@ class RecordingFromTheLog(Fixture):
         self.assertEqual(blob, LOG_FIXTURE.read_bytes())
         self.assertEqual(record['recorded'], {
             'restsOn': 'recorded-statement', 'entry': f'evidence/bootstrap-log.md#{ANCHOR}', 'date': '2026-11-15',
-            'revision': self.harness_head, 'digest': 'sha256:' + hashlib.sha256(blob).hexdigest(),
-            'challengeShown': False})
+            'revision': self.harness_head, 'origin': HARNESS_ORIGIN_RECORDED,
+            'digest': 'sha256:' + hashlib.sha256(blob).hexdigest(),
+            'about': {'name': 'aieh-d1-demo', 'as': 'repository'}, 'challengeShown': False})
+        self.assertEqual(list(record['recorded']), list(D.RECORDED_BLOCK_FIELDS))
+        self.assertNotIn('fixture-user', D.dumps(record))
         self.assertEqual(record['subject'], {'change': PROPOSED, 'item': 'O1', 'outcome': result['outcome'],
                                              'revision': self.design,
                                              'proposal': hashlib.sha256(proposal).hexdigest()})
@@ -254,6 +290,7 @@ class RecordingFromTheLog(Fixture):
         self.assertEqual(second['decision']['recorded']['entry'],
                          'evidence/bootstrap-log.md#fixture-owner-reaccept-2026-11-16')
         self.assertEqual(second['decision']['recorded']['date'], '2026-11-16')
+        self.assertEqual(second['decision']['recorded']['about'], {'name': PROPOSED, 'as': 'change'})
         self.assertEqual(self.resolve(second['reference']).facts['acceptance'], REACCEPT)
         self.assertEqual(self.resolve(first['reference']).facts['acceptance'], REF)
 
@@ -280,8 +317,9 @@ class RecordingFromTheLog(Fixture):
         self.assertTrue(self.resolve(amended['reference']).resolved)
 
     def test_the_d1_demo_change_is_accepted_from_the_real_entrys_shape(self):
-        # A rehearsal of E-05.1 on a copy of the D1 demo design: O1 of add-slugify, accepted from the copy of
-        # the entry anchored owner-direction-d1-planning-2026-11-15; the reference to its Q1's source is the
+        # A rehearsal of E-05.1 on a copy of the D1 demo design, in a clone of the demo repository (its origin
+        # ends in aieh-d1-demo.git): O1 of add-slugify, accepted from the copy of the entry anchored
+        # owner-direction-d1-planning-2026-11-15, which names aieh-d1-demo; the reference to its Q1's source is the
         # request itself.
         add_d1_change(self.repo)
         self.refused('ACCEPTANCE_IS_REQUEST', self.record, D1_CHANGE,
@@ -292,6 +330,21 @@ class RecordingFromTheLog(Fixture):
         self.assertEqual((answer.facts['change'], answer.facts['item'], answer.facts['acceptance']),
                          (f'openspec/changes/{D1_CHANGE}', 'O1', REF))
         self.assertEqual(answer.facts['source'], ['Q1'])
+        self.assertEqual(result['decision']['recorded']['about'], {'name': 'aieh-d1-demo', 'as': 'repository'})
+
+    def test_the_repository_name_without_an_origin_is_the_directorys(self):
+        # A project without an origin, in a directory named aieh-d1-demo; a harness without an origin, whose
+        # record then has no origin field.
+        project, harness = self.root / 'aieh-d1-demo', self.root / 'bare-harness'
+        build_project(project, origin=None)
+        head = build_harness(harness)
+        result = self.record(project=project, harness=harness)
+        recorded = result['decision']['recorded']
+        self.assertEqual(recorded['about'], {'name': 'aieh-d1-demo', 'as': 'repository'})
+        self.assertNotIn('origin', recorded)
+        self.assertEqual(recorded['revision'], head)
+        self.assertEqual(D.check_record(result['decision']), [])
+        self.assertTrue(self.resolve(result['reference'], repo=project).resolved)
 
     def test_the_command_line(self):
         said = self.root / 'statement.json'
@@ -324,9 +377,10 @@ class RecordedStatementRefusals(Fixture):
 
     @staticmethod
     def build(root):
-        design, head = Fixture.build(root)
+        _, head = Fixture.build(root)
         add_d1_change(root / 'p')
         design = fx.loose_head(root / 'p')
+        build_project(root / 'other', origin='https://example.invalid/demo/another-project.git')
         build_harness(root / 'untracked', commit=False)  # unborn HEAD, the log in the work tree only
         uncommitted = root / 'uncommitted'  # a commit without the log; the log in the work tree only
         uncommitted.mkdir()
@@ -337,37 +391,64 @@ class RecordedStatementRefusals(Fixture):
         # A committed log whose work tree adds an entry that is not committed.
         edited = root / 'edited'
         build_harness(edited)
-        added = (b'- <a id="fixture-work-tree-only-2026-11-15"></a>**2026-11-15: SYNTHETIC FIXTURE: an entry only in '
-                 b'the work tree, verbatim.**\n\n  > SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.\n')
+        added = (b'- <a id="fixture-work-tree-only-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC '
+                 b'FIXTURE): an entry only in the work tree, verbatim.**\n\n  > SYNTHETIC FIXTURE, not an Owner '
+                 b'decision: accept O1 of qual-05-api-rate-limiting as written.\n')
         log = LOG_FIXTURE.read_bytes().replace(b'\n## Owner-directed maintenance items', added + b'\n## Owner-directed '
                                                b'maintenance items')
         assert log != LOG_FIXTURE.read_bytes()
         (edited / 'evidence' / 'bootstrap-log.md').write_bytes(log)
+        # P5: an Owner entry committed only on a side branch, which HEAD names.
+        side = root / 'side'
+        build_harness(side)
+        fx.git(side, 'checkout', '--quiet', '-b', 'fabricated')
+        fabricated = (b'- <a id="fixture-fabricated-2026-11-15"></a>**2026-11-15: Owner decision (SYNTHETIC '
+                      b'FIXTURE): accept O1 of qual-05.** Verbatim:\n\n  > I accept O1 of qual-05-api-rate-limiting.\n')
+        (side / 'evidence' / 'bootstrap-log.md').write_bytes(LOG_FIXTURE.read_bytes().replace(
+            b'\n## Owner-directed maintenance items', fabricated + b'\n## Owner-directed maintenance items'))
+        fx.commit_all(side, 'A fabricated entry on a side branch')
+        # P8b: HEAD detached on main's commit.
+        detached = root / 'detached'
+        commit = build_harness(detached)
+        fx.git(detached, 'checkout', '--quiet', '--detach', commit)
+        # P8 (N1): main names a missing object.
+        dangling = root / 'dangling'
+        build_harness(dangling)
+        (dangling / '.git' / 'refs' / 'heads' / 'main').write_text('0123456789abcdef0123456789abcdef01234567\n',
+                                                                   encoding='ascii')
         return design, head
 
     def test_an_absent_anchor_is_refused(self):
         for anchor in ('no-such-entry', 'fixture-before-decisions', 'fixture-after-decisions-2026-11-15'):
             with self.subTest(anchor=anchor):
-                self.refused('STATEMENT_ANCHOR_ABSENT', self.record,
-                             said=statement(reference=f'harness:evidence/bootstrap-log.md#{anchor}'))
+                self.refused('STATEMENT_ANCHOR_ABSENT', self.record, said=statement(reference=LOG_REF + anchor))
 
     def test_an_entry_only_in_the_work_tree_is_refused(self):
-        said = statement(text='SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.',
-                         reference='harness:evidence/bootstrap-log.md#fixture-work-tree-only-2026-11-15')
+        said = statement(text='SYNTHETIC FIXTURE, not an Owner decision: accept O1 of qual-05-api-rate-limiting as '
+                              'written.', reference=LOG_REF + 'fixture-work-tree-only-2026-11-15')
         with self.unchanged(self.root / 'edited'):
             self.refused('STATEMENT_ANCHOR_ABSENT', self.record, said=said, harness=self.root / 'edited')
 
     def test_an_entry_without_a_dated_title_is_refused(self):
         said = statement(text='SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.',
-                         reference='harness:evidence/bootstrap-log.md#fixture-undated')
+                         reference=LOG_REF + 'fixture-undated')
         self.refused('STATEMENT_ENTRY_UNDATED', self.record, said=said)
+
+    def test_an_entry_that_is_not_the_owners_is_refused(self):
+        # R1, probe P1: the engineering manager's verdict quoting the engineer, and an entry whose title begins
+        # "Owner's", not "Owner ".
+        text = 'I accept O1 of qual-05-api-rate-limiting as proposed.'
+        for anchor in ('fixture-em-verdict-2026-11-15', 'fixture-owners-answers-2026-11-15'):
+            with self.subTest(anchor=anchor):
+                self.refused('STATEMENT_ENTRY_NOT_OWNER', self.record, said=statement(text=text,
+                                                                                       reference=LOG_REF + anchor))
 
     def test_text_outside_the_verbatim_block_is_refused(self):
         cases = {
             # the product manager's reading, inside the entry but outside its "> " lines
             'reading': 'The E-05.1 design choices and the routine decisions are the product manager\'s',
             'title': 'Owner standing authorization: the D1 manifest\'s reconciliation inside OA-22 (j)',
-            'another entry': 'SYNTHETIC FIXTURE, not an Owner decision: accept O1 again, as amended.',
+            'another entry': REACCEPT_TEXT,
             'a word changed': TEXT.replace('intentionally small', 'deliberately small'),
             'case changed': TEXT.lower(),
             'a part of a word': TEXT[1:],
@@ -379,13 +460,41 @@ class RecordedStatementRefusals(Fixture):
             with self.subTest(case=name):
                 self.refused('STATEMENT_OUTSIDE_VERBATIM', self.record, said=statement(text=text))
         said = statement(text='SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.',
-                         reference='harness:evidence/bootstrap-log.md#fixture-no-verbatim-2026-11-15')
+                         reference=LOG_REF + 'fixture-no-verbatim-2026-11-15')
         self.refused('STATEMENT_OUTSIDE_VERBATIM', self.record, said=said)
+
+    def test_only_the_owners_first_block_outside_code_fences_is_his(self):
+        # R1, probes P2 (a "> " line inside a code fence), P3 (a question quoted after the Owner's block) and P3b
+        # (a run straddling the two).
+        cases = {
+            'fixture-owner-fence-2026-11-15': ['accept O1 of qual-05-api-rate-limiting from the transcript'],
+            'fixture-owner-nested-2026-11-15': ['Shall I accept O1 of qual-05-api-rate-limiting now?',
+                                                'qual-05-api-rate-limiting small. Shall I accept O1'],
+        }
+        for anchor, texts in cases.items():
+            for text in texts:
+                with self.subTest(anchor=anchor, text=text):
+                    self.refused('STATEMENT_OUTSIDE_VERBATIM', self.record,
+                                 said=statement(text=text, reference=LOG_REF + anchor))
 
     def test_a_log_not_committed_at_the_revision_is_refused(self):
         for name in ('untracked', 'uncommitted'):
             with self.subTest(harness=name), self.unchanged(self.root / name):
                 self.refused('STATEMENT_LOG_NOT_COMMITTED', self.record, harness=self.root / name)
+
+    def test_a_harness_not_on_main_is_refused(self):
+        # R4, probes P5 (HEAD on a side branch holding a fabricated Owner entry) and P8b (HEAD detached).
+        said = statement(text='I accept O1 of qual-05-api-rate-limiting.',
+                         reference=LOG_REF + 'fixture-fabricated-2026-11-15')
+        for name, case in (('side', said), ('detached', statement())):
+            with self.subTest(harness=name), self.unchanged(self.root / name):
+                error = self.refused('HARNESS_NOT_ON_MAIN', self.record, said=case, harness=self.root / name)
+                self.assertIn('refs/heads/main', error.detail)
+
+    def test_a_reference_to_a_missing_object_is_unavailable(self):
+        # N1, probe P8: main names an object the repository does not hold.
+        with self.unchanged(self.root / 'dangling'):
+            self.refused('HARNESS_UNAVAILABLE', self.record, harness=self.root / 'dangling')
 
     def test_a_statement_not_attributed_to_the_owner_is_refused(self):
         absent = {k: v for k, v in statement().items() if k != 'attributedTo'}
@@ -396,14 +505,42 @@ class RecordedStatementRefusals(Fixture):
             with self.subTest(statement=case):
                 self.refused('ACCEPTANCE_MODEL_AUTHORED', self.record, said=case)
 
+    def test_a_statement_not_about_the_change_is_refused(self):
+        # R2, probes P4 ("done"), P4b ("Accept") and P4c ("Do not"): shorter than 12 characters, or naming
+        # neither the change nor the project repository.
+        terse = LOG_REF + 'fixture-owner-terse-2026-11-15'
+        for text, reference in (('done.', terse), ('Accept', REF), ('Do not', REF),
+                                ('Resolve the two outstanding planning items.', REF),
+                                ('Resolve the two outstanding planning items.', terse)):
+            with self.subTest(text=text):
+                error = self.refused('STATEMENT_NOT_ABOUT_CHANGE', self.record,
+                                     said=statement(text=text, reference=reference))
+                self.assertTrue('fewer than 12' in error.detail or 'names neither' in error.detail, error.detail)
+        # E-05.1's statement names aieh-d1-demo: refused for a project whose origin names another repository.
+        other = self.root / 'other'
+        with self.unchanged(other), self.assertRaises(A.RecorderError) as caught:
+            self.record(project=other)
+        self.assertEqual(caught.exception.code, 'STATEMENT_NOT_ABOUT_CHANGE')
+        self.assertIn("'another-project'", caught.exception.detail)
+
     def test_the_request_itself_is_refused(self):
         said = statement(text=REQUEST_TEXT, reference=REQUEST)
         error = self.refused('ACCEPTANCE_IS_REQUEST', self.record, D1_CHANGE, said=said)
         self.assertIn('Original Quote', error.detail)
 
+    def test_the_requests_own_text_is_refused(self):
+        # R3, probe P6: Q1's text of qual-05 (whose source is a conversation), copied into an Owner entry; the
+        # whole of its first paragraph, and a part of it.
+        laundered = LOG_REF + 'fixture-owner-request-qual-05-2026-11-15'
+        for text in (QUAL05_REQUEST, 'Use a fixed window of 100 requests per minute per IP.'):
+            with self.subTest(text=text):
+                error = self.refused('ACCEPTANCE_IS_REQUEST', self.record,
+                                     said=statement(text=text, reference=laundered))
+                self.assertIn('Q1', error.detail)
+
     def test_other_references_and_inputs_are_refused(self):
         for reference in ('conversation:fixture-owner/message-2', 'decision:0018', 'harness:evidence/other.md#x',
-                          'harness:evidence/bootstrap-log.md', 'harness:evidence/bootstrap-log.md#Bad_Anchor',
+                          'harness:evidence/bootstrap-log.md', LOG_REF + 'Bad_Anchor',
                           f'harness:./evidence/bootstrap-log.md#{ANCHOR}'):
             with self.subTest(reference=reference):
                 self.refused('STATEMENT_REFERENCE_NOT_LOG', self.record, said=statement(reference=reference))
@@ -423,16 +560,32 @@ class RecordedStatementRefusals(Fixture):
         outside.mkdir(exist_ok=True)
         self.refused('HARNESS_UNAVAILABLE', self.record, harness=outside)
 
+    def test_the_real_logs_entries(self):
+        # Read only: this checkout's own log at its HEAD (probes P4, P4b, P4c on the real entries). The Owner's act
+        # OA-31 (e) is titled "the Owner's act ...": not an Owner entry by R1.
+        _, text = committed_log(of.REPO)
+        act = G.decisions_entry(text, 'owner-act-oa-31-e-2026-11-15')
+        self.assertIsNotNone(act)
+        self.assertFalse(act.title.startswith(A.OWNER_TITLE))
+        real = G.decisions_entry(text, ANCHOR)
+        self.assertTrue(real.title.startswith(A.OWNER_TITLE))
+        for short in ('done', 'Accept', 'Do not'):
+            with self.subTest(text=short), self.assertRaises(A.RecorderError) as caught:
+                A._about(A.statement_words(short), PROPOSED, 'aieh-d1-demo')
+            self.assertEqual(caught.exception.code, 'STATEMENT_NOT_ABOUT_CHANGE')
+
 
 class TheTextMatchingRule(unittest.TestCase):
-    """``verbatim_admits``: quote markers and line breaks normalized, words compared exactly and in order."""
+    """``verbatim_admits``: the Owner's first block, quote markers and line breaks normalized, words compared
+    exactly and in order; the names and URLs the record keeps."""
 
     @classmethod
     def setUpClass(cls):
         fx.require_repository_access()  # fail, never skip, without Dulwich
 
-    def entry(self):
-        return G.decisions_entry(LOG_FIXTURE.read_text(encoding='utf-8'), ANCHOR)
+    @staticmethod
+    def entry(anchor=ANCHOR):
+        return G.decisions_entry(LOG_FIXTURE.read_text(encoding='utf-8'), anchor)
 
     def test_quote_markers_and_line_breaks_are_normalized(self):
         entry = self.entry()
@@ -454,13 +607,47 @@ class TheTextMatchingRule(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(A.verbatim_admits(entry, text))
 
+    def test_the_owners_block_is_the_first_run_outside_code_fences(self):
+        self.assertEqual(A.owner_block(self.entry()), self.entry().verbatim)  # one run: the whole block
+        fence = self.entry('fixture-owner-fence-2026-11-15')
+        self.assertEqual(A.owner_block(fence),
+                         'SYNTHETIC FIXTURE: accept O1 of qual-05-api-rate-limiting after the transcript.')
+        self.assertTrue(A.verbatim_admits(fence, 'accept O1 of qual-05-api-rate-limiting after the transcript.'))
+        self.assertEqual(A.owner_block(self.entry('fixture-owner-nested-2026-11-15')),
+                         'Keep qual-05-api-rate-limiting small.')
+        self.assertEqual(A.owner_block(self.entry('fixture-no-verbatim-2026-11-15')), '')
+
     def test_the_copy_is_the_real_entry_and_admits_e_05_1s_statement(self):
-        # Read-only: this checkout's own log at its HEAD, through the recorder's reader.
-        real = A.read_log_entry(of.REPO, ANCHOR)
-        self.assertEqual(real.entry.date, '2026-11-15')
-        self.assertEqual(real.entry.text, self.entry().text)
-        self.assertTrue(A.verbatim_admits(real.entry, TEXT))
-        self.assertFalse(A.verbatim_admits(real.entry, 'The product manager\'s reading (not the Owner\'s words)'))
+        # Read only: this checkout's own log at its HEAD, read whatever branch it is on.
+        _, text = committed_log(of.REPO)
+        real = G.decisions_entry(text, ANCHOR)
+        self.assertEqual(real.date, '2026-11-15')
+        self.assertEqual(real.text, self.entry().text)
+        self.assertTrue(A.verbatim_admits(real, TEXT))
+        self.assertFalse(A.verbatim_admits(real, 'The product manager\'s reading (not the Owner\'s words)'))
+
+    def test_userinfo_is_left_out_of_the_origin(self):
+        for url, expected in (
+                ('https://fixture-user@example.invalid/h/x.git', 'https://example.invalid/h/x.git'),
+                ('https://u:p@example.invalid:8443/h/x.git', 'https://example.invalid:8443/h/x.git'),
+                ('ssh://git@example.invalid/h/x.git', 'ssh://example.invalid/h/x.git'),
+                ('git@example.invalid:h/x.git', 'example.invalid:h/x.git'),
+                ('https://example.invalid/h/x.git', 'https://example.invalid/h/x.git'),
+                ('/srv/git/x.git', '/srv/git/x.git')):
+            with self.subTest(url=url):
+                self.assertEqual(A.without_userinfo(url), expected)
+
+    def test_the_repository_name(self):
+        for url, root, expected in (
+                ('https://example.invalid/demo/aieh-d1-demo.git', '/w/p', 'aieh-d1-demo'),
+                ('https://example.invalid/demo/aieh-d1-demo', '/w/p', 'aieh-d1-demo'),
+                ('https://example.invalid/demo/aieh-d1-demo/', '/w/p', 'aieh-d1-demo'),
+                ('git@example.invalid:demo/aieh-d1-demo.git', '/w/p', 'aieh-d1-demo'),
+                (r'D:\repos\aieh-d1-demo', '/w/p', 'aieh-d1-demo'),
+                (None, '/w/aieh-d1-demo', 'aieh-d1-demo'),
+                ('https://example.invalid/.git', '/w/aieh-d1-demo', 'aieh-d1-demo')):
+            with self.subTest(url=url):
+                self.assertEqual(A.repository_name(url, root), expected)
 
 
 if __name__ == '__main__':

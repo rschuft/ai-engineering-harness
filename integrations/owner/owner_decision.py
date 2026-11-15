@@ -35,9 +35,11 @@ may rest on the Owner's statement already recorded verbatim in the harness log's
 ``shown`` (``RECORDED_FIELDS``), and never ``shown``: no challenge was shown. ``recorded`` is, in
 this order (``RECORDED_BLOCK_FIELDS``): ``restsOn`` (``recorded-statement``), ``entry`` (the entry,
 ``evidence/bootstrap-log.md#<anchor>``), ``date`` (the entry's date, ``YYYY-MM-DD``), ``revision``
-(the full commit of the harness repository at which the log was read), ``digest`` (``sha256:`` of
-the log's blob there) and ``challengeShown`` (``false``). The statement's ``reference`` is then
-``harness:<entry>``. Only the kinds in ``RECORDED_KINDS`` may rest on a recorded statement.
+(the full commit of the harness repository at which the log was read, on its ``main``), ``origin``
+(the harness's ``origin`` URL without userinfo; absent when it has none), ``digest`` (``sha256:`` of the
+log's blob there), ``about`` (``{name, as}``: the name the statement names, ``as`` ``change`` (then the
+subject's change) or ``repository``) and ``challengeShown`` (``false``). The statement's ``reference``
+is then ``harness:<entry>``. Only the kinds in ``RECORDED_KINDS`` may rest on a recorded statement.
 
 Attribution and reference values use the intent-record/v1 grammar
 (``catalog/skills/intent-normalization/references/intent-record.md``). The record is clerical: it
@@ -58,7 +60,11 @@ STATEMENT_FIELDS = ('text', 'attributedTo', 'channel', 'reference')
 # A decision resting on the Owner's statement recorded in the harness log (plan leaf E-05.12): `recorded`
 # in place of `shown`.
 RECORDED_FIELDS = ('format', 'decisionId', 'kind', 'subject', 'recorded', 'statement', 'recordedBy', 'recordedAt')
-RECORDED_BLOCK_FIELDS = ('restsOn', 'entry', 'date', 'revision', 'digest', 'challengeShown')
+RECORDED_BLOCK_FIELDS = ('restsOn', 'entry', 'date', 'revision', 'origin', 'digest', 'about', 'challengeShown')
+RECORDED_OPTIONAL = ('origin',)  # absent when the harness has no origin remote
+ABOUT_FIELDS = ('name', 'as')
+ABOUT_KINDS = ('change', 'repository')
+USERINFO = re.compile(r'^[a-z][a-z0-9+.-]*://[^/]*@', re.IGNORECASE)
 RECORDED_KINDS = ('accept-objective',)
 RESTS_ON = 'recorded-statement'
 LOG_ENTRY = re.compile(r'^evidence/bootstrap-log\.md#[a-z0-9][a-z0-9-]{0,127}$')
@@ -193,7 +199,7 @@ def check_record(record):
         if kind in KINDS and kind not in RECORDED_KINDS:
             problems.append(f'only {", ".join(RECORDED_KINDS)} may rest on a recorded statement (recorded in place '
                             'of shown)')
-        problems.extend(recorded_problems(record.get('recorded'), record.get('statement')))
+        problems.extend(recorded_problems(record.get('recorded'), record.get('statement'), record.get('subject')))
     elif not isinstance(shown, dict) or list(shown) != list(SHOWN_FIELDS):
         problems.append(f'shown must have exactly {", ".join(SHOWN_FIELDS)}')
     else:
@@ -217,11 +223,14 @@ def check_record(record):
     return problems
 
 
-def recorded_problems(recorded, statement):
+def recorded_problems(recorded, statement, subject=None):
     """The problems of RECORDED, the ``recorded`` block of a decision resting on the Owner's statement recorded
     in the harness log, with the record's STATEMENT (whose reference must name the same entry)."""
-    if not isinstance(recorded, dict) or list(recorded) != list(RECORDED_BLOCK_FIELDS):
-        return [f'recorded must have exactly {", ".join(RECORDED_BLOCK_FIELDS)}']
+    fields = [name for name in RECORDED_BLOCK_FIELDS
+              if name not in RECORDED_OPTIONAL or (isinstance(recorded, dict) and name in recorded)]
+    if not isinstance(recorded, dict) or list(recorded) != fields:
+        return [f'recorded must have exactly {", ".join(RECORDED_BLOCK_FIELDS)} (origin only when the harness has '
+                'one), in that order']
     problems = []
     if recorded['restsOn'] != RESTS_ON:
         problems.append(f'recorded.restsOn must be {RESTS_ON}')
@@ -236,6 +245,17 @@ def recorded_problems(recorded, statement):
         problems.append('recorded.revision must be a full commit id of the harness repository')
     if not isinstance(recorded['digest'], str) or not DIGEST.match(recorded['digest']):
         problems.append('recorded.digest must be sha256:<64 hex digits>, the log\'s blob at that revision')
+    if 'origin' in recorded:
+        origin = recorded['origin']
+        if not isinstance(origin, str) or not origin.strip() or origin.split() != [origin] \
+                or USERINFO.match(origin):
+            problems.append('recorded.origin must be the harness\'s origin URL, one word, without userinfo')
+    about = recorded['about']
+    if not isinstance(about, dict) or list(about) != list(ABOUT_FIELDS) or about['as'] not in ABOUT_KINDS \
+            or not isinstance(about['name'], str) or not about['name'].strip():
+        problems.append('recorded.about must be {name, as}, as change or repository')
+    elif about['as'] == 'change' and isinstance(subject, dict) and about['name'] != subject.get('change'):
+        problems.append('recorded.about names a change that is not the subject\'s')
     if recorded['challengeShown'] is not False:
         problems.append('recorded.challengeShown must be false: no challenge was shown')
     return problems

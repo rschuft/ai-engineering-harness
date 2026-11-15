@@ -47,7 +47,7 @@ under the managed data root and write the live manifest there.
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
-| `tests/test_recorded_statement.py` | `record_from_log` on throwaway project repositories and a throwaway harness log: the resolver round trip, the record naming the entry and the revision with no challenge shown, the id minted once (and kept by `--amend`), P-04.1's path beside it unchanged, a rehearsal of E-05.1 on a copy of the D1 demo design, every refusal changing neither repository, the text-matching rule, the command line; and, read only, that the fixture's copy is the real entry of this checkout's log at `HEAD` and admits E-05.1's statement (integration) |
+| `tests/test_recorded_statement.py` | `record_from_log` on throwaway project repositories and a throwaway harness log: the resolver round trip, the record naming the entry and the revision with no challenge shown, the id minted once (and kept by `--amend`), P-04.1's path beside it unchanged, a rehearsal of E-05.1 on a copy of the D1 demo design, every refusal changing neither repository (with the review rulings of 2026-11-15: an Owner entry, his first block outside code fences, a statement about the change, the request by its text, the harness on main with its origin; the reviewer probes as tests), the text-matching rule, the command line; and, read only, that the fixture's copy is the real entry of this checkout's log at `HEAD` and admits E-05.1's statement (integration) |
 | `tests/fixtures/recorded-statement-log.md` | The throwaway harness log: a byte-for-byte copy of the real entry `owner-direction-d1-planning-2026-11-15` among synthetic entries (undated, without a verbatim block, outside the Decisions section, the D1 demo change's request) |
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
@@ -93,8 +93,10 @@ shown (`RECORDED_FIELDS`). Only `accept-objective` may (`RECORDED_KINDS`); there
 | `restsOn` | `recorded-statement` |
 | `entry` | the log entry the decision rests on, `evidence/bootstrap-log.md#<anchor>`; the statement's `reference` is `harness:<entry>` |
 | `date` | the entry's date, `YYYY-MM-DD`, from its title |
-| `revision` | the full commit of the harness repository at which the log was read |
+| `revision` | the full commit of the harness repository at which the log was read, its `HEAD` on `refs/heads/main` |
+| `origin` | the harness's `origin` URL with any userinfo left out (`https://user@host/...` is `https://host/...`, `user@host:path` is `host:path`); absent when the harness has no `origin` |
 | `digest` | `sha256:` of the log's blob at that commit |
+| `about` | `{name, as}`: the name the statement names, `as` `change` (the subject's change) or `repository` (the project repository's name) |
 | `challengeShown` | `false` |
 
 The subject is the same; its `revision` and `proposal` are the project's `HEAD` and the proposal's
@@ -177,21 +179,42 @@ first as any statement is (it must be the Owner's, above). Then:
    is refused here; the challenge path (`record`) keeps its own rules and refuses this one.
 2. The log is read at the `HEAD` commit of the harness repository (`--harness`, by default this
    checkout) through the repository-access module, with the repository's own configuration only and
-   the upward search stopped at it: the committed blob, never the work tree. A log absent there, or no
-   commit at `HEAD`, is refused; an entry present only in the work tree is absent.
+   the upward search stopped at it: the committed blob, never the work tree. `HEAD` must be the
+   symbolic reference `refs/heads/main`: a detached `HEAD` or another branch is refused, and a `main`
+   naming an object the repository does not hold is unavailable. A log absent there, or no commit at
+   `HEAD`, is refused; an entry present only in the work tree is absent. The record keeps the harness's
+   `origin` URL without userinfo. **Whether that commit is published is not verified**: the recorder
+   reads the local repository and does not fetch, so a commit on a local `main` that was never pushed
+   is admitted; the revision and the origin in the record are what a reader checks it against.
 3. The anchor names an entry of the log's `## Decisions` section, as `delegated_decision.decisions_entry`
    reads one (P-04.3): a top-level list item `- <a id="<anchor>"></a>**<title>**` running to the next
    top-level list item or heading. An anchored entry of another section is absent.
-4. The entry's title begins with its date, `YYYY-MM-DD: `.
-5. **The text-matching rule** (`verbatim_admits`): the entry's verbatim Owner block is its `>` lines
-   (after any indentation, the marker and one space after it removed). The statement's text is read
-   the same way, each of its lines without a leading `>` marker, so it may be given with or without the
-   markers. Both are split into words on any whitespace (spaces, tabs, line breaks, blank lines). The
-   statement is admitted when its words are a contiguous run of the block's words, compared exactly:
-   case, punctuation and order kept, no word cut. A multi-line statement spanning several quote lines,
-   blank `>` lines included, is admitted; text from the entry's title or from a reading outside the
-   block (such as the product manager's) is not.
-6. The reference is not the request itself: no Original Quote of the change has it as its `source`.
+4. The entry's title begins with its date, `YYYY-MM-DD: `, and then with `Owner ` (an Owner entry:
+   "Owner direction", "Owner decision", "Owner standing authorization", "Owner authorization", "Owner
+   acceptance", "Owner clarification"). An entry titled otherwise is not the Owner's, even when it
+   quotes him or anyone else ("the Owner's act ...", "Owner's answers ...", a verdict quoting a report).
+5. **The text-matching rule** (`verbatim_admits`): the Owner's block (`owner_block`) is the entry's
+   **first** contiguous run of `>` lines after its title, outside any code fence (a line opening with
+   three backticks or tildes opens or closes one): a blank `>` line inside the run belongs to it, any
+   other line, a blank one included, ends it, and a later quote in the entry (a reading, a question
+   quoted to the Owner) is not part of it. Each line is read without its marker (after any indentation,
+   the marker and one space after it removed). The statement's text is read the same way, each of its
+   lines without a leading `>` marker, so it may be given with or without the markers. Both are split
+   into words on any whitespace (spaces, tabs, line breaks, blank lines). The statement is admitted
+   when its words are a contiguous run of the block's words, wholly inside that one block, compared
+   exactly: case, punctuation and order kept, no word cut. A multi-line statement spanning several
+   quote lines, blank `>` lines included, is admitted; text from the entry's title, from a code fence,
+   from a later quote or from a reading outside the block (such as the product manager's) is not, nor
+   is a run straddling the block's end.
+6. The statement is not the request itself: no Original Quote of the change has the reference as its
+   `source`, and the statement's words are not equal to, or contained in, any Original Quote's text
+   (split into words the same way).
+7. The statement is about the change: its words, joined by single spaces, are at least 12 characters
+   (`delegated_decision.QUOTE_MIN`) and contain the change's name or the project repository's name. The
+   repository's name is the basename of the project's `origin` URL without `.git`, or, without an
+   `origin`, the basename of its work tree. The record's `about` keeps the name that matched (the
+   change's first). A short repository name (a work tree named `p`) matches almost any text: name the
+   project by its `origin`.
 
 That the Owner wrote the block is not checked (decision 0018 point 7: a log quote is checked for
 presence, not authorship); the statement's `attributedTo` must still be `owner`.
@@ -231,12 +254,15 @@ exit 2), and changes nothing: the branch, the work tree and the index are as the
 | Code | Refused when |
 |---|---|
 | `STATEMENT_REFERENCE_NOT_LOG` | the reference is not `harness:evidence/bootstrap-log.md#<anchor>` (rule 1) |
-| `HARNESS_UNAVAILABLE` | the harness repository cannot be read, or its log is not UTF-8 |
+| `HARNESS_UNAVAILABLE` | the harness repository cannot be read, its `main` names an object it does not hold, or its log is not UTF-8 |
+| `HARNESS_NOT_ON_MAIN` | the harness's `HEAD` is not the symbolic reference `refs/heads/main`: detached, or another branch (rule 2) |
 | `STATEMENT_LOG_NOT_COMMITTED` | the harness has no commit at `HEAD`, or the log is not committed there (rule 2) |
 | `STATEMENT_ANCHOR_ABSENT` | the committed log has no Decisions entry with the anchor (rules 2 and 3) |
 | `STATEMENT_ENTRY_UNDATED` | the entry's title has no `YYYY-MM-DD: ` date (rule 4) |
-| `STATEMENT_OUTSIDE_VERBATIM` | the text is not inside the entry's verbatim block, or the entry has none (rule 5) |
-| `ACCEPTANCE_IS_REQUEST` | the reference is an Original Quote's `source`: the request itself (rule 6) |
+| `STATEMENT_ENTRY_NOT_OWNER` | the entry's dated title does not begin `Owner ` (rule 4) |
+| `STATEMENT_OUTSIDE_VERBATIM` | the text is not wholly inside the entry's Owner block, or the entry has none (rule 5) |
+| `ACCEPTANCE_IS_REQUEST` | the reference is an Original Quote's `source`, or the text is (part of) an Original Quote's text: the request itself (rule 6) |
+| `STATEMENT_NOT_ABOUT_CHANGE` | the statement is shorter than 12 characters, or names neither the change nor the project repository (rule 7) |
 
 ## The Owner authorization recorder (plan leaf P-04.2)
 

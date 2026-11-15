@@ -123,7 +123,8 @@ def recorded_record(recorded=None, **changes):
     of ``shown``. Synthetic."""
     base = good_record()
     block = {'restsOn': 'recorded-statement', 'entry': ENTRY, 'date': '2026-11-15', 'revision': 'a' * 40,
-             'digest': 'sha256:' + 'b' * 64, 'challengeShown': False}
+             'origin': 'https://example.invalid/harness/ai-engineering-harness.git', 'digest': 'sha256:' + 'b' * 64,
+             'about': {'name': 'aieh-d1-demo', 'as': 'repository'}, 'challengeShown': False}
     record = {name: base[name] for name in ('format', 'decisionId', 'kind', 'subject')}
     record['recorded'] = {**block, **(recorded or {})}
     record['statement'] = {**base['statement'], 'reference': f'harness:{ENTRY}'}
@@ -141,8 +142,13 @@ class RecordedStatement(unittest.TestCase):
         self.assertEqual(list(record), list(D.RECORDED_FIELDS))
         self.assertEqual(list(D.RECORDED_FIELDS), ['format', 'decisionId', 'kind', 'subject', 'recorded', 'statement',
                                                    'recordedBy', 'recordedAt'])
-        self.assertEqual(list(D.RECORDED_BLOCK_FIELDS), ['restsOn', 'entry', 'date', 'revision', 'digest',
-                                                         'challengeShown'])
+        self.assertEqual(list(D.RECORDED_BLOCK_FIELDS), ['restsOn', 'entry', 'date', 'revision', 'origin', 'digest',
+                                                         'about', 'challengeShown'])
+        without = recorded_record()
+        del without['recorded']['origin']  # a harness without an origin remote
+        self.assertEqual(D.check_record(without), [])
+        subject = recorded_record()['subject']
+        self.assertEqual(D.check_record(recorded_record({'about': {'name': subject['change'], 'as': 'change'}})), [])
         self.assertEqual(D.RECORDED_KINDS, ('accept-objective',))
 
     def test_problems_are_reported(self):
@@ -163,6 +169,11 @@ class RecordedStatement(unittest.TestCase):
             'revision': recorded_record({'revision': 'HEAD'}),
             'digest': recorded_record({'digest': 'b' * 64}),
             'block fields': recorded_record(recorded={'extra': 1}),
+            'origin with userinfo': recorded_record({'origin': 'https://u:p@example.invalid/h.git'}),
+            'origin not one word': recorded_record({'origin': 'a b'}),
+            'about absent': recorded_record({'about': None}),
+            'about kind': recorded_record({'about': {'name': 'aieh-d1-demo', 'as': 'remote'}}),
+            'about another change': recorded_record({'about': {'name': 'another-change', 'as': 'change'}}),
             'another entry referenced': recorded_record(statement={**recorded_record()['statement'],
                                                                    'reference': 'harness:evidence/bootstrap-log.md#x'}),
             'not a block': recorded_record(),

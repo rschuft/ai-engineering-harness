@@ -34,16 +34,20 @@ the same item (decision 0008, point 2): an item that already has one is refused
 ``record_from_log`` records the Owner's acceptance of an objective from his statement already recorded
 verbatim, dated and anchored in the Decisions of the harness log (``evidence/bootstrap-log.md``),
 without a challenge. The statement's reference is ``harness:evidence/bootstrap-log.md#<anchor>``. The
-recorder reads the log at the harness repository's ``HEAD`` commit through the repository-access module
-(the committed blob, never the work tree; decision 0014) and admits the statement only when the anchor
-names a Decisions entry (``delegated_decision.decisions_entry``, the P-04.3 pattern) whose title is
-dated and whose verbatim Owner block (its ``>`` lines) holds the statement's text, by this rule
-(``verbatim_admits``): the statement's words, each of its lines read without a leading ``>`` quote
-marker and the text split on any whitespace (line breaks included), are a contiguous run of the
-block's words, compared exactly (case and punctuation kept). The commit is the one ``record`` makes;
-the decision record has ``recorded`` (the entry, its date, the harness revision, the log's digest and
-``challengeShown: false``) in place of ``shown`` (``owner_decision.py``) and its commit message says
-that no challenge was shown.
+recorder reads the log at the harness repository's ``HEAD`` commit, which must be on ``refs/heads/main``,
+through the repository-access module (the committed blob, never the work tree; decision 0014) and admits
+the statement only when the anchor names a Decisions entry (``delegated_decision.decisions_entry``, the
+P-04.3 pattern) whose title is dated and begins, after its date, with ``Owner `` and whose Owner block
+(``owner_block``: the entry's first contiguous run of ``>`` lines, outside code fences) holds the
+statement's text wholly, by this rule (``verbatim_admits``): the statement's words, each of its lines
+read without a leading ``>`` quote marker and the text split on any whitespace (line breaks included),
+are a contiguous run of the block's words, compared exactly (case and punctuation kept). The statement
+must also be at least 12 characters and name the change or the project repository (its ``origin``
+basename, else its directory's), and must not be the request itself, by reference or by text. The
+commit is the one ``record`` makes; the decision record has ``recorded`` (the entry, its date, the
+harness revision and ``origin``, the log's digest, the name the statement names and ``challengeShown:
+false``) in place of ``shown`` (``owner_decision.py``) and its commit message says that no challenge was
+shown.
 
 Usage (from the repository root, under the tools interpreter: Dulwich is required):
 
@@ -62,8 +66,10 @@ import argparse
 import datetime
 import hashlib
 import json
+import re
 import secrets
 import sys
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import NamedTuple
@@ -98,6 +104,10 @@ CONFIG_POLICY = 'repository'  # the project's own configuration only (decision 0
 DEFAULT_EXPIRY_MINUTES = 60
 MAX_EXPIRY_MINUTES = 7 * 24 * 60
 LOG_REFERENCE = f'harness:{G.LOG}#'  # + <anchor>: the statement's reference on the recorded-statement path
+OWNER_TITLE = 'Owner '  # an Owner entry's dated title begins so, after '<date>: '
+HARNESS_BRANCH = 'refs/heads/main'  # the harness's HEAD must be this symbolic reference
+OPENS_FENCE = re.compile(r'^\s*(?:```|~~~)')
+SCP_LIKE = re.compile(r'^[^/@:]+@(?P<rest>[^/:]+:.*)$')
 
 REMEDIES = {
     'PROJECT_UNAVAILABLE': 'name the work tree of the project repository, with a commit on a branch, and run '
@@ -148,7 +158,14 @@ REMEDIES = {
     'STATEMENT_OUTSIDE_VERBATIM': 'give the statement\'s text as the entry\'s verbatim Owner block (its "> " lines) '
                                   'records it: the Owner\'s words, not a reading of them',
     'ACCEPTANCE_IS_REQUEST': 'the acceptance must be a separate statement: reference the entry where the Owner '
-                             'accepted, not the source of an Original Quote (intent-record/v1 invariant 4)',
+                             'accepted, not the source of an Original Quote, and not its text '
+                             '(intent-record/v1 invariant 4)',
+    'STATEMENT_ENTRY_NOT_OWNER': 'reference an entry that records the Owner\'s own words: its dated title begins '
+                                 '"YYYY-MM-DD: Owner " (an Owner direction, decision or authorization)',
+    'STATEMENT_NOT_ABOUT_CHANGE': 'record a statement of at least 12 characters that names the change or the '
+                                  'project repository it accepts',
+    'HARNESS_NOT_ON_MAIN': 'check out main in the harness repository (HEAD the symbolic reference '
+                           'refs/heads/main), then record again',
 }
 
 
@@ -475,11 +492,13 @@ def _accept(repo, head, state, statement, provenance, *, revision, proposal_dige
 # ---------------------------------------------------------------------------- the recorded-statement path
 
 class RecordedEntry(NamedTuple):
-    """The Decisions entry a recorded statement rests on, as read at the harness repository's ``HEAD``: the
-    entry (``delegated_decision.LogEntry``), the harness commit and the log blob's digest."""
+    """The Decisions entry a recorded statement rests on, as read at the harness repository's ``HEAD`` on
+    ``refs/heads/main``: the entry (``delegated_decision.LogEntry``), the harness commit, the log blob's digest
+    and the harness's ``origin`` URL without its userinfo (None when it has no ``origin``)."""
     entry: object
     revision: str
     digest: str
+    origin: object = None
 
 
 def statement_words(text):
@@ -490,12 +509,39 @@ def statement_words(text):
     return [word for line in lines for word in line.split()]
 
 
-def verbatim_admits(entry, text):
-    """Whether TEXT lies inside ENTRY's verbatim Owner block: its words (``statement_words``) are a contiguous
-    run of the block's words (the ``>`` lines, markers stripped, split on any whitespace), compared exactly."""
-    words, block = statement_words(text), entry.verbatim.split()
+def _within(words, block):
+    """Whether WORDS is a non-empty contiguous run of BLOCK (both lists of words)."""
     count = len(words)
     return count > 0 and any(block[start:start + count] == words for start in range(len(block) - count + 1))
+
+
+def owner_block(entry):
+    """The Owner's verbatim block of ENTRY: its FIRST contiguous run of ``>`` lines after the title line (a blank
+    ``>`` line inside it counts; any other line, a blank one included, ends it), outside any code fence (a line
+    opening with three backticks or tildes opens or closes one), each line without its marker, joined by
+    newlines. Empty when the entry has no such run. A later quote in the entry (a reading, a question quoted
+    to the Owner) is never part of it."""
+    run, fenced = [], False
+    for line in entry.text.splitlines()[1:]:
+        match = G.VERBATIM_LINE.match(line)
+        if match is None and OPENS_FENCE.match(line):
+            if run:
+                break
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if match is not None:
+            run.append(match.group('text'))
+        elif run:
+            break
+    return '\n'.join(run)
+
+
+def verbatim_admits(entry, text):
+    """Whether TEXT lies wholly inside ENTRY's Owner block (``owner_block``): its words (``statement_words``) are
+    a contiguous run of the block's words (split on any whitespace), compared exactly."""
+    return _within(statement_words(text), owner_block(entry).split())
 
 
 def _log_anchor(reference):
@@ -507,21 +553,63 @@ def _log_anchor(reference):
     return anchor
 
 
+def origin_url(repo):
+    """REPO's ``remote.origin.url`` from its own configuration (the policy it was opened with), or None.
+    The repository-access module has no public reader of it; its configuration stack is read here."""
+    try:
+        value = repo._config().get((b'remote', b'origin'), b'url')
+    except KeyError:
+        return None
+    text = value.decode('utf-8', 'replace').strip() if isinstance(value, bytes) else str(value).strip()
+    return text or None
+
+
+def without_userinfo(url):
+    """URL without its userinfo: ``scheme://user:secret@host/path`` -> ``scheme://host/path``, and the scp-like
+    ``user@host:path`` -> ``host:path``; any other text is returned as it is."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme and parts.netloc:
+        return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rpartition('@')[2]))
+    scp = SCP_LIKE.match(url)
+    return scp.group('rest') if scp else url
+
+
+def repository_name(url, root):
+    """The project repository's name: the basename of its ``origin`` URL (URL), without ``.git``, or, when it
+    has none (or an empty basename), the basename of its work tree ROOT."""
+    if url:
+        name = re.split(r'[/\\:]', url.rstrip('/\\'))[-1]
+        name = name[:-len('.git')] if name.endswith('.git') else name
+        if name:
+            return name
+    return Path(root).name
+
+
 def read_log_entry(harness, anchor):
     """The Decisions entry ANCHOR of the log at the ``HEAD`` commit of the harness repository HARNESS (its work
     tree's root), read through the repository-access module with the repository's own configuration only (the
-    upward search stops at HARNESS): the committed blob, never the work tree. A ``RecordedEntry``, or the refusal:
-    ``HARNESS_UNAVAILABLE``, ``STATEMENT_LOG_NOT_COMMITTED``, ``STATEMENT_ANCHOR_ABSENT``,
-    ``STATEMENT_ENTRY_UNDATED``."""
+    upward search stops at HARNESS): the committed blob, never the work tree. ``HEAD`` must be the symbolic
+    reference ``refs/heads/main``. Whether that commit is published is not checked: the recorder does not fetch.
+    A ``RecordedEntry``, or the refusal: ``HARNESS_UNAVAILABLE``, ``HARNESS_NOT_ON_MAIN``,
+    ``STATEMENT_LOG_NOT_COMMITTED``, ``STATEMENT_ANCHOR_ABSENT``, ``STATEMENT_ENTRY_UNDATED``,
+    ``STATEMENT_ENTRY_NOT_OWNER``."""
     harness = Path(harness).absolute()
     failure = None
     try:
         with ra.open_repository(harness, config=CONFIG_POLICY, ceilings=[str(harness.parent)]) as repo:
-            commit = repo.head().commit
+            head = repo.head()
+            if head.ref != HARNESS_BRANCH:
+                raise RecorderError('HARNESS_NOT_ON_MAIN', f'the harness repository {harness} has HEAD on '
+                                    f'{head.ref or "a detached commit"}, not {HARNESS_BRANCH}')
+            commit = head.commit
             if commit is None:
                 raise RecorderError('STATEMENT_LOG_NOT_COMMITTED', f'the harness repository {harness} has no commit at '
                                     'HEAD')
+            if repo.object_kind(commit) != 'commit':
+                raise RecorderError('HARNESS_UNAVAILABLE', f'the harness repository {harness}: {HARNESS_BRANCH} names '
+                                    f'{commit}, which is not a commit there')
             blob = _read(repo, commit, G.LOG)
+            origin = origin_url(repo)
     except (ra.CannotRun, ra.RepositoryError) as exc:
         failure = exc
     if failure is not None:
@@ -539,7 +627,24 @@ def read_log_entry(harness, anchor):
     if entry.date is None:
         raise RecorderError('STATEMENT_ENTRY_UNDATED', f'the entry {anchor!r} of {G.LOG} at {commit} has no '
                             '"<date>: " title')
-    return RecordedEntry(entry, commit, 'sha256:' + hashlib.sha256(blob).hexdigest())
+    if not entry.title.startswith(OWNER_TITLE):
+        raise RecorderError('STATEMENT_ENTRY_NOT_OWNER', f'the entry {anchor!r} is {entry.title[:80]!r}: its title, '
+                            f'after its date, does not begin with {OWNER_TITLE!r}')
+    return RecordedEntry(entry, commit, 'sha256:' + hashlib.sha256(blob).hexdigest(),
+                         without_userinfo(origin) if origin else None)
+
+
+def _about(words, change, name):
+    """{name, as}: the name the statement names (the change's, else the project repository's), or the refusal."""
+    text = ' '.join(words)
+    if len(text) < G.QUOTE_MIN:
+        raise RecorderError('STATEMENT_NOT_ABOUT_CHANGE', f'the statement is {len(text)} characters, fewer than '
+                            f'{G.QUOTE_MIN}')
+    for value, kind in ((change, 'change'), (name, 'repository')):
+        if value and value in text:
+            return {'name': value, 'as': kind}
+    raise RecorderError('STATEMENT_NOT_ABOUT_CHANGE', f'the statement names neither the change {change!r} nor the '
+                        f'project repository {name!r}')
 
 
 def record_from_log(project, change, item, statement, *, recorded_by, identity, harness=REPO, amend=False, now=None,
@@ -560,10 +665,9 @@ def record_from_log(project, change, item, statement, *, recorded_by, identity, 
     now = now or utc_now()
     found = read_log_entry(harness, anchor)
     if not verbatim_admits(found.entry, statement['text']):
-        raise RecorderError('STATEMENT_OUTSIDE_VERBATIM', 'the statement\'s text is not inside the verbatim block '
-                            f'(the "> " lines) of the entry {anchor!r} at {found.revision}')
-    recorded = {'restsOn': D.RESTS_ON, 'entry': f'{G.LOG}#{anchor}', 'date': found.entry.date,
-                'revision': found.revision, 'digest': found.digest, 'challengeShown': False}
+        raise RecorderError('STATEMENT_OUTSIDE_VERBATIM', 'the statement\'s text is not wholly inside the Owner\'s '
+                            f'block (the first run of "> " lines) of the entry {anchor!r} at {found.revision}')
+    words = statement_words(statement['text'])
     with _open(project) as repo:
         head = repo.head()
         if head.commit is None:
@@ -573,6 +677,14 @@ def record_from_log(project, change, item, statement, *, recorded_by, identity, 
         if reference in _quote_sources(state):
             raise RecorderError('ACCEPTANCE_IS_REQUEST', f'{reference} is the source of an Original Quote of {change}: '
                                 'the request itself')
+        for quote in state.record.sections.get('Original Quote', []):
+            if quote.quote is not None and _within(words, quote.quote.decode('utf-8', 'replace').split()):
+                raise RecorderError('ACCEPTANCE_IS_REQUEST', f'the statement\'s text is the text of {quote.id}, an '
+                                    f'Original Quote of {change}: the request itself')
+        about = _about(words, change, repository_name(origin_url(repo), repo.root))
+        recorded = {'restsOn': D.RESTS_ON, 'entry': f'{G.LOG}#{anchor}', 'date': found.entry.date,
+                    'revision': found.revision, **({'origin': found.origin} if found.origin else {}),
+                    'digest': found.digest, 'about': about, 'challengeShown': False}
         return _accept(repo, head, state, statement, ('recorded', recorded), revision=head.commit,
                        proposal_digest=state.digest, recorded_by=recorded_by, identity=identity, amend=amend,
                        now=now, new_outcome=new_outcome, new_decision_id=new_decision_id)

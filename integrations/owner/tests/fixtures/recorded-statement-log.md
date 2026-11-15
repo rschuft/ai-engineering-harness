@@ -85,19 +85,44 @@ records no Owner decision.
   - "Reconcile the manifest with the current native execution profile and its digest" is read inside OA-22 (j)'s envelope as presented on 2026-11-14 ([presentation](OA-31-consolidated-presentation-2026-11-14.md), section 6; approved in the [Owner's decision](#owner-decision-oa-31-2026-11-14)): the product manager's delegated D1 manifest promotions (decision 0018 point 3.3) over the demo repository `aieh-d1-demo` and its change, the qualified native profile at its current digest and its binding, the D1 agent assignment with no Skills, and E-01.3.2's disposable work-attempt entries; its exclusions, stops and expiry (D1's acceptance) are (j)'s. It widens nothing. The entry carries the title decision 0020 point 7 requires of a delegated promotion's basis because the 2026-11-14 grant was recorded under another title (the [2026-11-13 finding](#p-04-3-verdict-2026-11-13), item 2).
   - The E-05.1 design choices and the routine decisions are the product manager's under decision 0018 point 3, listed for the D1 milestone report.
   - A promotion's basis links this one entry. That the promotion's other entries lie inside (j) rests on this reading's link to (j), as decision 0020 point 9.2 discloses; each promotion's record says so.
-- <a id="owner-decision-oa-31-2026-11-14"></a>**2026-11-14: SYNTHETIC FIXTURE: the request of the D1 demo change, verbatim.** Stands in for the entry the add-slugify change quotes as its request (its Q1's source). Verbatim:
+- <a id="owner-decision-oa-31-2026-11-14"></a>**2026-11-14: Owner decision (SYNTHETIC FIXTURE): the request of the D1 demo change, verbatim.** Stands in for the entry the add-slugify change quotes as its request (its Q1's source). Verbatim:
 
   > OA-25: use aieh-d1-demo, a small Python package
   > with unittest tests. The requested change is
   > to implement slugify(text) with appropriate tests.
-- <a id="fixture-owner-reaccept-2026-11-16"></a>**2026-11-16: SYNTHETIC FIXTURE: a later Owner direction, verbatim.** Verbatim:
+- <a id="fixture-owner-reaccept-2026-11-16"></a>**2026-11-16: Owner direction (SYNTHETIC FIXTURE): a later direction, verbatim.** Verbatim:
 
   > SYNTHETIC FIXTURE, not an Owner decision:
-  > accept O1 again, as amended.
+  > accept O1 of qual-05-api-rate-limiting again, as amended.
 - <a id="fixture-undated"></a>**SYNTHETIC FIXTURE: an Owner direction without a date, verbatim.** Verbatim:
 
   > SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.
-- <a id="fixture-no-verbatim-2026-11-15"></a>**2026-11-15: SYNTHETIC FIXTURE: an entry without a verbatim block.** SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.
+- <a id="fixture-no-verbatim-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC FIXTURE): an entry without a verbatim block.** SYNTHETIC FIXTURE, not an Owner decision: accept O1 as written.
+- <a id="fixture-em-verdict-2026-11-15"></a>**2026-11-15: E-05.12 PASS (SYNTHETIC FIXTURE, engineering manager).** The engineer's report, quoted:
+
+  > I accept O1 of qual-05-api-rate-limiting as proposed.
+- <a id="fixture-owners-answers-2026-11-15"></a>**2026-11-15: Owner's answers (SYNTHETIC FIXTURE) to the engineering manager's questions, verbatim.**
+
+  > I accept O1 of qual-05-api-rate-limiting as proposed.
+- <a id="fixture-owner-fence-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC FIXTURE): a transcript before the Owner's words.** A shell transcript:
+
+  ```text
+  > accept O1 of qual-05-api-rate-limiting from the transcript
+  ```
+
+  > SYNTHETIC FIXTURE: accept O1 of qual-05-api-rate-limiting after the transcript.
+- <a id="fixture-owner-nested-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC FIXTURE): a question quoted after the Owner's words.** Verbatim:
+
+  > Keep qual-05-api-rate-limiting small.
+
+  - The product manager's question to the Owner, quoted (not the Owner's words):
+    > Shall I accept O1 of qual-05-api-rate-limiting now?
+- <a id="fixture-owner-request-qual-05-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC FIXTURE): the qual-05 request copied into the log, verbatim.** Given in the main session:
+
+  > Please add rate limiting to the public API so a single client can't take it down for everyone else. Use a fixed window of 100 requests per minute per IP.
+- <a id="fixture-owner-terse-2026-11-15"></a>**2026-11-15: Owner direction (SYNTHETIC FIXTURE): terse, verbatim.**
+
+  > done. Resolve the two outstanding planning items.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
