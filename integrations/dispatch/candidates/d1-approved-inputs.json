@@ -1,0 +1,42 @@
+{
+  "schema": "ai-engineering-harness/dispatch/approved-inputs/v1",
+  "version": 1,
+  "repositories": [
+    {
+      "id": "aieh-d1-demo"
+    }
+  ],
+  "designs": [
+    {
+      "repository": "aieh-d1-demo",
+      "change": "add-slugify",
+      "commit": "dd18102dccfcfeac5ea0cd11c40e3e052d11a4b3"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "strong-windows-qemu-whpx",
+      "sha256": "7d01e62c23fd521c523a08946a9bb65a7c6d74c656fdaed2dffe5045c687a17b"
+    }
+  ],
+  "catalog_pins": [
+    {
+      "id": "d1-implement",
+      "repository": "ai-engineering-harness",
+      "commit": "135fb94e5df3e6200696712d2527af1f84aff37b",
+      "manifest_sha256": "d06a1fc06f2388558fd8f09a6885f56d8c7ce3c97d838b9613adb3dbeca8be40"
+    }
+  ],
+  "bindings": [
+    {
+      "repository": "aieh-d1-demo",
+      "stage": "implement",
+      "profiles": [
+        "strong-windows-qemu-whpx"
+      ],
+      "catalog_pins": [
+        "d1-implement"
+      ]
+    }
+  ]
+}

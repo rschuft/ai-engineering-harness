@@ -575,6 +575,18 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/dispatch/dispatch_inputs.py manifest-path'
 
+  # Plan leaf E-05.3: one request resolved under the live, promoted manifest; reserves nothing.
+  dispatch:resolve:
+    desc: Resolve one dispatch request under the live, promoted manifest; reserves nothing (<tools python> -I -B integrations/dispatch/dispatch_inputs.py resolve --request REQUEST --project PROJECT --backlog BACKLOG)
+    requires:
+      vars: [REQUEST, PROJECT, BACKLOG]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/dispatch/dispatch_inputs.py resolve --request "{{.REQUEST}}" --project "{{.PROJECT}}" --backlog "{{.BACKLOG}}"'
+
   # The engineering manager's cause records of an ended attempt (plan leaf E-05.8; integrations/dispatch/README.md):
   # each writes one integration-store receipt and never changes the end record.
   dispatch:record-auth-cause:

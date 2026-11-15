@@ -51,7 +51,7 @@ otherwise as `REQUEST_UNKNOWN_FIELD`. A value outside its grammar, such as a pat
 
 ### Resolution
 
-`resolve(request, manifest=..., work_sources=..., next_ordinal=..., read_profile=...)`.
+`resolve(request, manifest=..., work_sources=..., next_ordinal=..., read_profile=..., catalog_sources=...)`.
 The checks run in this order, and the first failing one refuses:
 
 1. the request (shape, fields, grammars; a missing or empty `catalog_pin` is `CATALOG_PIN_REQUIRED`);
@@ -65,6 +65,9 @@ The checks run in this order, and the first failing one refuses:
    `schema` the profile/v1 schema, its `name` the id, and `status.operational` exactly
    `true` (contract C6); then its admission policy (`admission_policy`, E-01.2.2: Docker
    runtime only, caps within the ceilings, the declared mounts; below);
+7a. the pin's agent assignment (E-05.3, `read_assignment`; [below](#agent-assignment-plan-leaf-e-053)),
+   read at the pinned commit of the pin's catalog repository: its sha256 the pin's
+   `manifest_sha256`, its shape `agent-assignment/v1` for this pin, no Skill;
 8. the Work: the repository's Backlog.md lists it, and Backlog.md's own readiness
    (`planning_readiness.read_readiness`, P-02.2) reports it ready;
 9. the design: every OpenSpec source pointer of the task resolves in git, all of them pin
@@ -85,6 +88,7 @@ unapproved repository, stage, profile or pin.
 | `work_sources(repository)` | `PlanningWorkSource(planning_adapter.Backlog(...), planning_adapter.Git(...))` for the approved repository | Backlog.md's recorded readiness JSON replayed in process, and a throwaway design repository |
 | `next_ordinal` | `store_next_ordinal(store)` | the same, on a throwaway store |
 | `read_profile` | `read_profile_file` (the checkout's `profiles/`, byte-exact by `profiles/.gitattributes`) | throwaway profile declarations |
+| `catalog_sources(repository)` | `harness_catalog_sources`: `GitCatalogSource` over this checkout's repository for `ai-engineering-harness`, none for any other | `catalog_support.Catalog`, in memory; `GitCatalogSource` over a throwaway repository written with Dulwich |
 
 ### Resolved record: `ai-engineering-harness/dispatch/resolved-inputs/v2`
 
@@ -1185,10 +1189,52 @@ acceptance takes effect when a manifest naming it is promoted.
 | `AUTH_CAUSE_INVALID`, `AUTH_CAUSE_NOT_APPLICABLE`, `AUTH_CAUSE_CONFLICT` | the cause record: an unknown cause; no end record of an authentication refusal; another cause recorded |
 | `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause and escalation records: neither interruption nor security-stop; no end record the cause applies to (interruption: an unclassified end not escalated; security-stop: any end but a non-retryable one); a receipt holding another intent |
 
-**No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
-A-01.1 promotes approved catalog pins into the manifest, every request is refused
-(`NO_APPROVED_CATALOG` or `CATALOG_PIN_REQUIRED`). That is intended. Today's checked-in
-profiles also declare `operational: false`, so they are refused even when approved.
+**No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
+without a pin refuses every request (`NO_APPROVED_CATALOG` or `CATALOG_PIN_REQUIRED`). That is
+intended. D1's one pin is E-05.3's (below); A-01.1 promotes the qualified catalog's pins.
+
+## Agent assignment (plan leaf E-05.3)
+
+A catalog pin `{id, repository, commit, manifest_sha256}` names one file: the agent assignment
+`catalog/assignments/<id>.json` at `commit` of the catalog repository `repository`. Decision 0019
+point 1 places the harness runtime's agent-assignment manifests in this repository's `catalog/`, then
+in the protected Gitea catalog (A-01.1); until then the one catalog repository is this one, by the id
+`ai-engineering-harness` (`CATALOG_REPOSITORY`). The resolver reads the committed blob at the pinned
+commit through the repository-access module (`GitCatalogSource`), never a work tree, after the profile
+and before the Work:
+
+```json
+{"format": "ai-engineering-harness/catalog/agent-assignment/v1", "id": "d1-implement",
+ "provider": {"path": "integrations/dispatch/qualification/acp-registry-claude-code-1.60.1.json",
+              "sha256": "aa402bbb...", "acp_server": "claude-code"},
+ "create_template": {"path": "profiles/strong-windows-qemu-whpx/agent-server/d1-create.json",
+                     "sha256": "660001d2..."},
+ "skills": []}
+```
+
+| Code | Refused when |
+|---|---|
+| `CATALOG_SOURCE_UNAVAILABLE` | no catalog source for the pin's repository, or it could not be read |
+| `CATALOG_MANIFEST_MISSING` | the pinned commit, or the assignment at it, is absent |
+| `CATALOG_MANIFEST_DRIFTED` | the assignment's bytes at the pinned commit do not have the pin's `manifest_sha256` (checked before anything in it is believed) |
+| `CATALOG_MANIFEST_INVALID` | not strict JSON of `agent-assignment/v1` with exactly its keys, its `id` not the pin's; a path or digest outside its grammar; a named file (`provider`, `create_template`) not a blob at the pinned commit with the sha256 it names; the provider file not the registry entry of the named `acp_server` |
+| `CATALOG_SKILL_NOT_QUALIFIED` | `skills` names a Skill: none is assigned before A-01.1 qualifies a Skill catalog, so none is materialized |
+
+An unpinned assignment is refused earlier: no pin named (`CATALOG_PIN_REQUIRED`), a pin the manifest
+does not approve or bind (`CATALOG_PIN_UNKNOWN`, `CATALOG_PIN_NOT_BOUND`, before any catalog read), no pin
+at all (`NO_APPROVED_CATALOG`). The pin's `manifest_sha256` is the attempt identity's
+`agent_manifest_digest`, and the pin is in `policy_inputs`.
+
+**Not checked by the resolver, disclosed:** that the assignment's `create_template` is the one the
+profile admits for the stage. A binding may approve several profiles with one pin, and the profile's own
+pin and admission (E-05.2) bind the template the create carries. For D1 a test holds them equal
+(`test_agent_assignment.TheCheckedInAssignment`). This leaf does not claim A-01.1's proof (provenance,
+format and security checks, Skill qualification); A-01.1's requirement applies again when it lands.
+
+**D1's assignment** is [`catalog/assignments/d1-implement.json`](../../catalog/assignments/d1-implement.json):
+the claude-code ACP registry entry (`acp_qualification.REGISTRY_PATH` at `REGISTRY_SHA256`), the D1
+create template the checked-in profile pins for `implement` (E-05.2), and no Skill. The manifest planning
+promotes for D1 is [`candidates/d1-approved-inputs.json`](candidates/README.md).
 
 ## Commands
 
@@ -1198,6 +1244,8 @@ Run from the repository root (`python3` outside Windows):
 python -I -B -m unittest discover -s integrations/dispatch/tests -v                         # task dispatch:test
 python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest FILE        # task dispatch:check-manifest
 python -I -B integrations/dispatch/dispatch_inputs.py manifest-path                         # task dispatch:manifest-path
+<tools python> -I -B integrations/dispatch/dispatch_inputs.py resolve --request FILE \
+    --project DIR --backlog CMD                                                               # task dispatch:resolve
 python -I -B integrations/dispatch/attempt_end.py record-auth-cause --store S --operation-key K --cause C   # task dispatch:record-auth-cause
 python -I -B integrations/dispatch/attempt_end.py record-end-cause --store S --operation-key K --cause C    # task dispatch:record-end-cause
 ```
