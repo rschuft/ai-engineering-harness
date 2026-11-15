@@ -508,6 +508,17 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'guestfwd rule count stays zero')
         self.assertFails(self.qemu, 'active guestfwd endpoint(s) are declared')
 
+    def test_facts_rate_is_what_the_seeded_units_enforce(self):
+        """E-05.10: the probes pace the facts reporter by facts.rate; it must be its units' own limit."""
+        rate = self.qemu['provisioning']['agent_server']['conversations']['facts']['rate']
+        self.assertEqual(rate, {'interval_s': 60, 'burst': 20})
+        self.assertEqual(self.errors(self.qemu), [])
+        for key, value in (('burst', 21), ('interval_s', 30)):
+            saved = rate[key]
+            rate[key] = value
+            self.assertFails(self.qemu, 'is not what aieh-conversation-facts')
+            rate[key] = saved
+
     def test_provider_tunnel_endpoint(self):
         """decision 0023 (E-05.10): the tunnel endpoint shares the inference endpoint's guest side
         and declares its host side once."""

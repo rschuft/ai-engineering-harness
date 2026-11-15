@@ -9095,6 +9095,62 @@ class GuestApi:
                           f'{result.stderr.strip()[-500:]}')
 
 
+# The on-demand facts reporter's declared rate limit (provisioning.agent_server.conversations.facts.rate, which
+# check_profile holds equal to the seeded units' TriggerLimit*/StartLimit*): at most `burst` runs in `interval_s`,
+# beyond which the units fail closed until the next boot. Every probe of this process stays FACTS_RATE_MARGIN below
+# it (E-05.10's live run: the sweep's counter reads tripped it). FACTS_CLOCK and FACTS_WAIT stand in for time in tests.
+FACTS_RATE_MARGIN = 2
+FACTS_CLOCK = time.monotonic
+_FACTS_LIMITERS = {}
+
+
+def FACTS_WAIT(seconds):
+    """Wait until the computed deadline (the oldest request leaving the declared window): never a guessed sleep."""
+    threading.Event().wait(seconds)
+
+
+def facts_rate(profile):
+    """(interval_s, burst) the profile declares for the on-demand facts reporter; Refused('FACTS') without one."""
+    rate = (conversations_config(provisioning_config(profile)).get('facts') or {}).get('rate') or {}
+    interval, burst = rate.get('interval_s'), rate.get('burst')
+    if not all(type(v) is int and v > 0 for v in (interval, burst)) or burst <= FACTS_RATE_MARGIN:
+        raise Refused('FACTS', 'the profile declares no usable facts.rate (interval_s, burst)')
+    return interval, burst
+
+
+class FactsLimiter:
+    """At most `burst - FACTS_RATE_MARGIN` facts requests in any trailing `interval_s` window, for one guest in this
+    process (shared by every probe of it: limited_facts keys it by the instance directory)."""
+
+    def __init__(self, interval_s, burst):
+        self.interval_s, self.allowed = interval_s, burst - FACTS_RATE_MARGIN
+        self.sent = []
+
+    def admit(self):
+        """Before one request: when the trailing window is full, wait until its oldest request leaves it."""
+        now = FACTS_CLOCK()
+        self.sent = [t for t in self.sent if now - t < self.interval_s]
+        if len(self.sent) >= self.allowed:
+            FACTS_WAIT(self.sent[0] + self.interval_s - now)
+            now = FACTS_CLOCK()
+            self.sent = [t for t in self.sent if now - t < self.interval_s]
+        self.sent.append(now)
+
+
+def limited_facts(facts, profile, idir):
+    """The facts callable of a probe, behind its guest's one FactsLimiter (every step of admission-probe,
+    job-access-probe, containment-probe and conversation-smoke goes through it)."""
+    key = str(idir)
+    limiter = _FACTS_LIMITERS.get(key)
+    if limiter is None:
+        limiter = _FACTS_LIMITERS[key] = FactsLimiter(*facts_rate(profile))
+
+    def call(*args, **kwargs):
+        limiter.admit()
+        return facts(*args, **kwargs)
+    return call
+
+
 class GuestFacts:
     """The on-demand conversation facts: request, wait, read (as agent)."""
 
@@ -9283,6 +9339,7 @@ def conversation_smoke(ctx, name, canary_dir=None, restart=False, openapi=None, 
     stop_fn = stop_fn or (lambda: stop(ctx, name))
     start_fn = start_fn or (lambda: start(ctx, name, ready_timeout))
     api, facts = channels(record)
+    facts = limited_facts(facts, profile, idir)
     t0, started = time.time(), utc_now()
     steps, failed, stop_conditions = [], [], []
     state = {'created': False, 'deleted': False}
@@ -9491,7 +9548,9 @@ def conversation_smoke(ctx, name, canary_dir=None, restart=False, openapi=None, 
         stopped = stop_fn()
         started_ = start_fn()
         _, record = running_instance(ctx, name)
+        _FACTS_LIMITERS.pop(str(idir), None)          # a new boot: the units' own limit starts again
         api, facts = channels(record)
+        facts = limited_facts(facts, profile, idir)
         ok_stop = stopped.get('result') == 'stopped'
         ok_start = started_.get('result') == 'ready'
         # the facts first: the reporter's unit is ordered after aieh-agent-server.service,
@@ -10136,6 +10195,7 @@ def admission_probe(ctx, name, out_path=None, channels=None, ssh_fn=None):
     channels = channels or default_channels
     ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
     api, facts = channels(record)
+    facts = limited_facts(facts, profile, idir)
     t0, started = time.time(), utc_now()
     steps, failed, stop_conditions = [], [], []
     state = {'created': []}
@@ -11656,6 +11716,7 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     channels = channels or default_channels
     ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
     api, facts = channels(record)
+    facts = limited_facts(facts, profile, idir)
     t0, started = time.time(), utc_now()
     steps, failed, stop_conditions = [], [], []
     state = {'created': []}
@@ -12095,15 +12156,17 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                 observed = host_port_rows(TUNNEL_ORIGIN_PORT) if item[0] == 'tunnel' else None
                 data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
                 rows = [dict(r, conversation=cid) for r in data.get('results') or []]
+                if item[0] not in ('lookup', 'tunnel'):
+                    # the container guard's counters attribute this row's refusal (a tunnel row's
+                    # verdict never uses them: the host-side observer below is its evidence)
+                    after = container_guard_rows(facts())
+                    rows = [dict(r, guard={'before': before, 'after': after}) for r in rows]
+                    before = after
                 if observed is not None:
                     # the host's own view around the row, independent of the tunnel's log (evidence; the
                     # live plan judges it): every TCP row to remote port 443, any owner, TIME_WAIT included
                     rows = [dict(r, host_443={'before': observed, 'after': host_port_rows(TUNNEL_ORIGIN_PORT)})
                             for r in rows]
-                if item[0] != 'lookup':
-                    after = container_guard_rows(facts())
-                    rows = [dict(r, guard={'before': before, 'after': after}) for r in rows]
-                    before = after
                 results += rows
         login_spec = dict(inference_token_spec(profile, {'routes': [{'method': 'GET', 'path': '/'}],
                                                          'auth': {'header': 'authorization',
@@ -13146,6 +13209,7 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
     channels = channels or default_channels
     ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
     api, facts = channels(record)
+    facts = limited_facts(facts, profile, idir)
     admission_fn = admission_fn or (lambda: admission_probe(ctx, name, channels=channels,
                                                             ssh_fn=ssh_fn))
     job_fn = job_fn or (lambda: job_access_probe(ctx, name, token_fingerprints=fingerprint_args,
@@ -15791,6 +15855,7 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
     job_access_fn = job_access_fn or (lambda fps: job_access_probe(ctx, name, token_fingerprints=[
         f'{role}={fp}' for role, fp in sorted(fps.items())]))
     api, facts = channels(record)
+    facts = limited_facts(facts, profile, idir)
     caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,
               gt.TransportError)
 

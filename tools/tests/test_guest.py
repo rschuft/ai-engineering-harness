@@ -82,10 +82,50 @@ def remove_tree(path):
     shutil.rmtree(path, onexc=writable)
 
 
+class FakeClock:
+    """The facts limiter's time in tests (guest.FACTS_CLOCK, guest.FACTS_WAIT): a wait advances it at once."""
+
+    def __init__(self):
+        self.now, self.waited = 1000.0, []
+
+    def __call__(self):
+        return self.now
+
+    def wait(self, seconds):
+        self.waited.append(seconds)
+        self.now += max(0.0, seconds)
+
+
+class ReporterRate:
+    """The guest's on-demand facts units as live (E-05.10's live runs): at most BURST runs in INTERVAL seconds of
+    CLOCK; the next request trips the limit, hangs to the probe's ceiling and fails, and every later one too (the
+    units fail closed until the next boot)."""
+
+    def __init__(self, clock, interval=60, burst=20):
+        self.clock, self.interval, self.burst = clock, interval, burst
+        self.times, self.tripped, self.requests = [], False, 0
+
+    def request(self):
+        self.requests += 1
+        now = self.clock()
+        self.times = [t for t in self.times if now - t < self.interval]
+        if self.tripped or len(self.times) >= self.burst:
+            self.tripped = True
+            self.clock.now += guest.CONVERSATION_FACTS_CEILING_S
+            raise guest.Refused('FACTS', 'no conversation facts report (rc 5): {"error": "ceiling", '
+                                '"request_present": true}')
+        self.times.append(now)
+
+
 class TempState(unittest.TestCase):
-    """A temporary state directory with USERPROFILE/HOME pointed elsewhere."""
+    """A temporary state directory with USERPROFILE/HOME pointed elsewhere; the facts limiter on a fake clock."""
 
     def setUp(self):
+        self.clock = FakeClock()
+        for name, value in (('FACTS_CLOCK', self.clock), ('FACTS_WAIT', self.clock.wait)):
+            patcher = mock.patch.object(guest, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-guest-test-'))
         self.state = self.tmp / 'state'
         self.state.mkdir()
@@ -4566,6 +4606,8 @@ class FakeAdmissionGuest:
         return {'responses': out, 'session_key_occurrences': 0}
 
     def facts(self):
+        if self.faults.get('rate') is not None:
+            self.faults['rate'].request()
         self.serial += 1
         running = []
         for i, (cid, (ip, port)) in enumerate(sorted(self.conversations.items())):
@@ -5997,6 +6039,15 @@ class ContainmentProbe(TempState):
         tunnel_items = [i for s in fake.inference_specs for i in s['items'] if i[0] == 'tunnel']
         self.assertEqual(len(tunnel_items), 2 * len(guest.TUNNEL_MATRIX))
 
+    def test_the_whole_native_catalogue_stays_within_the_reporters_rate(self):
+        self.held_to_the_tunnel()
+        rate = ReporterRate(self.clock, *guest.facts_rate(PROFILE))
+        out, _ = self.run_probe(native=True, rate=rate)
+        self.assertEqual((out['result'], rate.tripped), ('PASS', False),
+                         [(c['id'], c['reason']) for c in out['cases'] if c['verdict'] != 'PASS'])
+        self.assertGreater(rate.requests, 20)                     # beyond one window: paced, never tripped
+        self.assertTrue(self.clock.waited)
+
     def test_native_observations_never_pass_by_the_brokered_expectations(self):
         out, _ = self.run_probe(native=True)                 # the record says the broker: 405 is not its answer
         v = self.verdicts(out)
@@ -6800,6 +6851,57 @@ class InferenceJobSweep(TempState):
         self.assertEqual({o['outcome'] for o in got}, {'answered'})
         # the brokered sweep is as before: no tunnel row, no tunnel spec
         self.assertNotIn('tunnel', guest.inference_job_spec(PROFILE))
+
+    def test_the_sweeps_stay_within_the_reporters_declared_rate(self):
+        """E-05.10's live runs: the guest's facts units allow 20 runs in 60 s and then fail closed until the next
+        boot. Every step of job-access-probe goes through the guest's one limiter, so the brokered and the native
+        sweeps complete under the live limit; without the limiter the native run trips it, as live."""
+        self.record['inference'] = inference_record(self.record)['inference']
+        interval, burst = guest.facts_rate(PROFILE)
+        self.assertEqual((interval, burst), (60, 20))
+        for native in (False, True):
+            if native:
+                self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
+            rate = ReporterRate(self.clock, interval, burst)
+            out, step, _ = self.run_inference(native=native, rate=rate)
+            self.assertEqual((out['result'], rate.tripped), ('PASS', False), (native, step and step['detail']))
+            self.assertGreater(rate.requests, burst - guest.FACTS_RATE_MARGIN)
+            self.assertTrue(self.clock.waited)                        # the limiter had to pace them
+        # the fake enforces the limit as live: without the limiter, one request too many trips it and the step
+        # fails on the facts ceiling (E-05.10's runs 2 and 3)
+        requests = rate.requests
+        guest._FACTS_LIMITERS.clear()
+        rate = ReporterRate(self.clock, interval, requests - 1)
+        with mock.patch.object(guest, 'limited_facts', lambda facts, profile, idir: facts):
+            out, step, _ = self.run_inference(native=True, rate=rate)
+        self.assertTrue(rate.tripped)
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_a_tunnel_row_reads_no_counters(self):
+        """The tunnel rows add no facts request (their verdict never used the counters)."""
+        self.record['inference'] = inference_record(self.record)['inference']
+        counts = {}
+        for native in (False, True):
+            if native:
+                self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
+            rate = ReporterRate(self.clock, 60, 10 ** 6)
+            out, step, _ = self.run_inference(native=native, rate=rate)
+            counts[native] = rate.requests
+            for row in step['detail']['results']:
+                if row['what'] in guest.TUNNEL_EXPECTED:
+                    self.assertNotIn('guard', row)
+        self.assertEqual(counts[True], counts[False])
+
+    def test_the_limiter_waits_for_the_oldest_request_to_leave_the_window(self):
+        limiter = guest.FactsLimiter(60, 20)
+        for _ in range(18):
+            limiter.admit()
+        self.assertEqual(self.clock.waited, [])
+        self.clock.now += 10
+        limiter.admit()                                               # the 19th: wait 50 s for the first
+        self.assertEqual(self.clock.waited, [50.0])
+        with self.assertRaises(guest.Refused):
+            guest.facts_rate({})
 
     def test_native_tunnel_faults_fail_or_stop(self):
         self.record['inference'] = inference_record(self.record)['inference']

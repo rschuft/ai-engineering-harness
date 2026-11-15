@@ -1420,6 +1420,7 @@ def check_agent_server(report, profile, root, conf):
                     '(composition/lock/components.lock.json release_assets)')
     if 'conversations' in server:
         check_conversations(report, profile, server)
+        check_facts_rate(report, profile, root)
     if 'admission' in server:
         check_admission(report, profile, root, conf, server)
     if 'jobs' in server:
@@ -1788,6 +1789,29 @@ def check_conversations(report, profile, server):
     if not all(isinstance(rate.get(k), int) and not isinstance(rate.get(k), bool) and rate[k] > 0
                for k in ('interval_s', 'burst')) or rate.get('burst', 0) > 60:
         report.fail(f'{label}.facts.rate: a positive interval and a burst of at most 60')
+
+
+FACTS_UNIT_LIMITS = {'path_unit': ('TriggerLimitIntervalSec', 'TriggerLimitBurst'),
+                     'service': ('StartLimitIntervalSec', 'StartLimitBurst')}
+
+
+def check_facts_rate(report, profile, root):
+    """The facts reporter's declared rate (facts.rate) is exactly what its seeded units enforce: the path unit's
+    TriggerLimitIntervalSec/TriggerLimitBurst and the service's StartLimitIntervalSec/StartLimitBurst (E-05.10: the
+    probes pace themselves by facts.rate, so it must be the units' own numbers)."""
+    label = 'provisioning.agent_server.conversations.facts'
+    facts = ((((profile.get('provisioning') or {}).get('agent_server') or {}).get('conversations') or {})
+             .get('facts') or {})
+    rate = facts.get('rate') or {}
+    files = seed_files(root, profile)
+    for key, (interval_key, burst_key) in FACTS_UNIT_LIMITS.items():
+        text = files.get(f"/etc/systemd/system/{facts.get(key)}")
+        if text is None:
+            report.fail(f'{label}.{key}: the seeded unit {facts.get(key)!r} is not in the user-data template')
+            continue
+        found = {k: re.findall(rf'^{k}=(\d+)$', text, re.MULTILINE) for k in (interval_key, burst_key)}
+        if found != {interval_key: [str(rate.get('interval_s'))], burst_key: [str(rate.get('burst'))]}:
+            report.fail(f'{label}.rate: {rate} is not what {facts.get(key)} enforces ({found})')
 
 
 def locked_openapi_sha256(root):
