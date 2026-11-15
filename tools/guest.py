@@ -17744,6 +17744,10 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
                   'token_fingerprint': data.get('token_fingerprint'), 'held_fingerprint': held.fingerprint,
                   'search': search, 'changed_files': data.get('changed_files'), 'config_dir': cfg,
                   'owner_files_found': memo['owner_files'], 'owner_files_outside_the_config_dir': outside,
+                  # the delegation observed in the CLI's own transcript (sub-agent records carry isSidechain)
+                  'transcript': {k: (memo['transcript'] or {}).get(k) for k in (
+                      'files', 'records', 'sidechain_records', 'subagent_files', 'occurrences')}
+                  if isinstance(memo['transcript'], dict) else None,
                   'encrypted_state': NATIVE_ENCRYPTED_STATE_NOTE}
         if search.get('verdict') == 'found' or search.get('withheld'):
             stop(NATIVE_STOPS['persisted'])

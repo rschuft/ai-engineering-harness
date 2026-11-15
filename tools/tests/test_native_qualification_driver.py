@@ -286,6 +286,7 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(self.step(out, 13)['detail']['verdict'], 'not-found')
         self.assertEqual(self.guest.env_specs[0]['attempt_token']['names'], ['CLAUDE_CODE_OAUTH_TOKEN'])
         self.assertEqual([s['mode'] for s in self.guest.probe_specs], ['start', 'after', 'capture'])
+        self.assertEqual(self.step(out, 11)['detail']['transcript']['sidechain_records'], 0)
 
     def test_without_the_owners_values_that_part_is_unknown_with_its_reason(self):
         out = self.run_driver(owner=False)
