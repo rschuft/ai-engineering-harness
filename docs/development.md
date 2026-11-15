@@ -1370,6 +1370,32 @@ defaults them.
   `tools/tests/test_custody_probe.py` and `LiveCustodyDriverTests` in
   `integrations/dispatch/tests/test_attempt_tokens.py`.
 
+- `d1_run` (plan leaves E-01.3.2, E-05.4 and E-05.5, D1 slice C; **prepared, not run**) runs one
+  D1 attempt on a running guest created with `create --provision --inference`, the provider
+  tunnel serving and the guest's forward held to it, under its decision rule, fixed before any
+  run (`D1_RUN_RULE`; each proof clause judged by `D1_CLAUSES`). It runs from
+  [`integrations/dispatch/tests/live_d1_run.py`](../integrations/dispatch/tests/live_d1_run.py)
+  (`--profile <dir> --state-dir <dir> --name <name> --request <file> --project <clone>
+  --backlog <command> --expected-manifest-version <n> --expected-manifest-sha256 <hex>
+  --expected-policy-digest <digest> --out-dir <dir> [--resume <operation key>]`), whose
+  `D1Dispatcher` makes every dispatcher act through the dispatch module over the live managed
+  root (the live promoted manifest loaded for the dispatch with the decision verifier; the native
+  entry read once; the builder bot's entry only inside `attempt_role_token`); there is no Task
+  target. The verifier's observations are `native_qualification_run`'s, unchanged
+  (`native_observer`), without step (11d). A stop ends the attempt through E-05.8's mechanism
+  with its dispatcher record (`D1_STOP_RECORDS`) before anything reaches Gitea; a refusal after
+  the turn tears nothing down (`--resume`); the record's `guest_may_be_destroyed` says when the
+  guest may go. The live plan's step 0 runs
+  [`integrations/dispatch/tests/live_step0_rehearsal.py`](../integrations/dispatch/tests/live_step0_rehearsal.py)
+  (`--profile <dir> --state-dir <dir> --name <new name> --out-dir <empty dir>`): one process
+  creates a disposable `create --provision` guest, rehearses SEED, a synthetic edit, RESULT, the
+  exchange delivery, the pull, the retained verifier and the host's intake on a synthetic tree in
+  one F-04.2 fixture conversation (no token, no model call, a throwaway store), records the
+  container's git and python, the bash route's output and its argument limit (one `/bin/sh -c`
+  argument, 131072 bytes), and destroys the guest it created. Offline tests:
+  `tools/tests/test_d1_run_driver.py`, `integrations/dispatch/tests/test_live_d1_run.py` and
+  `test_step0_rehearsal.py`.
+
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);
 the exchange and surface-test cycles (F-03.3.1) are in

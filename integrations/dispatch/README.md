@@ -1446,6 +1446,59 @@ exclusively and never overwrites other bytes.
 the WIP title, the branch route with an unencoded slash, `GetPullRequestByBaseHead` on a branch
 with a slash, and the read-back of the body as sent.
 
+## The D1 run (D1 slice C)
+
+`tools/guest.py` `d1_run` runs one D1 attempt end to end on a disposable guest created with `create --provision
+--inference` (the provider tunnel serving, the guest's forward held), under a decision rule fixed before any run
+(`D1_RUN_RULE`; `D1_CLAUSES` judges each proof clause of E-01.3.2, E-05.4 and E-05.5 from the steps that decide it,
+PASS, FAIL or UNKNOWN, or names its offline evidence). Its dispatcher side is
+[`tests/live_d1_run.py`](tests/live_d1_run.py) (`D1Dispatcher`, prepared, not run), which makes every dispatcher act
+through this package: the read-only live resolution and the base, `dispatch` under the live promoted manifest (loaded
+for that dispatch through `load_manifest` with the decision verifier, never cached; a hand-built one is
+`MANIFEST_NOT_PROMOTED`), `attempt_run.run_attempt` or `resume_result` with `result_path.result_hook`,
+`attempt_end.end_interrupted_attempt`, the conversation's delete through `AgentServerClient`, and
+`result_path.publish_result`. The two vantages stay apart (the work design, section 2): the verifier's observations
+are E-05.11's (`native_observer`, `native_qualification_run`'s closures extracted unchanged), from `tools/guest.py`'s
+probe channel, evidence and stop conditions only; E-05.11's step (11d) is not run.
+
+| Step | What | Through |
+|---|---|---|
+| (0) | the live resolution, read only: the manifest's version and sha256 and the policy digest the expected ones; the base (`read_base`); the SEED and RESULT commands of that base within one `/bin/sh -c` argument (131072 bytes) | `D1Dispatcher.prepare` |
+| (1), (1a) | E-05.11's preconditions and the tunnel's census before the dispatch | the observer |
+| (2) | `dispatch`; the native entry read once (`OneNativeRead`), that value handed to the verifier, which seals every later call with it | the dispatcher |
+| (3) | E-01.3.2's inspection: attempt_run's API half, then from the root facts one conversation container serving the reserved conversation with no container problem (image, the declared mounts: the workspace scope, user, capabilities), the outer server listing exactly it, its agent `claude-code` and the recorded model, its runtime `available`; a failure sends no message and ends the attempt | the `inspect` hook |
+| (4) to (8a) | E-05.11's observations: before the message, after the message (the provider's lazy start, the turn's containment, the job contract), after the turn, after RESULT | the `observe` hooks |
+| (9), (10) to (10b) | the runtime stopped; the conversation deleted by the dispatcher; the whole-run tunnel log and the guard window | the dispatcher, the observer |
+| (11) | E-05.9's outbound search over the record's draft and every answer of the run (the gate) | the observer |
+| (12) | `publish_result`: the push, the draft pull request, the read-back, the receipt, the Owner report with the `observations` slot filled; its own search covers the bundle, every text and the run record's draft | the dispatcher |
+
+**Stops.** Any of E-05.11's stop conditions after the dispatch ends the attempt through E-05.8's mechanism (trigger
+`attempt-stopped`) with the record `D1_STOP_RECORDS` maps it to: a credential found (echoed, persisted, in the record,
+an Owner or another credential) `credential-stop`; a connection elsewhere, a direct attempt, a refused guest packet, a
+tunnel target other than the origin, the tunnel's census after the turn or its refusal of the CLI's ClientHello
+`egress-stop`; a model outside the record `model-stop` and the provider check after the turn `provider-stop` (R2); a
+process outside the lineage, an npx process, an unexpected conversation, a confirmation asked and anything unnamed
+`containment-stop`. Before a stop ends an attempt while its container runs, the persisted-token search and the
+Owner-credential names run. A turn that ends `error`, `stuck` or `paused` is ended with trigger `conversation-ended`
+(classified from its events).
+
+**Run rules.** Nothing in the driver destroys the guest. A dispatcher refusal after the turn that is not a stop
+tears nothing down (`held-for-resume`; `--resume <operation key>` resumes the result step, or the result path from the
+recorded intake, `attempt_run.recorded_result`, when its journal is dispatched); a refusal before the message, a lost
+create answer or a turn past its ceiling is held for the engineering manager. `guest_may_be_destroyed` is true only
+once the result path confirmed, the attempt has an end record, or nothing was dispatched. A resumed run reads the
+native entry once more, in its own process, only to search with it (its fingerprint must be the attempt's,
+`OUTBOUND_TOKEN_MISMATCH`).
+
+**Step 0** ([`tests/live_step0_rehearsal.py`](tests/live_step0_rehearsal.py), the engineering manager's ruling R4;
+prepared, not run): one process, one disposable `create --provision` guest, one F-04.2 fixture conversation, a
+throwaway store; SEED of a synthetic demo-size tree, a synthetic edit (by a test-only builder: a `.claude` file and a
+`backlog/` change, so the pathspec exclusion and `update-index --index-info` run), RESULT with its delivery, the pull,
+the retained verifier, the host's intake and RESULT again without a delivery; probes of git and python, the bash
+route's output and the argument limit; the guest it created destroyed in `finally`.
+
+**Not yet verified** live: all of it.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -1864,6 +1917,20 @@ transport called zero times:
 | `Search` | a token in the test output, in a file of the result (found in the bundle's objects), in the observations, in an extra text, and base64-encoded, is `OUTBOUND_TOKEN_FOUND` with no request and the journal reserved; another token is `OUTBOUND_TOKEN_MISMATCH`, none or a dropped one `OUTBOUND_SEARCH_REQUIRED`; a report without this bundle, its surface or a text's digest is `OUTBOUND_SEARCH_REQUIRED`, `found` `OUTBOUND_TOKEN_FOUND`, `invalid`, `incomplete` or a missed control `OUTBOUND_SEARCH_NOT_PASSED`, and the path never dispatches on one; a staged bundle that is not the verified one is `RESULT_STAGED_UNVERIFIED` |
 | `Report` | the diff from the verified objects with `subprocess.Popen` patched to fail (a modified, an added and a binary file; the escape character removed); control characters removed from the test output; a backtick run cannot close its fence; a result resumed from its intake receipt shows the output's digest and the exclusions' count and digest, never their text; the excluded paths listed when held; the observations slot carried |
 | `Journal` | the hook is repeat-safe and a resumed intake reserves the same journal; another result is `RESULT_JOURNAL_CONFLICT`; an unreserved result or a foreign hook record `RESULT_NOT_RESERVED`; an empty change fails the journal (`RESULT_EMPTY_CHANGE`, then `RESULT_JOURNAL_FAILED`) with nothing written; only the demo repository is a target |
+
+[`tests/test_live_d1_run.py`](tests/test_live_d1_run.py) (D1 slice C), on the E-05.9 native fixture:
+
+| Class | What it shows |
+|---|---|
+| `Dispatch` | the manifest loaded by the loader for each dispatch (never at construction) and the native entry read once, the verifier given its own open copy of that token; a hand-built manifest is `MANIFEST_NOT_PROMOTED` with no read; the delete goes through the route-checked client; the preparation checks the expected manifest, policy digest and the commands' argument limit, reserves nothing and reads no entry; a resumed read must hold the attempt's token (`OUTBOUND_TOKEN_MISMATCH`) |
+| `Providers` | `OneNativeRead`: one read, then a second read, another entry, a write and a delete refused and counted; a value without the token's shape never handed on; `AllowedEntries`: the builder bot's entry only |
+
+[`tests/test_step0_rehearsal.py`](tests/test_step0_rehearsal.py) (D1 slice C), `rehearse` against a fake container
+whose SEED, synthetic edit and RESULT run for real (Git Bash or bash and git, as `test_attempt_run`'s oracle):
+
+| Class | What it shows |
+|---|---|
+| `Rehearsal` | every step passes: the pathspec exclusion and `update-index --index-info` exercised, the bundle pulled and verified by the retained verifier, the intake's commit-id equality, the same commit without a delivery, a second delivery `EXISTS`; a command above the argument limit answered as refused; the synthetic tree at the demo's size; the test-only builders are the rehearsal's |
 
 [`tests/test_attempt_end.py`](tests/test_attempt_end.py) (E-05.8), on the E-05.9 native fixture with a fake of
 the pinned Agent Server's conversation, event-search, runtime-stop and runtime-status routes, events in the shapes
