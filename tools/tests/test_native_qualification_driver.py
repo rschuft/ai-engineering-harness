@@ -54,6 +54,7 @@ CFG = '/workspace/conversations/' + HEX + '/acp/claude-code'
 ORIGIN = 'api.anthropic.com:443'
 NAMES = sorted(['CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'CLAUDE_CODE_PROXY_RESOLVES_HOSTS',
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'OH_SECRET_KEY', 'PATH'])
+DNS = '2026-11-15T05:24:05+0000 guest kernel: aieh-container-guard: IN=docker0 OUT= SRC=172.17.0.2 DST=172.17.0.1 LEN=60 PROTO=UDP SPT=40001 DPT=53 LEN=40'
 NATIVE_SHAPED = {'CLAUDE_CODE_OAUTH_TOKEN': {'token': True, 'provider_key': False}}
 
 
@@ -119,13 +120,25 @@ class FakeGuest:
                       'capture': {'mode': 'capture', 'capture': capture({'proc/20/environ': b'PATH=/usr/bin\0'})}}
         self.probe_specs = []
         self.rejects = 3
+        self.guard_log = ['2026-11-15T05:00:00+0000 guest kernel: aieh-container-guard: IN=docker0 SRC=172.17.0.2 '
+                          'DST=172.17.0.1 PROTO=UDP SPT=1 DPT=53'] * 3
+        self.egress = self.egress6 = 0
+        self.lazy = True                 # the provider starts at the first prompt (live run 2)
         self.seals, self.nonces = [], []
 
     def facts(self):
         container = tg.conversation_container(hex_id=HEX)
         container['State']['Pid'] = tcc.HOST_BASE + 1
         return {'containers': [container] if self.created else [], 'server_user': dict(aq.SERVER_USER),
-                'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
+                'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}],
+                              'log': {'count': len(self.guard_log), 'tail': list(self.guard_log[-20:])},
+                              'egress': {'iptables': [{'target': 'REJECT', 'packets': self.egress}],
+                                         'ip6tables': [{'target': 'REJECT', 'packets': self.egress6}]}}}
+
+    def refuse(self, *lines):
+        """The container guard refuses one packet per kernel log line (and counts it)."""
+        self.guard_log += list(lines)
+        self.rejects += len(lines)
 
     def answer(self, method, path, body):
         self.calls.append((method, path))
@@ -170,7 +183,10 @@ class FakeGuest:
             self.test.assertEqual(script, guest.NATIVE_ATTEMPT_PROBE)
             self.probe_specs.append(spec)
             self.test.assertEqual('search_source' in spec, spec['mode'] == 'after')
-            return guest.JOB_MARKER + json.dumps(self.probe[spec['mode']]) + '\n'
+            data = self.probe[spec['mode']]
+            if spec['mode'] == 'start' and self.lazy and not self.sent:
+                data = dict(data, processes=[], config_dirs=[], config_listing=[], config_exists=False)
+            return guest.JOB_MARKER + json.dumps(data) + '\n'
         match = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d > /tmp/aieh-job.py && python3 /tmp/aieh-job.py '
                          r'([^\s;]+)', command)
         script = base64.b64decode(match.group(1)).decode('utf-8')
@@ -283,7 +299,10 @@ class DriverRun(unittest.TestCase):
     def test_the_rule_passes_on_a_guest_that_holds_it(self):
         out = self.run_driver()
         self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
-        self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(1b)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)',
+        self.assertFalse(self.step(out, 3)['detail']['provider_running'])      # the lazy start (live run 2)
+        self.assertEqual(self.step(out, 1)['detail']['guards']['log_lines'][0],          # pre-create attribution
+                         {'proto': 'UDP', 'dst': '172.17.0.1', 'dport': 53})
+        self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(1b)', '(2)', '(3)', '(4)', '(4a)', '(5)', '(6)', '(7)',
                                                     '(8)', '(9)', '(10)', '(10a)', '(11)', '(11a)', '(11b)', '(11c)',
                                                     '(11d)', '(12)', '(12a)', '(12b)', '(13)'])
         (before, _), (after, _) = self.tunnel.census_calls
@@ -301,7 +320,7 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(self.step(out, 10)['detail']['admitted_to_origin'], 1)
         self.assertEqual(self.step(out, 13)['detail']['verdict'], 'not-found')
         self.assertEqual(self.guest.env_specs[0]['attempt_token']['names'], ['CLAUDE_CODE_OAUTH_TOKEN'])
-        self.assertEqual([s['mode'] for s in self.guest.probe_specs], ['start', 'after', 'capture'])
+        self.assertEqual([s['mode'] for s in self.guest.probe_specs], ['start', 'start', 'after', 'capture'])      # (3) and (4a)
         self.assertEqual(self.step(out, 11)['detail']['transcript']['sidechain_records'], 0)
 
     def test_a_fresh_nonce_seals_every_call_before_the_token(self):
@@ -423,8 +442,27 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(guest.native_start_verdict(no_adapter, ())[0], 'UNKNOWN')
         self.guest.probe['start']['processes'][1]['argv'].append('--bare')
         out = self.run_driver()
-        self.assertEqual(self.step(out, 3)['verdict'], 'FAIL')
-        self.assertEqual(self.step(out, 3)['detail']['forbidden_flags'], ['--bare'])
+        self.assertEqual((self.step(out, 3)['verdict'], self.step(out, '4a')['verdict']), ('PASS', 'FAIL'))
+        self.assertEqual(self.step(out, '4a')['detail']['forbidden_flags'], ['--bare'])
+
+    def test_the_start_is_judged_at_the_lazy_start(self):
+        """Live run 2 (F2): no provider before the prompt is recorded at (3); (4a) judges it once it runs; a provider
+        never seen is UNKNOWN with the probe's output kept."""
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 3)['verdict'], self.step(out, '4a')['verdict']), ('PASS', 'PASS'))
+        self.assertTrue(self.step(out, '4a')['detail']['seen_within_ceiling'])
+        self.setUp()
+        self.guest.probe['start'] = dict(start_data(), processes=[])
+        seen = []
+
+        def never(fetch, done, ceiling):
+            value = fetch()
+            seen.append(ceiling)
+            return value, done(value)
+        out = self.run_driver(start_wait=never)
+        self.assertEqual(self.step(out, '4a')['verdict'], 'UNKNOWN')
+        self.assertEqual(self.step(out, '4a')['detail']['processes'], [])
+        self.assertEqual(seen, [guest.NATIVE_START_CEILING_S])
 
     def test_another_credential_in_an_environment_is_a_stop(self):
         self.guest.env = aq.job_env({'CLAUDE_CODE_OAUTH_TOKEN': {'token': False, 'provider_key': True}},
@@ -440,19 +478,21 @@ class DriverRun(unittest.TestCase):
         self.assertIn(guest.NATIVE_STOPS['owner'], self.stops(out))
 
     def test_a_direct_connection_attempt_is_a_stop(self):
-        """Review B1 (P1, P1b): the guard's refusal counters rising during the turn, and a SYN_SENT row to any
-        destination but the tunnel endpoint, are each a stop; counters that cannot be read leave (10) UNKNOWN."""
+        """Live run 2 (F1 a), superseding B1: the egress guard's refusal counters rising during the turn, and a
+        SYN_SENT row to any destination but the tunnel endpoint, are each a stop."""
         orig = self.guest.facts
 
         def facts():
-            report = orig()
             if self.guest.sent:
-                report['admission']['iptables'][0]['packets'] = 50
-            return report
+                self.guest.egress = 2
+            return orig()
         self.guest.facts = facts
         out = self.run_driver()
-        self.assertEqual((out['result'], self.step(out, 10)['verdict']), ('FAIL', 'FAIL'))
+        self.assertEqual((out['result'], self.step(out, 10)['verdict'], self.step(out, '12b')['verdict']),
+                         ('FAIL', 'FAIL', 'FAIL'))
         self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+        self.assertEqual(sorted(s.get('window') for s in out['stop_conditions'] if s['stop'] == guest.NATIVE_STOPS['direct']),
+                         ['preconditions to teardown', 'the turn'])           # (10)'s view and (12b)'s
         self.setUp()
         syn = tcc.tcp_row('020011AC:C352', '01010101:01BB', '02', 6004)       # SYN_SENT to 1.1.1.1:443
         self.guest.during = aq.snapshot(rows=[aq.TO_ENDPOINT, syn])
@@ -464,30 +504,78 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(self.step(self.run_driver(), 10)['verdict'], 'PASS')
 
     def test_the_guard_window_spans_start_up_to_teardown(self):
-        """Review R1 (D1): a rise between the create and step (3), during the provider's start-up, is a stop (12b);
-        N-a (D1b): the ip6tables rows count too."""
-        orig, seen = self.guest.facts, {'created': False}
+        """Live run 2 (F1): the container guard's refusals during the container's start-up attributed from its log:
+        19 name lookups to 172.17.0.1:53 (run 2's shape) are counted, not a stop; a refusal to another port of the
+        guest is the stop 'guest'; refusals beyond the logged lines are UNKNOWN; the egress guard of both families
+        judges a direct connection leaving the container."""
+        orig, done = self.guest.facts, {'start-up': False}
 
-        def facts():
-            report = orig()
-            seen['created'] = seen['created'] or self.guest.created
-            if seen['created']:              # counters only grow: from the provider's start-up on
-                report['admission']['iptables'][0]['packets'] = 40
-            return report
-        self.guest.facts = facts
+        def facts(*lines):
+            def call():
+                if self.guest.created and not done['start-up']:
+                    done['start-up'] = True
+                    self.guest.refuse(*lines)
+                return orig()
+            return call
+        self.guest.facts = facts(*[DNS] * 19)
         out = self.run_driver()
-        self.assertEqual((self.step(out, 10)['verdict'], self.step(out, '12b')['verdict']), ('PASS', 'FAIL'))
-        self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+        window = self.step(out, '12b')
+        self.assertEqual((window['verdict'], window['detail']['name_lookups'], window['detail']['container_rise']),
+                         ('PASS', 19, 19))
+        self.assertNotIn('a refused', ' '.join(self.stops(out)))
+        self.assertEqual(out['result'], 'PASS')
+        for line, verdict, stop in ((DNS.replace('DPT=53', 'DPT=22').replace('UDP', 'TCP'), 'FAIL', 'guest'),
+                                    (DNS.replace('DST=172.17.0.1', 'DST=172.17.0.3'), 'FAIL', 'guest')):
+            with self.subTest(line=line[-40:]):
+                self.setUp()
+                orig, done = self.guest.facts, {'start-up': False}
+                self.guest.facts = facts(DNS, line)
+                out = self.run_driver()
+                self.assertEqual(self.step(out, '12b')['verdict'], verdict)
+                self.assertIn(guest.NATIVE_STOPS[stop], self.stops(out))
+                self.assertNotIn('SPT', json.dumps(self.step(out, '12b')['detail']))   # proto, dst, port only
         self.setUp()
-        orig6 = self.guest.facts
+        orig, done = self.guest.facts, {'start-up': False}
 
-        def facts6():
-            report = orig6()
-            report['admission']['ip6tables'] = [{'target': 'REJECT', 'packets': 50 if self.guest.sent else 0}]
-            return report
-        self.guest.facts = facts6
+        def unlogged():
+            if self.guest.created and not done['start-up']:
+                done['start-up'] = True
+                self.guest.rejects += 5                          # beyond the LOG rule's rate limit: no lines
+            return orig()
+        self.guest.facts = unlogged
         out = self.run_driver()
-        self.assertEqual((self.step(out, 10)['verdict'], self.step(out, '12b')['verdict']), ('FAIL', 'FAIL'))
+        self.assertEqual((self.step(out, '12b')['verdict'], self.step(out, '12b')['detail']['unattributed']),
+                         ('UNKNOWN', 5))
+        self.setUp()
+        orig = self.guest.facts
+
+        def egress6():
+            if self.guest.created:
+                self.guest.egress6 = 1                           # N-a: the ip6tables rows count too
+            return orig()
+        self.guest.facts = egress6
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '12b')['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+
+    def test_the_guard_window_in_isolation(self):
+        snap = lambda c, log, e=0: {'container_rejects': c, 'log_count': len(log),
+                                    'log_lines': [guest.guard_log_line(l) for l in log], 'egress_rejects': e}
+        lookup = ('172.17.0.1', 53)
+        self.assertEqual(guest.native_guard_window(snap(1, [DNS]), snap(20, [DNS] * 20), lookup)[0], 'PASS')
+        self.assertEqual(guest.native_guard_window(snap(1, [DNS]), snap(1, [DNS], e=1), lookup)[2], ['direct'])
+        self.assertEqual(guest.native_guard_window(snap(None, []), snap(1, []), lookup)[0], 'UNKNOWN')
+        self.assertEqual(guest.native_guard_window(snap(1, []), snap(1, [], e=None), lookup)[0], 'UNKNOWN')
+        many = [DNS] * 30                                        # more new lines than the tail of 20 keeps
+        v, detail, _ = guest.native_guard_window(snap(0, []), dict(snap(30, many), log_lines=snap(30, many)['log_lines'][-20:]),
+                                                 lookup)
+        self.assertEqual((v, detail['unattributed'], detail['name_lookups']), ('UNKNOWN', 10, 20))
+        self.assertEqual(guest.guard_log_line(DNS), {'proto': 'UDP', 'dst': '172.17.0.1', 'dport': 53})
+        self.assertEqual(guest.guard_log_line('PROTO=ICMP DST=172.17.0.1 TYPE=8'),
+                         {'proto': 'ICMP', 'dst': '172.17.0.1', 'dport': None})
+        self.assertEqual(guest.native_egress_rejects({'admission': {'egress': {
+            'iptables': [{'target': 'REJECT', 'packets': 2}], 'ip6tables': [{'target': 'REJECT', 'packets': 1}]}}}), 3)
+        self.assertIsNone(guest.native_egress_rejects({'admission': {}}))
 
     def test_the_guard_counters_of_both_families(self):
         rows = lambda *packets: [{'target': 'REJECT', 'packets': n} for n in packets]
@@ -686,6 +774,10 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(guest.native_mask_verdict(0, occ())[0], 'PASS')
         self.assertEqual(guest.native_mask_verdict(2, occ(token=2))[0], 'PASS')
         self.assertEqual(guest.native_mask_verdict(5, occ(token=1))[0], 'UNKNOWN')        # review N3 (P9)
+        self.assertEqual(guest.native_mask_verdict(1, occ(marker=1))[0], 'PASS')          # live run 2 (F3)
+        self.assertEqual(guest.native_mask_verdict(2, occ(marker=1))[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(2, occ(marker=1, token=1))[0], 'PASS')
+        self.assertEqual(guest.native_mask_verdict(1, occ(marker=1, switch=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ(endpoint=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ(switch=1, token=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ())[0], 'UNKNOWN')

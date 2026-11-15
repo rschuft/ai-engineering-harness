@@ -986,9 +986,31 @@ codes; each own refusal on its own fact, no detail repeating the token; the inde
   in the driver's memory and is dropped; no record is written for that run.
 - N7: every Agent Server call of the run carries the token into the guest's API probe (in the probe's text on ssh's
   standard input), which redacts it from the answer and counts it; the token is held in memory until the run ends.
-- N9: the container guard's refusal counters are the REJECT rows of both families (iptables and ip6tables) summed,
-  from the preconditions (before the create) to the teardown; the profile declares no IPv6, so the ip6tables rows are
-  expected to stay at 0.
+- N9: the guards' refusal counters are the REJECT rows of both families (iptables and ip6tables) summed, from the
+  preconditions (before the create) to the teardown; the profile declares no IPv6, so the ip6tables rows are expected
+  to stay at 0.
+
+**The guards, after live run 2** (the engineering manager's rulings superseding B1/R1; run 2 itself stays FAIL under
+the old rule): "no direct connection leaves the container" is judged by the egress guard's REJECT counters
+(`admission.egress`, the FORWARD chain, both families): a rise from the preconditions to the teardown is a stop, an
+unread counter UNKNOWN. The container guard (INPUT: packets from a container to the guest itself) is attributed from
+its kernel log lines, of which the record keeps the protocol, the destination address and the port only (never the
+payload): its per-rule rows and parsed lines are kept at the preconditions, step (3) and the teardown. A refusal of UDP
+or TCP to the docker0 resolver on port 53 (`daemon.json` `dns 172.17.0.1`) is the designed name-lookup refusal,
+counted, not a stop; any other attributed refusal is a stop; refusals beyond the logged lines (the LOG rule's rate
+limit of 10 a minute after a burst of 20, or more than the 20 lines the facts reporter keeps) are UNKNOWN. Step (10)
+applies the same judgement over the turn. Run 2 saw 19 container-guard refusals during the container's start-up,
+before the provider existed; its record kept only the sum.
+
+**The provider's lazy start** (live run 2): at the pins the ACP server starts on the first prompt (openhands-sdk 1.60.1
+`LocalConversation._ensure_agent_ready`, "one-time lazy initialization on the first send_message() or run() call"), so
+step (3) records the sets and the guards before the prompt and step (4a) judges the start conditions once the
+provider runs (bounded by `NATIVE_START_CEILING_S`).
+
+**Literal markers** (live run 2): the SDK's own `<CUSTOM_SECRETS>` text says "You will see `<secret-hidden>` ..."
+(`context/prompts/sections/dynamic.py`), sent to the CLI with the first prompt and kept in the `SystemPromptEvent`;
+a marker the CLI's unmasked transcript holds existed before any masking, so (11b) attributes markers to token
+occurrences and to literal markers in the transcript.
 - N-c: an interrupt during the teardown's DELETE itself can leave the conversation; destroying the disposable guest
   removes it.
 - N-d: a create still starting when its presence is read after a lost answer may appear after a 404 DELETE;

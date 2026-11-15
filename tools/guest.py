@@ -16902,6 +16902,7 @@ NATIVE_ENCRYPTED_STATE_NOTE = (
     'disclosed: the pinned SDK persists the conversation\'s secrets encrypted under OH_SECRET_KEY in the conversation '
     'state (conversation/state.py with a cipher); the persisted-token search covers the token raw and in its encoded '
     'forms only, never an encrypted copy.')
+NATIVE_START_CEILING_S = 120         # (4a): the provider's lazy start after the prompt, seen within this
 NATIVE_QUALIFICATION_RULE = (
     'PASS iff every step passes: (1) the opted-in guest holds the forward to the provider tunnel, and the outer '
     'server holds no conversation and no conversation container (every call before the token is held sealed with a '
@@ -16912,8 +16913,9 @@ NATIVE_QUALIFICATION_RULE = (
     'the dispatcher\'s transport sealed with the token (marked sent before the call: a lost or refused answer still '
     'leads to the teardown and, when the conversation is present, the searches): 2xx, exactly one new container of the declared shape, the '
     'outer server listing exactly that conversation, the answer\'s acp_server claude-code and acp_model ' +
-    NATIVE_MODEL_MAIN + ' when it names them; (3) before the turn the sets are read and the provider started from an '
-    'empty per-conversation configuration directory (CLAUDE_CONFIG_DIR <persistence>' + NATIVE_CONFIG_SUFFIX + ' in '
+    NATIVE_MODEL_MAIN + ' when it names them; (3) before the turn the sets and the guards are read (the provider '
+    'starts lazily at the first prompt); (4a) once the prompt is sent, the provider seen within ' +
+    str(NATIVE_START_CEILING_S) + ' s, started from an empty per-conversation configuration directory (CLAUDE_CONFIG_DIR <persistence>' + NATIVE_CONFIG_SUFFIX + ' in '
     'every provider process, nothing in it older than the provider), with the four native names in its environment, '
     'no second authentication method and no CLAUDE_CODE_SIMPLE, HTTPS_PROXY the tunnel endpoint, the switches their '
     'declared spelling, and no ' + ', '.join(NATIVE_FORBIDDEN_FLAGS) + ' on any provider command line; (4) the fixed '
@@ -16929,7 +16931,7 @@ NATIVE_QUALIFICATION_RULE = (
     'and the mask markers ' + NATIVE_MASK_MARKER + ' in them are counted; (10) the tunnel\'s log of this run shows '
     'every target, at least one admitted connection to the origin, no target but the origin carried (a stop), no '
     'ClientHello of the origin refused and no line suppressed (refused targets listed), and the container guard\'s '
-    'counters are read before and after: a rise during the turn is a stop, unread is UNKNOWN; (10a) the '
+    'counters are judged as (12b) over the turn; (10a) the '
     'tunnel\'s census passes after the turn; (11) inside the container, the token (read there from the provider\'s '
     'environment, its fingerprint the held one) is searched in memory, raw and encoded, in the configuration '
     'directory and every file changed since the container started, with valid positive controls, and found nowhere; '
@@ -16937,7 +16939,8 @@ NATIVE_QUALIFICATION_RULE = (
     'the configuration directory; (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
     'model outside the record (' + ', '.join(NATIVE_MODELS_RECORDED) + '); (11b) the masking: no marker in the '
     'events, or every marker attributed, from the unmasked transcript, to a token occurrence only (a marker the '
-    'transcript cannot attribute (more markers than token occurrences) is UNKNOWN; one attributed to the tunnel '
+    'transcript cannot attribute (more markers than token and literal-marker occurrences) is UNKNOWN; one attributed '
+    'to the tunnel '
     'endpoint or a switch value is FAIL); (11c) '
     'the Owner\'s credentials (' + ', '.join(NATIVE_OWNER_CREDENTIALS) + ') absent by name (no credential-like '
     'environment name of ' + ', '.join(NATIVE_OWNER_ENV_NAMES) + ', and the files of step 11); (11d) only under the '
@@ -16945,9 +16948,12 @@ NATIVE_QUALIFICATION_RULE = (
     'the container\'s environments and changed files and every answer of this run, with positive controls (without '
     'the act: UNKNOWN, the reason recorded); (12) the '
     'conversation deleted, its container gone and no outer conversation left; (12a) after a sent prompt, the tunnel\'s '
-    'log of the whole run, read after the teardown, judged as (10); (12b) the container guard\'s refusal counters '
-    '(iptables and ip6tables) from the preconditions, before the create, to the teardown: a rise is a stop, unread '
-    'is UNKNOWN; (13) E-05.9\'s outbound search over the redacted record and every '
+    'log of the whole run, read after the teardown, judged as (10); (12b) from the preconditions, before the create, '
+    'to the teardown: the egress guard\'s refusal counters (iptables and ip6tables) rising is a direct connection '
+    'leaving the container (a stop); the container guard\'s new refusals are attributed from its log lines '
+    '(protocol, destination and port kept): UDP or TCP to the docker0 resolver on port 53 is the designed name-lookup '
+    'refusal (counted), any other is a stop, refusals beyond the logged lines are UNKNOWN; an unread counter is '
+    'UNKNOWN; (13) E-05.9\'s outbound search over the redacted record and every '
     'Agent Server answer and container output of this run finds the token nowhere, with its positive controls; the '
     'record is redacted once and written redacted, a redaction being a stop. FAIL when a step observes a violation; otherwise UNKNOWN when a step is UNKNOWN. STOP (FAIL; '
     'the later steps are skipped, the persisted-token search, the Owner-credential step, the teardown and the '
@@ -16967,7 +16973,9 @@ NATIVE_STOPS = {
     'redacted': 'a credential found in a recorded surface (the native token in the run\'s own text, redacted from the '
                 'record)',
     'direct': 'a direct connection attempt from the container (a connect to a destination other than the tunnel '
-              'endpoint, or the container guard\'s refusal counters rising during the turn)',
+              'endpoint, or the egress guard\'s refusal counters rising)',
+    'guest': 'a refused connection from the container to the guest other than the designed name lookup (the '
+             'container guard\'s log)',
     'other-target': 'the tunnel carried a target other than the origin (an unapproved destination)',
     'owner': 'a credential found in a recorded surface (an Owner credential, by name or by value)',
     'other-credential': 'a credential found in a recorded surface (another credential\'s shape in a process '
@@ -17279,7 +17287,9 @@ def native_start_verdict(data, names):
     directory per conversation and empty when the provider started, the environment's names, no --bare."""
     procs = data.get('processes') if isinstance(data.get('processes'), list) else []
     if not procs or not any(p.get('role') == 'adapter' for p in procs):
-        return 'UNKNOWN', {'the provider is running': False}
+        return 'UNKNOWN', {'checks': {'the provider is running': False},
+                           'processes': [{k: p.get(k) for k in ('pid', 'role', 'exe', 'argv', 'names')} for p in procs],
+                           'config_dirs': data.get('config_dirs'), 'config_exists': data.get('config_exists')}
     starts = [p.get('started') for p in procs if isinstance(p.get('started'), (int, float))]
     first = min(starts) if starts else None
     listing = data.get('config_listing') if isinstance(data.get('config_listing'), list) else []
@@ -17328,8 +17338,8 @@ def native_model_verdict(transcript):
 
 def native_mask_verdict(markers, transcript):
     """(verdict, detail) of the masking check (the engineering manager's ruling 3 of 2026-11-15): no marker in the
-    events PASS; markers attributed, from the unmasked transcript, to token occurrences only (no more markers than
-    token occurrences, review N3) PASS; to the tunnel endpoint or a switch value FAIL (the SDK's masking altered the
+    events PASS; markers attributed, from the unmasked transcript, to token occurrences or to literal markers it holds
+    (the SDK's own text; no more markers than those occurrences, review N3 and live run 2) PASS; to the tunnel endpoint or a switch value FAIL (the SDK's masking altered the
     agent's events); otherwise UNKNOWN."""
     occ = ((transcript or {}).get('occurrences') if isinstance(transcript, dict) else None) or {}
     detail = {'markers_in_events': markers, 'transcript_occurrences': occ}
@@ -17341,10 +17351,15 @@ def native_mask_verdict(markers, transcript):
         return 'UNKNOWN', dict(detail, reason='markers in the events and no transcript to attribute them')
     if occ.get('endpoint') or occ.get('switch'):
         return 'FAIL', dict(detail, reason='a marker stands for the tunnel endpoint or a switch value')
-    if isinstance(occ.get('token'), int) and markers <= occ['token']:
-        return 'PASS', dict(detail, reason='every marker attributable to a token occurrence only (markers <= the '
-                                           'transcript\'s token occurrences)')
-    return 'UNKNOWN', dict(detail, reason='the transcript\'s token occurrences do not account for every marker')
+    literal = occ.get('marker') if isinstance(occ.get('marker'), int) else 0
+    token = occ.get('token') if isinstance(occ.get('token'), int) else 0
+    if markers <= token + literal:
+        # live run 2: a marker the CLI's unmasked transcript holds existed before any masking (the SDK's own
+        # <CUSTOM_SECRETS> text says "You will see `<secret-hidden>` ...", context/prompts/sections/dynamic.py:152)
+        return 'PASS', dict(detail, reason='every marker attributed: to a token occurrence or to the literal marker '
+                                           'the unmasked transcript holds (markers <= token + literal occurrences)')
+    return 'UNKNOWN', dict(detail, reason='the transcript\'s token and literal-marker occurrences do not account for '
+                                          'every marker')
 
 
 def native_guard_rejects(report):
@@ -17362,6 +17377,89 @@ def native_guard_rejects(report):
         total += sum(r.get('packets', 0) for r in rows if isinstance(r, dict) and r.get('target') == 'REJECT'
                      and isinstance(r.get('packets', 0), int))
     return total
+
+
+def native_egress_rejects(report):
+    """The egress guard's refusal packets of both families (its REJECT rows, ``admission.egress``: the FORWARD chain,
+    traffic leaving the guest) from on-demand facts; None when the rows cannot be read (live run 2: "no direct
+    connection leaves the container (the egress guard's counters)")."""
+    adm = report.get('admission') if isinstance(report, dict) and isinstance(report.get('admission'), dict) else {}
+    egress = adm.get('egress') if isinstance(adm.get('egress'), dict) else None
+    return None if egress is None else native_guard_rejects({'admission': egress})
+
+
+GUARD_LOG_FIELDS = (('proto', re.compile(r'\bPROTO=(\S+)')), ('dst', re.compile(r'\bDST=(\S+)')),
+                    ('dport', re.compile(r'\bDPT=(\d+)')))
+
+
+def guard_log_line(line):
+    """One container-guard kernel log line as the record keeps it: protocol, destination address and port only (never
+    the payload, the source or the interface)."""
+    out = {}
+    for key, pattern in GUARD_LOG_FIELDS:
+        match = pattern.search(str(line))
+        out[key] = (int(match.group(1)) if key == 'dport' else match.group(1)) if match else None
+    return out
+
+
+def native_guard_snapshot(report):
+    """What the record keeps of one facts report's guards: the container guard's (INPUT) per-rule rows and REJECT sum,
+    its kernel log's line count and its lines parsed (guard_log_line; the facts reporter keeps the last 20), and the
+    egress guard's REJECT sum."""
+    adm = report.get('admission') if isinstance(report, dict) and isinstance(report.get('admission'), dict) else {}
+    rows = {family: [{k: r.get(k) for k in ('target', 'packets')} for r in adm[family] if isinstance(r, dict)]
+            if isinstance(adm.get(family), list) else None for family in ('iptables', 'ip6tables')}
+    log = adm.get('log') if isinstance(adm.get('log'), dict) else {}
+    tail = log.get('tail') if isinstance(log.get('tail'), list) else None
+    return {'container_rejects': native_guard_rejects(report), 'container_rows': rows,
+            'log_count': log.get('count') if isinstance(log.get('count'), int) else None,
+            'log_lines': None if tail is None else [guard_log_line(line) for line in tail],
+            'egress_rejects': native_egress_rejects(report)}
+
+
+def native_guard_window(start, end, name_lookup):
+    """(verdict, detail, stops) of the guards between two snapshots (live run 2; the engineering manager's rulings
+    superseding B1/R1): the egress guard's refusals rising is a direct connection leaving the container (FAIL and the
+    stop 'direct'); the container guard's (INPUT) new refusals are attributed from its new log lines: UDP or TCP to
+    NAME_LOOKUP (the docker0 resolver address, port 53) is the designed name-lookup refusal (counted, not a stop),
+    any other attributed refusal is FAIL and the stop 'guest'; refusals beyond the logged lines (the LOG rule's rate
+    limit, or a tail of 20) are UNKNOWN; an unread counter is UNKNOWN."""
+    start, end = start or {}, end or {}
+    egress = {'start': start.get('egress_rejects'), 'end': end.get('egress_rejects')}
+    container = {'start': start.get('container_rejects'), 'end': end.get('container_rejects')}
+    detail = {'egress_rejects': egress, 'container_rejects': container, 'name_lookup': list(name_lookup)}
+    stops, unknown = [], []
+    if all(isinstance(v, int) for v in egress.values()):
+        if egress['end'] > egress['start']:
+            stops.append('direct')
+    else:
+        unknown.append('the egress guard\'s counters were not read')
+    rise = container['end'] - container['start'] if all(isinstance(v, int) for v in container.values()) else None
+    counts = (start.get('log_count'), end.get('log_count'))
+    lines = end.get('log_lines')
+    if rise is None:
+        unknown.append('the container guard\'s counters were not read')
+        new = []
+    elif rise <= 0:
+        new = []
+    elif not all(isinstance(c, int) for c in counts) or not isinstance(lines, list):
+        unknown.append('the container guard\'s log was not read')
+        new = []
+    else:
+        logged = max(counts[1] - counts[0], 0)
+        new = lines[-logged:] if 0 < logged <= len(lines) else (lines if logged else [])
+    lookups = [l for l in new if l.get('proto') in ('UDP', 'TCP') and l.get('dst') == name_lookup[0]
+               and l.get('dport') == name_lookup[1]]
+    others = [l for l in new if l not in lookups]
+    unattributed = max(rise - len(new), 0) if isinstance(rise, int) else None
+    detail.update(container_rise=rise, name_lookups=len(lookups), others=others[:50], unattributed=unattributed)
+    if others:
+        stops.append('guest')
+    if unattributed:
+        unknown.append(f'{unattributed} container-guard refusal(s) beyond the logged lines')
+    detail['unknown'] = unknown
+    verdict = 'FAIL' if stops else 'UNKNOWN' if unknown else 'PASS'
+    return verdict, detail, stops
 
 
 def read_owner_values(stream, act):
@@ -17390,7 +17488,7 @@ def read_owner_values(stream, act):
 
 def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_values=None, owner_value_act=None,
                              channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
-                             turn_ceiling_s=ACP_TURN_CEILING_S):
+                             turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None):
     """native-qualification (plan leaf E-05.11; PREPARED, NOT RUN) under NATIVE_QUALIFICATION_RULE, fixed before any
     run. ``owner_act`` names the Owner's act that covers reading and delivering the native token (OA-31 (b), (f));
     the token is read by the dispatcher's read of its one entry, held in memory, sealed into every API call and never
@@ -17433,6 +17531,9 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     forward = forward or ForwardControl(ctx, name, None)
     tunnel = tunnel or NativeTunnelView()
     wait = wait or wait_until
+    start_wait = start_wait or wait_until
+    # the designed name lookup the container guard refuses: the docker0 resolver (daemon.json dns) on port 53
+    name_lookup = (((inference_config(profile).get('daemon_json') or {}).get('dns') or [cs.TUNNEL_ADDRESS])[0], 53)
     cid, hex_id = NATIVE_QUALIFICATION_CONVERSATION_ID, NATIVE_QUALIFICATION_CONVERSATION_ID.replace('-', '')
     collector = (Path(ctx.repo) / 'integrations' / 'dispatch' / 'conversation_containment.py').read_text(
         encoding='utf-8')
@@ -17602,11 +17703,12 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         if all(checks.values()):
             count = call('GET', '/api/conversations/count')
             report = facts()
-            memo['rejects_start'] = native_guard_rejects(report)       # review R1: the window's baseline
+            memo['guard_start'] = native_guard_snapshot(report)        # the window's baseline (live run 2)
             checks['the outer server holds no conversation'] = ok_status(count) and count.get('body') == 0
             checks['no conversation container'] = report.get('containers') == []
         memo['ready'] = len(checks) == 4 and all(checks.values())
-        return ('PASS' if memo['ready'] else 'FAIL'), {'checks': checks, 'owner_act': owner_act}
+        return ('PASS' if memo['ready'] else 'FAIL'), {'checks': checks, 'owner_act': owner_act,
+                                                       'guards': memo.get('guard_start')}
 
     def token_step():
         nonlocal held
@@ -17695,9 +17797,21 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     def before_step():
         report = facts()
         memo['before'] = sets_now(report)
-        memo['rejects_before'] = native_guard_rejects(report)
-        verdict, detail = native_start_verdict(attempt_probe('start'), cs.NATIVE_NAMES)
-        detail.update(sets=memo['before'], container_guard_rejects=memo['rejects_before'])
+        memo['guard_before'] = native_guard_snapshot(report)
+        probe = attempt_probe('start')
+        running = any(p.get('role') == 'adapter' for p in probe.get('processes') or [] if isinstance(p, dict))
+        # live run 2: at the pins the provider starts at the first prompt (openhands-sdk 1.60.1
+        # local_conversation.py:1689 _ensure_agent_ready, "one-time lazy initialization on the first send_message()
+        # or run() call"); its start conditions are judged at (4a)
+        return 'PASS', {'sets': memo['before'], 'guards': memo['guard_before'], 'provider_running': running,
+                        'note': 'the provider starts lazily at the first prompt; its start is judged at (4a)'}
+
+    def start_step():
+        last, met = start_wait(lambda: attempt_probe('start'),
+                               lambda d: any(p.get('role') == 'adapter' for p in (d or {}).get('processes') or []
+                                             if isinstance(p, dict)), NATIVE_START_CEILING_S)
+        verdict, detail = native_start_verdict(last or {}, cs.NATIVE_NAMES)
+        detail['seen_within_ceiling'] = met
         return verdict, detail
 
     def prompt_step():
@@ -17777,11 +17891,11 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         after = sets_now(report)
         sets = cc.sets_verdict(memo['before'], after, conversation_id=hex_id)
         memo['children'] = sets['delegation']['children_route']
-        memo['rejects_after'] = native_guard_rejects(report)
+        memo['guard_after'] = native_guard_snapshot(report)
         if sets['delegation']['outer_new']:
             stop('an outer-server conversation that was not expected', observed=sets['delegation']['outer_new'])
         detail.update(sets={'after': after, 'checks': sets['checks'], 'delegation': sets['delegation']},
-                      container_guard_rejects={'before': memo.get('rejects_before'), 'after': memo['rejects_after']})
+                      guards=memo['guard_after'])
         if stops or _failed_checks(view) or _failed_checks(host) or _failed_checks(net) or not sets['ok']:
             return 'FAIL', detail
         return ('UNKNOWN' if host is None else 'PASS'), detail
@@ -17826,27 +17940,26 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
             stop(NATIVE_STOPS['hello'], refused=detail['hello_refused'])
         if detail['other_targets']:
             stop(NATIVE_STOPS['other-target'], targets=detail['other_targets'])
-        rejects = {'before': memo.get('rejects_before'), 'after': memo.get('rejects_after')}
-        detail['container_guard_rejects'] = rejects
         detail['log'] = {'file': name_, 'from_line': memo['log_mark']}
-        if all(isinstance(v, int) for v in rejects.values()) and rejects['after'] > rejects['before']:
-            # review B1: the container guard refused a direct connection during the turn window
-            stop(NATIVE_STOPS['direct'], container_guard_rejects=rejects)
+        _, guards, kinds = native_guard_window(memo.get('guard_before'), memo.get('guard_after'), name_lookup)
+        detail['guards_during_the_turn'] = guards
+        for kind in kinds:
+            stop(NATIVE_STOPS[kind], guards=guards, window='the turn')
+        if kinds:
             return 'FAIL', detail
-        if verdict == 'PASS' and not all(isinstance(v, int) for v in rejects.values()):
+        if verdict == 'PASS' and guards['unknown']:
             verdict = 'UNKNOWN'
         return verdict, detail
 
     def guard_window_step():
-        """Review R1: the container guard's refusal counters from the preconditions (before the create) to the
-        teardown, so the provider's start-up is inside the window; a rise is a direct connection attempt."""
-        rejects = {'start': memo.get('rejects_start'), 'end': memo.get('rejects_end')}
-        if not all(isinstance(v, int) for v in rejects.values()):
-            return 'UNKNOWN', {'container_guard_rejects': rejects, 'reason': 'a counter could not be read'}
-        if rejects['end'] > rejects['start']:
-            stop(NATIVE_STOPS['direct'], container_guard_rejects=rejects, window='preconditions to teardown')
-            return 'FAIL', {'container_guard_rejects': rejects}
-        return 'PASS', {'container_guard_rejects': rejects, 'families': 'iptables and ip6tables'}
+        """The guards from the preconditions (before the create) to the teardown (live run 2; the engineering
+        manager's rulings superseding B1/R1): the egress guard judges a direct connection leaving the container; the
+        container guard's refusals are attributed from its log."""
+        verdict, detail, kinds = native_guard_window(memo.get('guard_start'), memo.get('guard_end'), name_lookup)
+        for kind in kinds:
+            stop(NATIVE_STOPS[kind], guards=detail, window='preconditions to teardown')
+        detail.update(start=memo.get('guard_start'), end=memo.get('guard_end'))
+        return verdict, detail
 
     def tunnel_whole_run_step():
         """Review S6: the tunnel's log of the whole run, read after the teardown, judged by the same rule."""
@@ -17954,7 +18067,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     def teardown_step():
         answer = call('DELETE', f'/api/conversations/{cid}')
         report = facts()
-        memo['rejects_end'] = native_guard_rejects(report)             # review R1: the window's end
+        memo['guard_end'] = native_guard_snapshot(report)              # the window's end (live run 2)
         left = ours(report)
         count = call('GET', '/api/conversations/count')
         gone = ok_status(answer) or (answer.get('status') == 404 and not memo.get('created'))
@@ -17975,6 +18088,8 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         run('(3) before the turn: the sets, and the provider\'s start from an empty configuration directory',
             before_step, needs=('created',))
         run('(4) the fixed prompt sent', prompt_step, needs=('created', 'before'))
+        run('(4a) the provider\'s start at its lazy start: the empty configuration directory, the environment, no '
+            '--bare', start_step, needs=('sent',))
         run('(5) containment while the turn runs: the container view, its connections, the guest-root view',
             during_step, needs=('sent',))
         run('(6) the job contract in the qualification conversation (the native token\'s name by shape)',
