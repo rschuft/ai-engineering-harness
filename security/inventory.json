@@ -1572,7 +1572,7 @@
       "owner_only": false,
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-unenumerated", "conversation-container"],
-      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slice A1, built offline, not yet verified live). No dispatcher code sends this call yet (slice A2). tools/guest.py probes keep their own API channel.",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slices A1 and A2, built offline, not yet verified live). integrations/dispatch/attempt_run.py sends it in the attempt run (slice A2; run_attempt and resume_result). tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": [
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.5",
@@ -1588,7 +1588,7 @@
       "owner_only": false,
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-unenumerated", "conversation-container", "guest-exchange"],
-      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slice A1, built offline, not yet verified live). No dispatcher code sends this call yet (slice A2). tools/guest.py probes keep their own API channel.",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slices A1 and A2, built offline, not yet verified live). integrations/dispatch/attempt_run.py sends it in the attempt run (slice A2; run_attempt and resume_result). tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": [
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.5",
