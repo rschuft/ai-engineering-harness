@@ -303,7 +303,7 @@ class FakeAgentServer(http.server.ThreadingHTTPServer):
                     return self.reply(cc.CREATE_ANSWER['status'], created)
                 if self.command == 'POST' and self.path.endswith('/bash/execute_bash_command'):
                     return self.reply(200, {'command': body.get('command'), 'exit_code': 0,
-                                            'stdout': server.stdout, 'stderr': ''})
+                                            'stdout': server.stdout, 'stderr': server.stderr})
                 return self.reply(404, {'detail': 'Not Found'})
 
             def do_GET(self):
@@ -313,7 +313,7 @@ class FakeAgentServer(http.server.ThreadingHTTPServer):
                 self.handle_any(json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0)))))
 
         super().__init__(('127.0.0.1', 0), Handler)
-        self.seen, self.stdout = [], ''
+        self.seen, self.stdout, self.stderr = [], '', ''
 
 
 class FakeSsh:
@@ -686,6 +686,32 @@ class ExchangeDeliveryTests(unittest.TestCase):
                     self.assertIsNone(answer['body']['stdout'])   # withheld: its frame could not be cut out
                 if code == 'NO_PART':                              # D1 review S5: no marker, kept whole
                     self.assertEqual(answer['body']['stdout'], stdout)
+
+    def test_a_frame_in_another_field_refuses_the_delivery(self):
+        """Review A4 N-c (the reviewer's probe_s5): the frame is read from stdout only; a frame marker in any other
+        field refuses the delivery and withholds that field (and stdout's frame, when it has one)."""
+        self.server.stderr = framed(self.PAYLOAD)
+        try:
+            answer = self.run_command('Ran 3 tests\n' + framed(self.PAYLOAD) + '\n')
+        finally:
+            self.server.stderr = ''
+        self.assertEqual(answer['delivered'], {'error': 'PART_ELSEWHERE'})
+        self.assertIsNone(answer['body']['stderr'])
+        self.assertIsNone(answer['body']['stdout'])
+        self.assertEqual(self.files(), [])
+        self.assertNotIn(self.PAYLOAD.hex()[:64], self.host_side(answer))
+
+    def test_the_file_appears_whole_and_a_leftover_partial_is_refused(self):
+        """Review A4 N-e: the delivery writes <name>.partial and links it to <name>; no .partial remains, and a
+        leftover .partial refuses the delivery (never completed, never pulled)."""
+        answer = self.run_command(framed(self.PAYLOAD))
+        self.assertEqual(answer['delivered']['size'], len(self.PAYLOAD))
+        self.assertEqual(self.files(), ['work-1.bundle'])
+        (self.exchange / 'work-2.bundle.partial').write_bytes(b'half')
+        again = self.run_command(framed(self.PAYLOAD), name='work-2.bundle')
+        self.assertEqual(again['delivered'], {'error': 'PARTIAL_EXISTS'})
+        self.assertEqual(self.files(), ['work-1.bundle', 'work-2.bundle.partial'])
+        self.assertEqual((self.exchange / 'work-2.bundle.partial').read_bytes(), b'half')
 
     def test_a_frame_with_crlf_lines_is_delivered(self):
         """D1 review S5: a frame whose lines end in CRLF is taken."""

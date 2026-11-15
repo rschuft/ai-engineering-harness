@@ -273,6 +273,13 @@ REFUSALS = {
                             'sent; the attempt is ended as a provider interruption',
     'TURN_NOT_FINISHED': 'the conversation did not finish: no result step is resumed',
     'RESULT_UNANSWERED': 'the result command was not answered: its step is resumed (resume_result), never assumed',
+    # D1 slice A4 (the review's delta check)
+    'RESULT_PULL_FAILED': 'the exchange pull of the result failed (a refusal of the guest command or the transfer): its '
+                          'step is resumed',
+    'RESULT_STAGED_UNVERIFIED': 'a staged bundle or verify repository is not the one the verified pull recorded, or '
+                                'the intake was recorded without it: nothing is reused',
+    'RESULT_RECEIPT_CONFLICT': 'a result-step receipt of the attempt holds another delivery, pull or intake',
+    'RUNTIME_NOT_RUNNING': 'the runtime of the attempt is not running: RESULT cannot run again',
     'RESULT_COMMAND_FAILED': 'the result command did not report a commit, its tests and a bundle delivered into the '
                              'exchange as printed',
     'RESULT_NOT_VERIFIED': 'the pulled bundle did not pass the retained verifier (decision 0014 row R6) at the '

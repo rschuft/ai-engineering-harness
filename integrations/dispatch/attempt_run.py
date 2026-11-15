@@ -57,6 +57,17 @@ second process runs an attempt of the same work item); the workspace's own ``.gi
 apply to RESULT's ``git add -A`` (an ignored file is not committed; an attribute may convert line endings), which
 the agent controls and the report must state as the design's accepted behaviour (review N1).
 
+Review A4 (the delta check): the protected directories are compared folded too; RESULT excludes, before ``add -A``,
+every path git would refuse (``.git`` variants, ``git~1``) or that folds to a forbidden name, by pathspec; the
+excluded list is printed bounded (count, sha256 of the whole list, the first EXCLUDED_SHOWN entries); each blob's
+size is read from its header before it is inflated; the result step records its delivery, its verified pull and its
+intake as receipts (``dispatch/attempt/<id>/delivery``, ``/pull``, ``/intake``), so that ``resume_result`` reuses a
+verified pull and resumes the steps after an intake on their own; a turn settled from the events that stays idle with
+no agent event to the ceiling is ended as ``run-not-started``. Residuals stated: a name with an ignorable code point (a
+zero-width space) is not folded away (git's own protection covers ``.git`` only); and a process the agent left
+running can write into RESULT's standard output (a forged marker is a repeated one, refused; a forged excluded list
+misreports only what was left out), so the host checks the tree itself and never trusts the printed list.
+
 Standard library only; the base is read through the shared repository-access module (Dulwich, decision 0014), and
 nothing here launches git on the host.
 """
@@ -119,6 +130,8 @@ MAX_HISTORY = 10000            # commits walked to find the design commit in the
 MAX_FILES = 5000               # entries of a seeded or a result tree
 MAX_DEPTH = 64                 # directory depth of a seeded or a result tree (review S1)
 MAX_INFLATED = 64 << 20        # the result tree's blobs, inflated, in all (review N4)
+EXCLUDED_SHOWN = 100           # the excluded paths RESULT lists; the rest only in its count and digest (A4 N-b)
+EXCLUSION_REASONS = ('forbidden-name', 'git-refused', 'protected-dir')
 BASE_BRANCH = 'refs/heads/main'
 HEX40 = re.compile(r'[0-9a-f]{40}')
 ATTEMPT_ID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')   # store.attempt_id_for
@@ -172,8 +185,20 @@ def folded(component: str) -> str:
     return unicodedata.normalize('NFC', component).casefold().rstrip(' .')
 
 
+def git_refused(name: str) -> bool:
+    """A folded component git refuses (or treats as its own directory) on some file system: .git, its NTFS 8.3
+    short name git~1, and .git with an NTFS stream suffix (review A4 N-a). Residual: a name with an ignorable code
+    point (a zero-width space) is not folded away; git's own HFS protection covers .git only."""
+    return name == '.git' or name == 'git~1' or name.startswith('.git:')
+
+
 def forbidden_component(path: str, names=FORBIDDEN_NAMES) -> bool:
-    return any(folded(part) in names for part in path.split('/'))
+    return any(folded(part) in names or ('.git' in names and git_refused(folded(part))) for part in path.split('/'))
+
+
+def protected_path(path: str) -> bool:
+    """Whether PATH lies under a protected directory, its first component compared folded (review A4 D1)."""
+    return folded(path.split('/')[0]) in PROTECTED_DIRS
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +236,7 @@ class Base:
     @cached_property
     def protected(self) -> frozenset:
         """(path, mode, blob id) of every base file under PROTECTED_DIRS."""
-        return frozenset((p, m, object_id('blob', d)) for p, m, d in self.files if p.split('/')[0] in PROTECTED_DIRS)
+        return frozenset((p, m, object_id('blob', d)) for p, m, d in self.files if protected_path(p))
 
     def summary(self) -> dict:
         return {'repository': self.repository, 'ref': self.ref, 'commit': self.commit,
@@ -397,7 +422,18 @@ def entries(text, at):
 
 
 def folded(part):
-    return unicodedata.normalize("NFC", part.decode("utf-8", "surrogateescape")).casefold().rstrip(" .")
+    if isinstance(part, bytes):
+        part = part.decode("utf-8", "surrogateescape")
+    return unicodedata.normalize("NFC", part).casefold().rstrip(" .")
+
+
+def refused(name):
+    name = folded(name)
+    if name in p["forbidden"]:
+        return "forbidden-name"
+    if name == ".git" or name == "git~1" or name.startswith(".git:"):
+        return "git-refused"
+    return None
 
 
 bundle = os.path.join(root, "base.bundle")
@@ -411,17 +447,27 @@ git("fetch", "fetch", "-q", "--no-tags", bundle, p["base_ref"] + ":refs/aieh/bas
 if git("base", "rev-parse", "--verify", "refs/aieh/base^{commit}") != p["base"]:
     stop("base")
 git("read-tree", "read-tree", p["base"])
-git("add", "add", "-A")
+excluded, specs = [], [b":(top)"]
+for top, dirs, files in os.walk(work):
+    rel = os.path.relpath(top, work).replace(os.sep, "/")
+    for name in sorted(dirs) + sorted(files):
+        reason = refused(name)
+        if reason:
+            path = name if rel == "." else rel + "/" + name
+            excluded.append({"path": path, "reason": reason})
+            specs.append(b":(top,exclude,literal)" + os.fsencode(path))
+    dirs[:] = [d for d in dirs if not refused(d)]
+git("add", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", data=b"\0".join(specs) + b"\0")
 index = entries(git("exclude", "ls-files", "-s", "-z", raw=True), 1)
 based = entries(git("exclude", "ls-tree", "-r", "-z", "--full-tree", p["base"], raw=True), 2)
-drop, put, excluded = [], [], []
+drop, put = [], []
 for path in sorted(set(index) | set(based)):
     parts = path.split(b"/")
     if any(folded(part) in p["forbidden"] for part in parts):
         if path in index:
             drop.append(path)
             excluded.append({"path": path.decode("utf-8", "replace"), "reason": "forbidden-name"})
-    elif parts[0].decode("utf-8", "replace") in p["protected"] and index.get(path) != based.get(path):
+    elif folded(parts[0]) in p["protected"] and index.get(path) != based.get(path):
         if path in index:
             drop.append(path)
         if path in based:
@@ -447,7 +493,9 @@ git("export", "checkout-index", "-a", "-f", over=xenv)
 say("base", p["base"])
 say("tree", tree)
 say("commit", commit)
-say("excluded", json.dumps(excluded, sort_keys=True).encode("utf-8").hex())
+listed = json.dumps(excluded, sort_keys=True).encode("utf-8")
+say("excluded", len(excluded), hashlib.sha256(listed).hexdigest(),
+    json.dumps(excluded[:p["excluded_shown"]], sort_keys=True).encode("utf-8").hex())
 say("bundle", digest, len(data))
 try:
     run = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=export,
@@ -514,7 +562,8 @@ def build_result(base: Base, *, attempt_id: str, message: str, when: int, delive
               'name': BOT_NAME, 'email': BOT_EMAIL, 'date': f'{when} +0000', 'message': message,
               'test_timeout': TEST_TIMEOUT_S, 'output_limit': TEST_OUTPUT_BYTES, 'part': PART,
               'part_begin': PART_BEGIN, 'part_end': PART_END, 'frame': deliver,
-              'forbidden': sorted(FORBIDDEN_NAMES), 'protected': list(PROTECTED_DIRS)}
+              'forbidden': sorted(FORBIDDEN_NAMES), 'protected': list(PROTECTED_DIRS),
+              'excluded_shown': EXCLUDED_SHOWN}
     payload = json.dumps(params, sort_keys=True, separators=(',', ':')).encode('utf-8').hex()
     made = {'command': f"printf %s '{payload}' | python -c '{RESULT_SCRIPT}' '{workspace_of(base.repository)}'",
             'timeout': RESULT_TIMEOUT_S}
@@ -795,9 +844,10 @@ def _command(client, conversation_id: str, command, code: str) -> Mapping:
 # The result: the command's answer, then the host's intake of the pulled bundle
 
 LINE_RE = re.compile(r'AIEH-RESULT (base|tree|commit) ([0-9a-f]{40})|AIEH-RESULT tests (-?[0-9]{1,5}|timeout)'
-                     r'|AIEH-RESULT (test-output|excluded) ([0-9a-f]*)|AIEH-RESULT (done)'
+                     r'|AIEH-RESULT (test-output) ([0-9a-f]*)|AIEH-RESULT (done)'
                      r'|AIEH-RESULT failed ([a-z-]{1,32}) ([0-9a-f]*)|AIEH-RESULT bundle ([0-9a-f]{64}) ([0-9]{1,12})'
-                     r'|AIEH-EXCHANGE-DELIVERED bundle ([0-9a-f]{64}) ([0-9]{1,12})')
+                     r'|AIEH-EXCHANGE-DELIVERED bundle ([0-9a-f]{64}) ([0-9]{1,12})'
+                     r'|AIEH-RESULT excluded ([0-9]{1,9}) ([0-9a-f]{64}) ([0-9a-f]*)')
 RESULT_MARKERS = ('base', 'tree', 'commit', 'excluded', 'bundle', 'tests', 'test-output', 'done')
 
 
@@ -831,8 +881,10 @@ def parse_result(answer, *, delivered_expected: bool = True) -> dict:
             name, value = 'done', 'done'
         elif match.group(9):
             name, value = 'bundle', (match.group(9), int(match.group(10)))
-        else:
+        elif match.group(11):
             name, value = 'delivered', (match.group(11), int(match.group(12)))
+        else:
+            name, value = 'excluded', (int(match.group(13)), match.group(14), match.group(15))
         if name in found:
             raise _refused('RESULT_COMMAND_FAILED', f'the result output repeats {name}')
         found[name] = value
@@ -849,12 +901,13 @@ def parse_result(answer, *, delivered_expected: bool = True) -> dict:
         raise _refused('RESULT_COMMAND_FAILED', 'the bundle was not delivered into the exchange as printed before '
                        'the tests ran', delivered=di._json_value(delivered))
     output = bytes.fromhex(found['test-output'])
-    excluded_raw = bytes.fromhex(found['excluded'])
+    count, listed_sha256, shown = found['excluded']
+    excluded_raw = bytes.fromhex(shown)
     try:
         excluded = json.loads(excluded_raw.decode('utf-8'))
-        if not isinstance(excluded, list) or not all(isinstance(e, dict) and set(e) == {'path', 'reason'}
-                                                     and e['reason'] in ('forbidden-name', 'protected-dir')
-                                                     and isinstance(e['path'], str) for e in excluded):
+        if not isinstance(excluded, list) or len(excluded) != min(count, EXCLUDED_SHOWN) \
+                or not all(isinstance(e, dict) and set(e) == {'path', 'reason'} and e['reason'] in EXCLUSION_REASONS
+                           and isinstance(e['path'], str) for e in excluded):
             raise ValueError
     except ValueError:
         raise _refused('RESULT_COMMAND_FAILED', 'the excluded paths are not the command\'s list') from None
@@ -862,7 +915,9 @@ def parse_result(answer, *, delivered_expected: bool = True) -> dict:
                'bundle': {'sha256': found['bundle'][0], 'size': found['bundle'][1]},
                'tests': {'status': found['tests'], 'output': _data_text(output.decode('utf-8', 'replace')),
                          'output_digest': _digest(output), 'command': TEST_COMMAND, 'label': TEST_LABEL},
-               'excluded': excluded, 'excluded_digest': _digest(excluded_raw)}
+               'excluded': excluded,
+               'excluded_digest': {'count': count, 'sha256': listed_sha256, 'shown': len(excluded),
+                                   'shownSha256': hashlib.sha256(excluded_raw).hexdigest()}}
     if delivered_expected:
         printed['delivered'] = {'name': delivered.get('name'), 'sha256': delivered['sha256'],
                                 'size': delivered['size']}
@@ -915,7 +970,7 @@ class VerifiedResult:
                 'files': self.files, 'inflatedBytes': self.inflated_bytes, 'resumed': self.resumed,
                 'tests': {'status': self.tests.get('status'), 'command': self.tests.get('command'),
                           'label': self.tests.get('label'), 'output': dict(self.tests.get('output_digest') or {})},
-                'excluded': {'count': len(self.excluded), **dict(self.excluded_digest)},
+                'excluded': dict(self.excluded_digest),
                 'exclusionRule': EXCLUSION_RULE}
 
 
@@ -986,7 +1041,7 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
         except TreeBound as bound:
             raise _tree_refused([{'path': '', 'reason': bound.reason}], f'is {bound.reason}') from None
         problems = tree_problems(entries)
-        protected = frozenset((p, m, o) for p, m, o in entries if p.split('/')[0] in PROTECTED_DIRS)
+        protected = frozenset((p, m, o) for p, m, o in entries if protected_path(p))
         if protected != base.protected:
             problems += [{'path': p, 'reason': 'protected-changed'} for p in
                          sorted({e[0] for e in protected ^ base.protected})]
@@ -994,12 +1049,18 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
             raise _tree_refused(problems, f'holds {len(problems)} entr(ies) outside its policy')
         inflated = 0
         for _, _, oid in entries:
-            blob = opened.read(oid)
-            if blob is None or blob[1] != 'blob':
-                raise _refused('RESULT_NOT_VERIFIED', f'the result tree names {oid}, not a blob of the repository')
-            inflated += len(blob[2])
-            if inflated > MAX_INFLATED:
+            size = object_size(verified['verify_repo'], oid)    # from its header, before it is read (A4 N-d)
+            if size is None:
+                raise _refused('RESULT_NOT_VERIFIED', f'the result tree names {oid}, which the repository lacks')
+            if inflated + size > MAX_INFLATED:
                 raise _tree_refused([{'path': '', 'reason': 'too-large'}], f'inflates beyond {MAX_INFLATED} bytes')
+            try:
+                blob = opened.read(oid)
+            except MemoryError:
+                raise _tree_refused([{'path': '', 'reason': 'too-large'}], 'does not fit in memory') from None
+            if blob is None or blob[1] != 'blob' or len(blob[2]) != size:
+                raise _refused('RESULT_NOT_VERIFIED', f'the result tree names {oid}, not a blob of its header size')
+            inflated += size
     except DispatchRefused:
         raise
     except (ra.RepositoryError, ValueError, OSError, TypeError, RecursionError) as exc:
@@ -1014,6 +1075,83 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
                           verify_repo=str(verified['verify_repo']), files=len(entries), inflated_bytes=inflated,
                           tests=printed['tests'], excluded=tuple(printed['excluded']),
                           excluded_digest=printed['excluded_digest'], resumed=resumed)
+
+
+def _varint(data: bytes, at: int) -> tuple[int, int]:
+    """A delta header's size (7 bits a byte, least significant first) at AT: (value, next position)."""
+    value = shift = 0
+    while True:
+        byte = data[at]
+        value |= (byte & 0x7f) << shift
+        at, shift = at + 1, shift + 7
+        if not byte & 0x80:
+            return value, at
+
+
+def _pack_offset(index: Path, oid: bytes) -> int | None:
+    """OID's offset in the pack of the version 2 pack index INDEX, or None."""
+    with open(index, 'rb') as handle:
+        head = handle.read(8 + 256 * 4)
+        if head[:8] != b'\xfftOc\x00\x00\x00\x02':
+            raise ValueError(f'{index.name} is not a version 2 pack index')
+        fanout = [int.from_bytes(head[8 + 4 * n:12 + 4 * n], 'big') for n in range(256)]
+        total = fanout[255]
+        low = fanout[oid[0] - 1] if oid[0] else 0
+        high = fanout[oid[0]]
+        handle.seek(8 + 256 * 4 + 20 * low)
+        names = handle.read(20 * (high - low))
+        for n in range(high - low):
+            if names[20 * n:20 * n + 20] == oid:
+                position = low + n
+                handle.seek(8 + 256 * 4 + 24 * total + 4 * position)
+                offset = int.from_bytes(handle.read(4), 'big')
+                if offset & 0x80000000:
+                    handle.seek(8 + 256 * 4 + 28 * total + 8 * (offset & 0x7fffffff))
+                    offset = int.from_bytes(handle.read(8), 'big')
+                return offset
+    return None
+
+
+def object_size(git_dir, oid: str) -> int | None:
+    """The inflated size of object OID in the repository GIT_DIR, read from its header without inflating the object:
+    a loose object's ``<type> <size>`` header (the stream's first bytes), or a packed object's entry header, or for a
+    delta its target size (the delta stream's first bytes). None when the repository lacks it (review A4 N-d)."""
+    import zlib
+    objects = Path(git_dir) / 'objects'
+    loose = objects / oid[:2] / oid[2:]
+    if loose.is_file():
+        with open(loose, 'rb') as handle:
+            head = zlib.decompressobj().decompress(handle.read(4096), 64)
+        kind, _, rest = head.partition(b' ')
+        return int(rest.split(b'\0', 1)[0]) if b'\0' in rest else None
+    binary = bytes.fromhex(oid)
+    for index in sorted((objects / 'pack').glob('*.idx')):
+        offset = _pack_offset(index, binary)
+        if offset is None:
+            continue
+        with open(index.with_suffix('.pack'), 'rb') as handle:
+            handle.seek(offset)
+            data = handle.read(4096)
+        byte, at = data[0], 1
+        kind, size, shift = (byte >> 4) & 7, byte & 0x0f, 4
+        while byte & 0x80:
+            byte, at = data[at], at + 1
+            size |= (byte & 0x7f) << shift
+            shift += 7
+        if kind in (1, 2, 3, 4):
+            return size
+        if kind == 6:                     # OFS_DELTA: the base's negative offset, then the delta stream
+            while data[at] & 0x80:
+                at += 1
+            at += 1
+        elif kind == 7:                   # REF_DELTA: the base's id, then the delta stream
+            at += len(binary)
+        else:
+            raise ValueError(f'{oid} has the pack type {kind}')
+        delta = zlib.decompressobj().decompress(data[at:], 32)
+        _, at = _varint(delta, 0)         # the base's size
+        return _varint(delta, at)[0]      # the result's size
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1053,22 +1191,136 @@ def _start(integration_store, operation_key, base, transport, read_artifact):
     return resolved, client, store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
 
 
+# The result step's receipts (review A4 D2): what the step established, in the integration store, so that a resumed
+# step reuses it instead of repeating an act it cannot repeat (a delivery, a pull). Digests and host paths only.
+DELIVERY_KEY = 'dispatch/attempt/{attempt_id}/delivery'
+DELIVERY_FORMAT = 'ai-engineering-harness/dispatch/attempt-delivery/v1'
+PULL_KEY = 'dispatch/attempt/{attempt_id}/pull'
+PULL_FORMAT = 'ai-engineering-harness/dispatch/attempt-pull/v1'
+INTAKE_KEY = 'dispatch/attempt/{attempt_id}/intake'
+INTAKE_FORMAT = 'ai-engineering-harness/dispatch/attempt-intake/v1'
+
+
+def _receipt(integration_store, key: str, intent: dict, actor: str) -> dict:
+    """Write (or find, the same) a confirmed receipt; RESULT_RECEIPT_CONFLICT for another one under KEY."""
+    try:
+        held = integration_store.reserve(key, intent, actor=actor).reservation
+    except store.ConflictingReservation:
+        raise _refused('RESULT_RECEIPT_CONFLICT', f'{key} holds another receipt') from None
+    if held.state == 'reserved':
+        di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'record', None)
+        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'record', None)
+    return intent
+
+
+def _receipt_of(integration_store, key: str, form: str) -> dict | None:
+    held = integration_store.get(key)
+    if held is None or held.state != 'confirmed':
+        return None
+    intent = json.loads(held.intent_json)
+    return intent if intent.get('format') == form else None
+
+
+def _pull(pull, name: str) -> Mapping:
+    """The exchange pull (tools/guest.py exchange_pull, the retained verifier); any failure, its Refused included, is
+    RESULT_PULL_FAILED (review A4 D2)."""
+    try:
+        pulled = pull(name)
+    except DispatchRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001 - guest.Refused and the transfer's errors: a stable code
+        raise _refused('RESULT_PULL_FAILED', f'the exchange pull of the result failed ({type(exc).__name__}: '
+                       f'{getattr(exc, "code", "")})', error=type(exc).__name__,
+                       pull_code=str(getattr(exc, 'code', ''))[:64]) from None
+    return pulled if isinstance(pulled, Mapping) else {}
+
+
+def _staged_again(receipt: dict, delivery: dict | None) -> dict:
+    """A staged bundle and verify repository a verified pull of this attempt left, re-checked (A4 D2): the file's
+    sha256 and size are the pull receipt's and the recorded delivery's, its header the receipt's, the verify
+    repository there. RESULT_STAGED_UNVERIFIED otherwise."""
+    path, repo = Path(receipt['staged']), Path(receipt['verifyRepo'])
+    try:
+        data = path.read_bytes()
+        header = _repository_access().parse_bundle_header(path)
+    except (OSError, ValueError, _repository_access().RepositoryError) as exc:
+        raise _refused('RESULT_STAGED_UNVERIFIED', f'the staged bundle cannot be read ({type(exc).__name__})') \
+            from None
+    digest = {'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
+    if digest != receipt['bundle'] or (delivery is not None and digest != delivery['bundle']) \
+            or not repo.is_dir() or [list(r) for r in header.get('refs') or ()] != receipt['refs']:
+        raise _refused('RESULT_STAGED_UNVERIFIED', 'the staged bundle or its verify repository is not the one the '
+                       'verified pull recorded')
+    return {'result': 'pulled', 'staged': {'path': str(path), 'bytes': len(data), 'sha256': digest['sha256']},
+            'bundle': {'verified': True, 'verify_repo': str(repo), 'header': header}}
+
+
 def _result_step(integration_store, operation_key, client, *, base, prepared, pull, observe, reserve_result,
-                 stopped, resumed, status):
-    """RESULT, the intake, the after-result observation, the runtime stop and the result hook."""
+                 stopped, resumed, status, actor, reuse=None):
+    """RESULT, the intake and what follows it. The delivery, the verified pull and the intake are each recorded as
+    a receipt; a resumed step reuses a verified pull (REUSE) instead of pulling again."""
     attempt_id, conversation_id = store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
     answer = _command(client, conversation_id, prepared.result, 'RESULT_UNANSWERED')
     printed = parse_result(answer, delivered_expected=not resumed)
-    verified = intake_result(integration_store, operation_key, base=base, printed=printed,
-                             pulled=pull(result_name(attempt_id)), message=prepared.message, when=prepared.when,
-                             resumed=resumed)
+    if not resumed:
+        _receipt(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id), {
+            'format': DELIVERY_FORMAT, 'attemptId': attempt_id, 'name': printed['delivered']['name'],
+            'bundle': {'sha256': printed['delivered']['sha256'], 'size': printed['delivered']['size']},
+            'commit': printed['commit']}, actor)
+    name = result_name(attempt_id)
+    if reuse is not None:
+        pulled = reuse
+    else:
+        pulled = _pull(pull, name)
+        bundle = pulled.get('bundle') if isinstance(pulled.get('bundle'), Mapping) else {}
+        staged = pulled.get('staged') if isinstance(pulled.get('staged'), Mapping) else {}
+        if pulled.get('result') == 'pulled' and bundle.get('verified') is True:
+            header = bundle.get('header') if isinstance(bundle.get('header'), Mapping) else {}
+            _receipt(integration_store, PULL_KEY.format(attempt_id=attempt_id), {
+                'format': PULL_FORMAT, 'attemptId': attempt_id, 'name': name, 'staged': str(staged.get('path')),
+                'verifyRepo': str(bundle.get('verify_repo')),
+                'bundle': {'sha256': staged.get('sha256'), 'size': staged.get('bytes')},
+                'refs': [list(r) for r in header.get('refs') or ()]}, actor)
+    verified = intake_result(integration_store, operation_key, base=base, printed=printed, pulled=pulled,
+                             message=prepared.message, when=prepared.when, resumed=resumed)
+    _receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id),
+             {'format': INTAKE_FORMAT, 'record': verified.to_json(), 'staged': verified.staged,
+              'verifyRepo': verified.verify_repo}, actor)
+    return _after_intake(integration_store, operation_key, client, verified, observe=observe,
+                         reserve_result=reserve_result, stopped=stopped, status=status)
+
+
+def _after_intake(integration_store, operation_key, client, verified, *, observe, reserve_result, stopped, status):
+    """The steps after the intake, each resumable on its own (A4 D2): the after-result observation, the runtime stop
+    (DELETE answers 204 also when nothing runs) and the result hook."""
     records = AE.check_records(list(observe('after-result', result=verified) or ()))
     if records:
         return stopped(records, status=status)
-    runtime = AE.stop_runtime(client, conversation_id)
+    runtime = AE.stop_runtime(client, verified.conversation_id)
     if reserve_result is not None:
         reserve_result(verified.to_json(), verified)
-    return RunOutcome('verified', attempt_id, conversation_id, turn_status=status, result=verified, runtime=runtime)
+    return RunOutcome('verified', verified.attempt_id, verified.conversation_id, turn_status=status, result=verified,
+                      runtime=runtime)
+
+
+def _reconciled(integration_store, attempt_id: str) -> bool:
+    """Whether the turn journal was confirmed by reading the events (a lost answer), not by a 2xx."""
+    events = integration_store.events(TURN_KEY.format(attempt_id=attempt_id))
+    return bool(events) and events[-1].to_state == 'confirmed' and events[-1].reason == 'reconciled-from-events'
+
+
+def _not_started(client, conversation_id: str, message_sha256: str) -> bool:
+    """Whether the conversation is idle with no agent event after the user message (saved, run not started)."""
+    execution, events = AE.observe(client, conversation_id)
+    if execution != 'idle':
+        return False
+    after = None
+    for n, event in enumerate(events):
+        if isinstance(event, Mapping) and event.get('kind') == 'MessageEvent' and event.get('source') == 'user' \
+                and any(hashlib.sha256(t.encode('utf-8')).hexdigest() == message_sha256 for t in _message_texts(event)):
+            after = n
+    return after is not None and not any(isinstance(e, Mapping) and e.get('source') == 'agent'
+                                         for e in events[after + 1:])
 
 
 def run_attempt(integration_store, operation_key: str, *, transport, base: Base, actor: str,
@@ -1094,6 +1346,7 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
         end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
         return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
 
+    not_started = [{'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED', 'ref': f'attempt:{attempt_id}#turn'}]
     # 1. inspect before any work
     try:
         problems = inspect_conversation(client, conversation_id)
@@ -1124,9 +1377,17 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     except DispatchRefused as refusal:
         if refusal.code != 'TURN_RUN_NOT_STARTED':
             raise
-        return stopped([{'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED',
-                         'ref': f'attempt:{attempt_id}#turn'}], 'run-not-started')
-    status = wait_for_turn(client, conversation_id, ceiling_s=ceiling_s, clock=clock, wait=wait)
+        return stopped(not_started, 'run-not-started')
+    try:
+        status = wait_for_turn(client, conversation_id, ceiling_s=ceiling_s, clock=clock, wait=wait)
+    except DispatchRefused as refusal:
+        # A4 D3: a turn settled by reading the events (not by a 2xx) that stays idle, with no agent event after the
+        # message, to the ceiling was saved and never started: a provider interruption. A 2xx turn that stays idle
+        # stays TURN_CEILING, for the engineering manager.
+        if refusal.code == 'TURN_CEILING' and _reconciled(integration_store, attempt_id) and _not_started(
+                client, conversation_id, hashlib.sha256(prepared.text.encode('utf-8')).hexdigest()):
+            return stopped(not_started, 'run-not-started', status='idle')
+        raise
     records = AE.check_records(list(observe('after-turn', status=status) or ()))
     if records:
         return stopped(records, status=status)
@@ -1135,7 +1396,39 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     # 5. RESULT, 6. the intake, 7. close
     return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
                         observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=False,
-                        status=status)
+                        status=status, actor=actor)
+
+
+def _resumed_result(integration_store, operation_key, base, receipt) -> VerifiedResult:
+    """The VerifiedResult an intake receipt recorded, re-checked against its verify repository (the commit-id
+    equality, the staged digest): agent-controlled text is not in a receipt, so the test output and the excluded
+    paths are only their digests here."""
+    record, attempt_id = receipt['record'], store.attempt_id_for(operation_key)
+    pull = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
+    if pull is None:
+        raise _refused('RESULT_STAGED_UNVERIFIED', 'the intake was recorded without its verified pull')
+    _staged_again(pull, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id), DELIVERY_FORMAT))
+    ra = _repository_access()
+    try:
+        opened = ra.open_repository(receipt['verifyRepo'], config='repository', work_tree=False)
+        try:
+            found = opened.read(record['commit'])
+        finally:
+            opened.close()
+    except (ra.CannotRun, ra.RepositoryError, OSError, ValueError) as exc:
+        raise _refused('RESULT_STAGED_UNVERIFIED', f'the verify repository cannot be read ({type(exc).__name__})') \
+            from None
+    if found is None or object_id('commit', found[2]) != record['commit'] or _commit_header(found[2]) != (
+            record['tree'], [base.commit]):
+        raise _refused('RESULT_STAGED_UNVERIFIED', 'the verify repository does not hold the recorded commit')
+    tests = dict(record['tests'], output=None, output_digest=record['tests']['output'])
+    return VerifiedResult(attempt_id=attempt_id, conversation_id=record['conversationId'],
+                          repository=record['repository'], base=record['base'], commit=record['commit'],
+                          tree=record['tree'], ref=record['ref'], bundle_sha256=record['bundle']['sha256'],
+                          bundle_bytes=record['bundle']['bytes'], staged=receipt['staged'],
+                          verify_repo=receipt['verifyRepo'], files=record['files'],
+                          inflated_bytes=record['inflatedBytes'], tests=tests, excluded=(),
+                          excluded_digest=dict(record['excluded']), resumed=True)
 
 
 def resume_result(integration_store, operation_key: str, *, transport, base: Base, actor: str,
@@ -1144,10 +1437,14 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
                   reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
                   read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
     """Resume the result step of an attempt whose turn journal is confirmed, which has no end record and whose result
-    journal is not dispatched, and whose conversation finished (review S3). When ``exists(name)`` says the exchange
-    already holds the attempt's bundle, RESULT is re-run without a delivery (the same inputs: the same commit) and
-    the bundle there is pulled and verified, the commit-id equality its integrity check; otherwise RESULT runs with
-    its delivery, as in ``run_attempt``."""
+    journal is not dispatched (reviews S3 and A4 D2):
+
+    - an intake already recorded: only the steps after it run again (the after-result observation, the runtime stop,
+      the result hook), on the recorded result re-checked against its verify repository;
+    - otherwise the conversation must have finished and its runtime be running (RUNTIME_NOT_RUNNING, A4 N-f), and
+      RESULT runs again: without a delivery when the exchange already holds the bundle (``exists``), the commit-id
+      equality the integrity check. A verified pull already recorded is reused (its staged file and verify
+      repository re-checked against the recorded digests) instead of pulling again; else the bundle is pulled."""
     resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                            read_artifact)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
@@ -1157,18 +1454,31 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     if result is not None and result.state in AE.HANDED_ON:
         raise _refused('ATTEMPT_RESULT_HANDED_ON', f'the result journal is {result.state}: the result step is the '
                        'result path\'s now', result_state=result.state)
-    _, status = conversation_status(client, conversation_id)
-    if status != 'finished':
-        raise _refused('TURN_NOT_FINISHED', f'the conversation is {status}, not finished: no result is taken',
-                       status=status)
-    resumed = bool(exists(result_name(attempt_id)))
-    prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
-                       deliver=not resumed)
     observe = observe or (lambda phase, **facts: ())
 
     def stopped(records, outcome='stopped', problems=(), status=None):
         end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
         return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
+    intake = _receipt_of(integration_store, INTAKE_KEY.format(attempt_id=attempt_id), INTAKE_FORMAT)
+    if intake is not None:
+        verified = _resumed_result(integration_store, operation_key, base, intake)
+        return _after_intake(integration_store, operation_key, client, verified, observe=observe,
+                             reserve_result=reserve_result, stopped=stopped, status='finished')
+    _, status = conversation_status(client, conversation_id)
+    if status != 'finished':
+        raise _refused('TURN_NOT_FINISHED', f'the conversation is {status}, not finished: no result is taken',
+                       status=status)
+    runtime = AE.runtime_status(client, conversation_id, 'RUNTIME_NOT_RUNNING')
+    if runtime != 'running':
+        raise _refused('RUNTIME_NOT_RUNNING', f'the runtime is {runtime!r}: RESULT cannot run again', runtime=runtime)
+    pulled = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
+    reuse = None
+    if pulled is not None:
+        reuse = _staged_again(pulled, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id),
+                                                  DELIVERY_FORMAT))
+    resumed = reuse is not None or bool(exists(result_name(attempt_id)))
+    prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
+                       deliver=not resumed)
     return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
                         observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=resumed,
-                        status=status)
+                        status=status, actor=actor, reuse=reuse)

@@ -71,7 +71,7 @@ PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
 # The golden texts' sha256 (a change to a builder or the frame is a change of what the agent's container runs or
 # reads: review it, then update these).
 SEED_SCRIPT_SHA256 = 'd103e6a4c0b32b1a2c1c419fb4400dcdff4bc3a90664292f79ecfdf54ca5fbe5'
-RESULT_SCRIPT_SHA256 = '0e1cb6a9ce4926f56170c0987f369e7763280cc1029de0ce4c10f459cc4806c2'
+RESULT_SCRIPT_SHA256 = 'a77dd7c5c59cb46a0b34efe6b456545fc84b382076d1132dfce8061ddfd01775'
 FRAME_SHA256 = '4f15a93b1e6d846fadf104bdfd5e367a1623cff1865948c2ca0cc970cd780a79'
 # The fixture's seeded tar, before gzip (deterministic: a fixed tree, sorted, times and owners 0; the gzip bytes
 # themselves depend on the zlib build, so they are not pinned).
@@ -296,7 +296,7 @@ class Goldens(Scratch):
             'email': 'aieh-bot-builder@localhost.invalid', 'date': f'{WHEN} +0000', 'message': 'TASK-1: x\n',
             'test_timeout': AR.TEST_TIMEOUT_S, 'output_limit': AR.TEST_OUTPUT_BYTES, 'part': 'bundle',
             'part_begin': 'AIEH-EXCHANGE-PART', 'part_end': 'AIEH-EXCHANGE-END', 'frame': True,
-            'forbidden': ['.claude', '.mcp.json'], 'protected': ['openspec', 'backlog']})
+            'forbidden': ['.claude', '.mcp.json'], 'protected': ['openspec', 'backlog'], 'excluded_shown': 100})
         # a resumed step's RESULT: no delivery, no frame
         again = AR.build_result(base, attempt_id=attempt, message='TASK-1: x\n', when=WHEN, deliver=False)
         self.assertIsNone(again.deliver)
@@ -404,6 +404,12 @@ class Policy(unittest.TestCase):
         # is shown on a name that does)
         self.assertEqual(AR.folded('e\u0301.'), AR.folded('\u00e9'))
         self.assertEqual(AR.folded('.CLAUDE. .'), '.claude')
+        # A4 N-a: the names git refuses are refused by the host too; the residual: a zero-width space is not folded
+        for path in ('git~1/config', 'a/GIT~1', '.git:stream/x'):
+            with self.subTest(path=path):
+                self.assertEqual([p['reason'] for p in AR.tree_problems([(path, AR.FILE_MODE, 'x')])],
+                                 ['forbidden-name'])
+        self.assertEqual(AR.tree_problems([('.c\u200blaude/x', AR.FILE_MODE, 'x')]), [])   # documented residual
         # RESULT excludes .claude and .mcp.json only; the host's tree policy adds .git
         self.assertEqual(AR.FORBIDDEN_NAMES, frozenset(('.claude', '.mcp.json')))
         self.assertEqual(AR.TREE_FORBIDDEN, frozenset(('.claude', '.mcp.json', '.git')))
@@ -593,6 +599,81 @@ class Oracle(OracleFixture):
         self.assertNotIn('.git', {p.split('/')[0] for p in files})
         self.assertEqual(files['new.txt'], b'new\n')
 
+    def test_names_git_refuses_are_left_out_before_the_add(self):
+        """Review A4 N-a: every path git would refuse (.git variants, the 8.3 short name git~1) is excluded by pathspec
+        before add -A (the reviewer's probe: RESULT failed at add) and reported as git-refused."""
+        def edit(ws):
+            (ws / 'git~1').mkdir()
+            (ws / 'git~1' / 'config').write_text('x\n', encoding='utf-8')
+            (ws / 'sub').mkdir()
+            (ws / 'sub' / 'GIT~1').write_text('y\n', encoding='utf-8')
+            (ws / '.claude').mkdir()
+            (ws / '.claude' / 'settings.local.json').write_text('{}', encoding='utf-8')
+            (ws / 'kept.txt').write_text('kept\n', encoding='utf-8', newline='\n')
+        verified, files, _ = self.accepted(edit)
+        self.assertEqual(sorted((e['path'], e['reason']) for e in verified.excluded),
+                         [('.claude', 'forbidden-name'), ('git~1', 'git-refused'), ('sub/GIT~1', 'git-refused')])
+        self.assertIn('kept.txt', files)
+        self.assertFalse([p for p in files if 'git~1' in p.lower() or p.startswith('.claude')])
+
+    def test_the_excluded_list_is_bounded(self):
+        """Review A4 N-b: 150 excluded paths are printed as their count, the sha256 of the whole list and the first
+        100 (the reviewer's 3000-file probe printed a 642021-character line)."""
+        def edit(ws):
+            for n in range(150):
+                (ws / f'd{n:03d}').mkdir()
+                (ws / f'd{n:03d}' / '.mcp.json').write_text('{}', encoding='utf-8')
+        verified, files, _ = self.accepted(edit)
+        listed = [{'path': f'd{n:03d}/.mcp.json', 'reason': 'forbidden-name'} for n in range(150)]
+        self.assertEqual(verified.excluded, tuple(listed[:100]))
+        self.assertEqual((verified.excluded_digest['count'], verified.excluded_digest['shown'],
+                          verified.excluded_digest['sha256']),
+                         (150, 100, hashlib.sha256(json.dumps(listed, sort_keys=True).encode()).hexdigest()))
+
+    def test_case_variants_of_the_protected_directories_are_protected(self):
+        """Review A4 D1: the first component compared folded (Backlog/, OpenSpec/) on both sides."""
+        def edit(ws):
+            (ws / 'Backlog' / 'tasks').mkdir(parents=True, exist_ok=True)
+            (ws / 'Backlog' / 'tasks' / 'task-9 - planted.md').write_text('x\n', encoding='utf-8', newline='\n')
+        verified, files, base = self.accepted(edit)
+        self.assertFalse([p for p in files if 'task-9' in p])
+        self.assertEqual([e['reason'] for e in verified.excluded], ['protected-dir'])
+        for path in ('Backlog/tasks/x.md', 'OpenSpec/changes/x/y.md', 'BACKLOG./x', 'openspec/x'):
+            self.assertTrue(AR.protected_path(path), path)
+        self.assertFalse(AR.protected_path('backlogs/x') or AR.protected_path('docs/backlog/x'))
+
+    def test_blob_sizes_are_read_from_their_headers(self):
+        """Review A4 N-d: object_size reads each object's size from its header (loose, packed, delta) without
+        inflating it, equal to the object's length; above MAX_INFLATED (or on a MemoryError) the intake refuses
+        too-large."""
+        big = ''.join(f'line {n} of the large file\n' for n in range(4000))
+
+        def edit(ws):
+            (ws / 'large.txt').write_text(big, encoding='utf-8', newline='\n')
+            (ws / 'large2.txt').write_text(big + 'one more line\n', encoding='utf-8', newline='\n')
+        verified, files, _ = self.accepted(edit)
+        opened = ra.open_repository(verified.verify_repo, config='repository', work_tree=False)
+        try:
+            entries = AR.tree_entries(opened, verified.tree)
+            for _, _, oid in entries:
+                self.assertEqual(AR.object_size(verified.verify_repo, oid), len(opened.read(oid)[2]))
+            commit = opened.read(verified.commit)
+            self.assertEqual(AR.object_size(verified.verify_repo, verified.commit), len(commit[2]))
+        finally:
+            opened.close()
+        self.assertIsNone(AR.object_size(verified.verify_repo, '0' * 40))
+        with mock.patch.object(AR, 'MAX_INFLATED', len(big)):
+            self.refused(edit, 'RESULT_TREE_REFUSED', 'too-large')
+        real_read = ra.Repository.read
+
+        def no_memory(repository, name):
+            found = real_read(repository, name)
+            if found is not None and found[1] == 'blob' and len(found[2]) > 1000:
+                raise MemoryError
+            return found
+        with mock.patch.object(ra.Repository, 'read', no_memory):
+            self.refused(edit, 'RESULT_TREE_REFUSED', 'too-large')
+
     def refused(self, edit, code, reason=None):
         fixture, result, base, answer, puller, message = self.prepared(edit)
         printed = AR.parse_result(answer)
@@ -631,8 +712,9 @@ class Oracle(OracleFixture):
                          AR.FORBIDDEN_NAMES)
         self.assertTrue(any(p.split('/')[0] != p.split('/')[0].lower() for p in excluded), excluded)
         self.assertEqual({e['reason'] for e in verified.excluded}, {'forbidden-name'})
-        record = json.dumps(verified.to_json())
+        record = json.dumps({k: v for k, v in verified.to_json().items() if k != 'exclusionRule'})
         self.assertEqual(verified.to_json()['excluded']['count'], len(excluded))
+        self.assertEqual(verified.to_json()['excluded']['shown'], len(excluded))
         for path in excluded:
             self.assertNotIn(path, record)
 
@@ -863,8 +945,9 @@ class Intake(Scratch):
 
     def test_the_result_output_is_parsed_strictly(self):
         excluded = json.dumps([{'path': '.claude/x', 'reason': 'forbidden-name'}]).encode()
+        line = f'AIEH-RESULT excluded 1 {hashlib.sha256(excluded).hexdigest()} {excluded.hex()}'
         good = '\n'.join(['noise', f'AIEH-RESULT base {"a" * 40}', f'AIEH-RESULT tree {"b" * 40}',
-                          f'AIEH-RESULT commit {"c" * 40}', 'AIEH-RESULT excluded ' + excluded.hex(),
+                          f'AIEH-RESULT commit {"c" * 40}', line,
                           f'AIEH-RESULT bundle {"d" * 64} 7', 'AIEH-RESULT tests 0',
                           'AIEH-RESULT test-output ' + 'ok\x1b[31m\n'.encode().hex(),
                           f'AIEH-EXCHANGE-DELIVERED bundle {"d" * 64} 7', 'AIEH-RESULT done'])
@@ -876,8 +959,8 @@ class Intake(Scratch):
         self.assertEqual((printed['commit'], printed['tests']['status'], printed['tests']['output']),
                          ('c' * 40, '0', 'ok[31m\n'))
         self.assertEqual(printed['excluded'], [{'path': '.claude/x', 'reason': 'forbidden-name'}])
-        self.assertEqual(printed['excluded_digest'], {'sha256': hashlib.sha256(excluded).hexdigest(),
-                                                      'bytes': len(excluded)})
+        self.assertEqual(printed['excluded_digest'], {'count': 1, 'sha256': hashlib.sha256(excluded).hexdigest(),
+                                                      'shown': 1, 'shownSha256': hashlib.sha256(excluded).hexdigest()})
         self.assertEqual(printed['tests']['output_digest']['bytes'], 8)
         # CRLF lines are read as well (review S5)
         self.assertEqual(AR.parse_result(answer(good.replace('\n', '\r\n')))['commit'], 'c' * 40)
@@ -897,8 +980,11 @@ class Intake(Scratch):
             'no done': good.replace('\nAIEH-RESULT done', ''),
             'no delivered line': good.replace(f'AIEH-EXCHANGE-DELIVERED bundle {"d" * 64} 7\n', ''),
             'no bundle digest': good.replace(f'AIEH-RESULT bundle {"d" * 64} 7\n', ''),
-            'no excluded list': good.replace('AIEH-RESULT excluded ' + excluded.hex() + '\n', ''),
+            'no excluded list': good.replace(line + '\n', ''),
             'an excluded list of another shape': good.replace(excluded.hex(), b'{"a": 1}'.hex()),
+            'a count the shown list does not match': good.replace('AIEH-RESULT excluded 1 ', 'AIEH-RESULT excluded 2 '),
+            'an unknown reason': good.replace(excluded.hex(), json.dumps(
+                [{'path': 'x', 'reason': 'other'}]).encode().hex()),
             'a delivery other than the printed digest': good.replace(f'AIEH-RESULT bundle {"d" * 64} 7',
                                                                      f'AIEH-RESULT bundle {"f" * 64} 7'),
         }
@@ -1047,7 +1133,7 @@ class RunServer(te.ConversationServer):
         super().__init__(**kwargs)
         self.test, self.count, self.log, self.after_message = test, 1, [], 'finished'
         self.workspace = self.exchange = None
-        self.message_status, self.lose_results = 200, 0
+        self.message_status, self.lose_results, self.fail_stops = 200, 0, 0
 
     def __call__(self, method, path, body, **kwargs):
         if path == '/api/conversations/count':
@@ -1058,17 +1144,23 @@ class RunServer(te.ConversationServer):
         cid, tail = path.split('/')[3], '/'.join(path.split('/')[4:]).partition('?')[0]
         self.log.append((method, tail or 'conversation'))
         if (method, tail) == ('POST', 'events'):
-            if self.message_status == 429:      # saved, the run not started (the Agent Server's 429)
+            if self.message_status in (429, 503):    # saved, the run not started (a 429, or a 5xx A4 D3 reconciles)
                 self.set(cid, status='idle', events=[{'kind': 'MessageEvent', 'id': 'm1', 'source': 'user',
                                                       'llm_message': {'content': [{'type': 'text', 'text':
                                                                                    body['content'][0]['text']}]}}])
-                return {'status': 429, 'body': {'detail': 'run not started'}}
+                return {'status': self.message_status, 'body': {'detail': 'run not started'}}
+            if self.message_status == 'idle':        # a 2xx, and the run never leaves idle
+                self.set(cid, status='idle')
+                return {'status': 200, 'body': {'success': True}}
             self.set(cid, status=self.after_message, events=[{'kind': 'MessageEvent', 'id': 'm1', 'source': 'user',
                                                               'llm_message': {'content': [{'type': 'text',
                                                                                            'text': body['content'][0]
                                                                                            ['text']}]}}])
             self.test.agent_edits(self.workspace)
             return {'status': 200, 'body': {'success': True}}
+        if (method, tail) == ('DELETE', 'runtime') and self.fail_stops:
+            self.fail_stops -= 1
+            raise OSError('the channel dropped at the runtime stop')
         if (method, tail) == ('POST', 'bash/execute_bash_command'):
             if self.workspace is None:
                 return self.canned(body)
@@ -1283,7 +1375,8 @@ class Run(Scratch):
         before = len(self.server.log)
         outcome = self.resume(puller, exists=lambda n: (self.server.exchange / n).is_file())
         self.assertEqual((outcome.outcome, outcome.result.resumed, outcome.runtime), ('verified', True, 'missing'))
-        self.assertEqual(self.server.log[before:], [('GET', 'conversation'), ('POST', 'bash/execute_bash_command'),
+        self.assertEqual(self.server.log[before:], [('GET', 'conversation'), ('GET', 'runtime'),
+                                                    ('POST', 'bash/execute_bash_command'),
                                                     ('DELETE', 'runtime'), ('GET', 'runtime')])
         self.assertEqual(puller.names, [name])
         self.assertEqual(len(self.reserved), 1)
@@ -1300,6 +1393,108 @@ class Run(Scratch):
             path.unlink()
         outcome = self.resume(puller, exists=lambda n: (self.server.exchange / n).is_file())
         self.assertEqual((outcome.outcome, outcome.result.resumed), ('verified', False))
+
+    def clocked(self):
+        now = [0.0]
+
+        def wait(seconds):
+            now[0] += seconds
+        return {'clock': lambda: now[0], 'wait': wait}
+
+    def test_a_reconciled_turn_that_never_starts_is_ended_as_run_not_started(self):
+        """Review A4 D3 (the reviewer's 5xx probe): a 503 at the message, settled from the events, whose conversation
+        stays idle with no agent event to the ceiling, is ended as the retryable interruption run-not-started."""
+        self.server.message_status = 503
+        outcome = AR.run_attempt(self.store, self.key, transport=self.server, base=self.base, actor='a4-test',
+                                 inspect=lambda c: (), pull=lambda n: self.fail('no pull'), ceiling_s=30,
+                                 read_artifact=self.fixture.read_artifact, **self.clocked())
+        self.assertEqual((outcome.outcome, outcome.end['classification'], outcome.end['causes']),
+                         ('run-not-started', AE.INTERRUPTION, ['run-not-started']))
+        self.assertEqual(self.store.get(AR.TURN_KEY.format(attempt_id=outcome.attempt_id)).state, 'confirmed')
+        self.assertEqual(self.server.log.count(('POST', 'bash/execute_bash_command')), 1, 'the SEED only')
+
+    def test_a_2xx_turn_that_stays_idle_stays_turn_ceiling(self):
+        """Review A4 D3: a turn confirmed by a 2xx that stays idle to the ceiling is TURN_CEILING (the engineering
+        manager's), and the attempt is not ended."""
+        self.server.message_status = 'idle'
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AR.run_attempt(self.store, self.key, transport=self.server, base=self.base, actor='a4-test',
+                           inspect=lambda c: (), pull=lambda n: self.fail('no pull'), ceiling_s=30,
+                           read_artifact=self.fixture.read_artifact, **self.clocked())
+        self.assertEqual(caught.exception.code, 'TURN_CEILING')
+        self.assertIsNone(AE.end_record(self.store, store_mod.attempt_id_for(self.key)))
+
+    def test_a_failed_runtime_stop_after_the_intake_is_resumed_alone(self):
+        """Review A4 D2 (the reviewer's probe): the pull and intake succeeded, the runtime stop failed: the resume
+        runs only the steps after the intake (no RESULT, no pull), on the recorded result re-checked; a second resume
+        does the same."""
+        puller = self.real()
+        self.server.fail_stops = 1
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_attempt(pull=puller)
+        self.assertEqual(caught.exception.code, 'RUNTIME_NOT_STOPPED')
+        attempt = store_mod.attempt_id_for(self.key)
+        for key in (AR.DELIVERY_KEY, AR.PULL_KEY, AR.INTAKE_KEY):
+            self.assertEqual(self.store.get(key.format(attempt_id=attempt)).state, 'confirmed', key)
+        intake = json.loads(self.store.get(AR.INTAKE_KEY.format(attempt_id=attempt)).intent_json)
+        self.assertNotIn('Ran 1 test', json.dumps(intake))                # digests only (S7)
+        for round_ in (1, 2):
+            with self.subTest(round=round_):
+                before = len(self.server.log)
+                outcome = self.resume(lambda n: self.fail('no pull again'), exists=lambda n: True)
+                self.assertEqual((outcome.outcome, outcome.result.resumed, outcome.runtime),
+                                 ('verified', True, 'missing'))
+                self.assertEqual(self.server.log[before:], [('DELETE', 'runtime'), ('GET', 'runtime')])
+                self.assertEqual(outcome.result.commit, intake['record']['commit'])
+        self.assertEqual(len(self.reserved), 2)
+        self.assertEqual(puller.names, [AR.result_name(attempt)])
+
+    def test_a_verified_pull_is_reused_never_pulled_again(self):
+        """Review A4 D2: the pull verified (recorded), the intake not completed: the resume re-runs RESULT without a
+        delivery and reuses the staged bundle and verify repository, re-checked against the recorded digests."""
+        puller = self.real()
+        with mock.patch.object(AR, 'intake_result', side_effect=OSError('a crash at the intake')):
+            with self.assertRaises(OSError):
+                self.run_attempt(pull=puller)
+        attempt = store_mod.attempt_id_for(self.key)
+        self.assertEqual(self.store.get(AR.PULL_KEY.format(attempt_id=attempt)).state, 'confirmed')
+        self.assertIsNone(self.store.get(AR.INTAKE_KEY.format(attempt_id=attempt)))
+        outcome = self.resume(lambda n: self.fail('no pull again'), exists=lambda n: True)
+        self.assertEqual((outcome.outcome, outcome.result.resumed), ('verified', True))
+        self.assertEqual(puller.names, [AR.result_name(attempt)])
+
+    def test_a_changed_staged_bundle_is_not_reused(self):
+        puller = self.real()
+        with mock.patch.object(AR, 'intake_result', side_effect=OSError('a crash at the intake')):
+            with self.assertRaises(OSError):
+                self.run_attempt(pull=puller)
+        attempt = store_mod.attempt_id_for(self.key)
+        staged = Path(json.loads(self.store.get(AR.PULL_KEY.format(attempt_id=attempt)).intent_json)['staged'])
+        staged.write_bytes(staged.read_bytes() + b'x')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.resume(lambda n: self.fail('no pull again'), exists=lambda n: True)
+        self.assertEqual(caught.exception.code, 'RESULT_STAGED_UNVERIFIED')
+
+    def test_a_refused_pull_is_a_stable_code(self):
+        """Review A4 D2: tools/guest.py's Refused (or any failure) from the exchange pull is RESULT_PULL_FAILED."""
+        self.real()
+
+        def refused_pull(name):
+            raise guest.Refused('REFUSED', f'{name} exists; never overwritten')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_attempt(pull=refused_pull)
+        self.assertEqual((caught.exception.code, caught.exception.context['pull_code']), ('RESULT_PULL_FAILED', 'REFUSED'))
+
+    def test_the_resume_needs_a_running_runtime_to_run_result_again(self):
+        """Review A4 N-f."""
+        self.real()
+        self.server.lose_results = 1
+        with self.assertRaises(di.DispatchRefused):
+            self.run_attempt(pull=lambda n: self.fail('no pull'))
+        self.server.set(self.cid, runtime='missing')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.resume(lambda n: self.fail('no pull'), exists=lambda n: True)
+        self.assertEqual(caught.exception.code, 'RUNTIME_NOT_RUNNING')
 
     def test_the_resume_refuses_what_it_cannot_resume(self):
         with self.assertRaises(di.DispatchRefused) as caught:      # no turn yet

@@ -9022,7 +9022,9 @@ CONVERSATION_SMOKE_SCHEMA = 'ai-engineering-harness/profiles/conversation-smoke-
 # one EXCHANGE_PART_DELIVERED line; the response's ``delivered`` is {name, sha256, size} or
 # {error}. The part's bytes never come back: a field whose frame cannot be cut out is withheld; an
 # answer with no frame marker at all is kept whole (NO_PART; D1 review S5), and a frame's lines may
-# end in CRLF.
+# end in CRLF. The frame is read from that field only: a marker in any other field refuses the
+# delivery and withholds that field (PART_ELSEWHERE). The file is written as <name>.partial and
+# linked to <name>, exclusively; a leftover .partial refuses the delivery (PARTIAL_EXISTS; review A4).
 API_PROBE = r'''import base64, errno, hashlib, http.client, json, os, re, sys, time
 key_path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
 PART_BEGIN, PART_END, PART_DONE = 'AIEH-EXCHANGE-PART', 'AIEH-EXCHANGE-END', 'AIEH-EXCHANGE-DELIVERED'
@@ -9035,6 +9037,15 @@ def deliver(spec, entry):
         if isinstance(value, str) and (PART_BEGIN in value or PART_END in value):
             entry['body'] = None
         return {'error': 'NO_PART'}
+    # the frame is read from the field alone: a marker in any other field refuses the delivery, withheld
+    elsewhere = [k for k, v in value.items() if k != spec['field']
+                 and (PART_BEGIN in json.dumps(v) or PART_END in json.dumps(v))]
+    for k in elsewhere:
+        value[k] = None
+    if elsewhere:
+        if PART_BEGIN in text or PART_END in text:
+            value[spec['field']] = None
+        return {'error': 'PART_ELSEWHERE'}
     if PART_BEGIN not in text and PART_END not in text:
         return {'error': 'NO_PART'}
     part = re.escape(spec['part'])
@@ -9057,22 +9068,30 @@ def deliver(spec, entry):
     if not re.fullmatch(spec['name_pattern'], name) or name.endswith('.partial') or '/' in name:
         return {'error': 'NAME_INVALID'}
     path = os.path.join(spec['dir'], name)
-    try:  # exclusive: an existing name (or a link of that name) is never written through
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o640)
-    except FileExistsError:
+    partial = path + '.partial'
+    if os.path.lexists(partial):   # a leftover partial is never completed or pulled: refused and reported
+        return {'error': 'PARTIAL_EXISTS'}
+    if os.path.lexists(path):
         return {'error': 'EXISTS'}
+    try:  # written as <name>.partial (exclusive), then linked to <name> (exclusive, atomic), never overwritten
+        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o640)
     except OSError as exc:
         return {'error': 'OPEN_' + str(errno.errorcode.get(exc.errno, 'FAILED'))}
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view):]
-        os.fsync(fd)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(partial, path)
+    except FileExistsError:
+        return {'error': 'EXISTS'}
     except OSError:
-        os.close(fd)
-        os.unlink(path)
         return {'error': 'WRITE_FAILED'}
-    os.close(fd)
+    finally:
+        os.unlink(partial)
     return {'name': name, 'sha256': digest, 'size': size}
 
 
