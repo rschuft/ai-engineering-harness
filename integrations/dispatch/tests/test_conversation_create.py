@@ -105,7 +105,8 @@ def _test_command(command='python -m unittest discover -s tests', timeout=60, de
     return made
 
 
-TEST_BUILDER = 'a1-test-command'
+TEST_BUILDER = 'test-a1-command'
+di.allow_test_builders(TEST_BUILDER, 'test-a1-unregistered')   # tests only (D1 review S6)
 # registered once per process: other suites load this module by name too
 build_command = di._COMMAND_BUILDERS.get(TEST_BUILDER) or di.command_builder(TEST_BUILDER)(_test_command)
 
@@ -407,14 +408,38 @@ class ProxyTailTests(unittest.TestCase):
             del built.timeout
         self.assertNotIn('true', repr(build_command('true-marker-text')).replace('builder', ''))
         # a builder that is no longer registered: its commands are refused too
-        name = 'a1-test-unregistered'
+        name = 'test-a1-unregistered'
         gone = di.command_builder(name)(_test_command)
         made = gone('true')
         di._COMMAND_BUILDERS.pop(name)
         self.refused('COMMAND_NOT_BUILT', 'bash/execute_bash_command', made)
-        for bad in ('', 'Upper', 'a b', TEST_BUILDER, 5):
+        # D1 review S6: only the pinned names (and a test's explicit test- names) can be builders at all
+        self.assertEqual(di.COMMAND_BUILDER_NAMES, frozenset(('d1-seed', 'd1-result')))
+        for bad in ('', 'Upper', 'a b', TEST_BUILDER, 5, 'reviewer-late', 'd1-seed-2', 'test-not-allowed'):
             with self.subTest(name=bad), self.assertRaises(ValueError):
                 di.command_builder(bad)
+        for bad in ('a1-x', 'test-', 'TEST-x', 5):
+            with self.subTest(test_name=bad), self.assertRaises(ValueError):
+                di.allow_test_builders(bad)
+        # a command forged with the module's seal (not made by a builder) is refused
+        forged = di.ContainerCommand(di._BUILDER_SEAL, 'd1-seed', 'rm -rf /workspace', 5, None)
+        self.refused('COMMAND_NOT_BUILT', 'bash/execute_bash_command', forged)
+
+    def test_no_production_module_admits_a_test_builder(self):
+        """allow_test_builders is reached only from tests: no module of integrations/ or tools/ outside tests/
+        names it."""
+        import ast
+        root = HERE.parents[2]
+        found = []
+        for path in sorted([*root.joinpath('integrations').rglob('*.py'), *root.joinpath('tools').glob('*.py')]):
+            if 'tests' in path.relative_to(root).parts:
+                continue
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | \
+                {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            if 'allow_test_builders' in names:
+                found.append(path.relative_to(root).as_posix())
+        self.assertEqual(found, [])
 
     def test_the_command_grammar_is_exact(self):
         """A builder cannot make a command outside the grammar, and a command altered after it was built (past its
@@ -443,7 +468,7 @@ class ProxyTailTests(unittest.TestCase):
             built = build_command()
             object.__setattr__(built, field, value)
             with self.subTest(altered=field):
-                self.refused('TAIL_BODY_INVALID', 'bash/execute_bash_command', built)
+                self.refused('COMMAND_NOT_BUILT', 'bash/execute_bash_command', built)
         # the bounds themselves are admitted
         answer, transport = self.send('bash/execute_bash_command',
                                       build_command('x' * di.COMMAND_MAX_CHARS, di.COMMAND_MAX_TIMEOUT_S))

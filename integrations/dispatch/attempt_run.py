@@ -1,10 +1,12 @@
-"""The attempt run of a confirmed native D1 attempt (D1 slice A2; the work design accepted on 2026-11-15, sections
-G2 to G6, with the engineering manager's rulings R1 to R5).
+"""The attempt run of a confirmed native D1 attempt (D1 slices A2 and A3; the work design accepted on 2026-11-15,
+sections G2 to G6, with the engineering manager's rulings R1 to R5 and the A3 rulings on the review of A1 and A2).
 
 ``run_attempt(store, operation_key, transport=, base=, actor=, inspect=, pull=, observe=, reserve_result=)`` runs,
 for an attempt ``dispatch_inputs.dispatch`` confirmed, the order the design fixes, every Agent Server call through
 the route-checked client (``AgentServerClient``) and its two proxy tails:
 
+0. **build** everything that is sent before anything is sent (review S2): the message, the commit message, the SEED
+   and RESULT commands; a slot that cannot be filled refuses with no call;
 1. **inspect**: ``GET /api/conversations/count`` is 1, ``GET /api/conversations/{id}`` is the reserved conversation,
    ``GET .../runtime`` is ``running``, and the caller's ``inspect(conversation_id)`` (the container facts, slice C)
    finds no problem. A failure sends no message and ends the attempt (``attempt_end.end_interrupted_attempt``,
@@ -15,27 +17,45 @@ the route-checked client (``AgentServerClient``) and its two proxy tails:
 3. **MESSAGE**: one versioned frame (``FRAME_VERSION``) whose slots come only from the reserved record and the seeded
    tree (``build_message``); the turn journal ``dispatch/attempt/<attempt id>/turn`` is reserved (base, seed digest
    and count, frame version, the message's sha256) and ``dispatched`` before the POST; a lost answer is ``unknown``
-   and is settled by reading the conversation's events, never by sending again (``send_message``);
+   and is settled by reading the conversation's events, never by sending again (``send_message``). A 429 (the
+   message saved, the run not started) is not settled as sent: the attempt is ended as a provider interruption
+   (``run-not-started``), so a new attempt is admissible (review S4);
 4. **wait**: the conversation's recorded status read to a terminal one, bounded by a ceiling (``wait_for_turn``);
 5. **RESULT**, only after a ``finished`` turn: one fixed command (``build_result``) that, in the container, makes a
-   fresh git directory from the base bundle it carries, commits the workspace tree once (parent the base; the
-   builder bot's identity, the store's time for the attempt and a message of the reserved record, R5), bundles
-   ``refs/heads/work/<attempt id>`` completely, runs the accepted design's test command on an export of the committed
-   tree (G5: the dispatcher's command in the attempt's container, not independent CI) and prints the bundle in the
-   exchange delivery's frame; the API probe writes it into the guest exchange (``tools/guest.py`` GuestApi);
+   fresh git directory from the base bundle it carries, adds the workspace, takes out of the index by an explicit,
+   reported rule any path with a ``.claude`` or ``.mcp.json`` component and any change under ``openspec/`` or
+   ``backlog/`` (R3 as revised; ``EXCLUSION_RULE``), commits once (parent the base; the builder bot's identity, the
+   store's time for the attempt and a message of the reserved record, R5), bundles ``refs/heads/work/<attempt id>``
+   completely, hashes the bundle, then runs the accepted design's test command on an export of the committed tree
+   (G5) and prints the bundle in the exchange delivery's frame; the API probe writes it into the guest exchange;
 6. **intake**: ``pull(name)`` (``tools/guest.py`` ``exchange_pull``: the retained verifier, decision 0014 section 7
    row R6, git the first parser), then ``intake_result``: exactly the one reference, no prerequisite, the digest the
-   probe delivered, the commit id the host computes itself over the bundle's tree from the base, the identity, the
-   time and the message (one equality covers them all), and the tree policy (regular files only, no link, gitlink
-   or forbidden name, R3);
+   command printed before the tests and the probe delivered, the commit id the host computes itself over the
+   bundle's tree, and the tree policy (regular files only; no link, gitlink, ``.git``, ``.claude`` or ``.mcp.json``
+   component, compared case-folded and normalized; ``openspec/`` and ``backlog/`` exactly the base's; bounded depth,
+   entries and inflated size);
 7. **close**: the runtime stopped and observed ``missing`` (``attempt_end.stop_runtime``, E-05.8's primitive); the
-   result path's journal is slice B's (``reserve_result(verified)``, called last). ``observe(phase, **facts)``
-   (slice C's observations) may return dispatcher records at ``before-message``, ``after-turn`` and
-   ``after-result``: any record ends the attempt through ``end_interrupted_attempt`` and no result is handed on.
+   result path's journal is slice B's (``reserve_result(record, verified)``, called last with the record's digests
+   and the in-memory result). ``observe(phase, **facts)`` (slice C's observations) may return dispatcher records at
+   ``before-message``, ``after-turn`` and ``after-result``: any record ends the attempt through
+   ``end_interrupted_attempt`` and no result is handed on.
+
+``resume_result`` resumes the result step of an attempt whose turn is confirmed (review S3): when the exchange already
+holds the named bundle it re-runs RESULT without a delivery and pulls and verifies the bundle there (the commit-id
+equality is the integrity check); otherwise it runs RESULT as ``run_attempt`` does. ``run_attempt`` never runs twice
+on an attempt: a turn journal already present is TURN_ALREADY_SENT before any call.
 
 What the trusted side accepts from an attempt: one git bundle, whose first parser is git and whose single commit is
-byte for byte the commit the dispatcher specified over whatever tree the container produced; and text (the test
-output, API answers) handled as data. Nothing the conversation wrote reaches a commit header or a store record.
+byte for byte the commit the dispatcher specified over the tree the container produced; and text (the test output,
+the excluded paths, API answers) handled as data and kept in memory only: every record holds its digest and size,
+never the text (review S7), until slice B's outbound search has passed over it. The agent's own code runs inside
+RESULT (the tests are its tests): it can influence the test status and output, never the commit, whose custody is
+the host's commit-id equality and tree policy.
+
+Assumptions stated: one dispatcher process (the builder registry and the held role tokens are its module state; no
+second process runs an attempt of the same work item); the workspace's own ``.gitignore`` and ``.gitattributes``
+apply to RESULT's ``git add -A`` (an ignored file is not committed; an attribute may convert line endings), which
+the agent controls and the report must state as the design's accepted behaviour (review N1).
 
 Standard library only; the base is read through the shared repository-access module (Dulwich, decision 0014), and
 nothing here launches git on the host.
@@ -53,6 +73,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
@@ -79,17 +100,25 @@ DispatchRefused = di.DispatchRefused
 
 TURN_KEY = 'dispatch/attempt/{attempt_id}/turn'
 TURN_FORMAT = 'ai-engineering-harness/dispatch/attempt-turn/v1'
-RESULT_FORMAT = 'ai-engineering-harness/dispatch/attempt-result/v1'
-OUTCOME_FORMAT = 'ai-engineering-harness/dispatch/attempt-run/v1'
+RESULT_FORMAT = 'ai-engineering-harness/dispatch/attempt-result/v2'
+OUTCOME_FORMAT = 'ai-engineering-harness/dispatch/attempt-run/v2'
 
 PROXY = '/api/conversations/{conversation_id}/{tail}'
 COUNT_ROUTE = '/api/conversations/count'
 WORKSPACE = '/workspace'
-FORBIDDEN_NAMES = frozenset(('.claude', '.mcp.json'))   # R3: refused anywhere in a seeded or a result tree
+# R3 (revised by the A3 rulings): names compared per path component, Unicode-normalized (NFC), case-folded, with
+# trailing dots and spaces stripped (review B1). RESULT excludes the first two from its commit and reports them; the
+# host refuses a result tree, and SEED a base tree, holding any of them (.git: review N5).
+FORBIDDEN_NAMES = frozenset(('.claude', '.mcp.json'))
+TREE_FORBIDDEN = FORBIDDEN_NAMES | {'.git'}
+# The directories whose content the result must leave exactly as the base holds it (review N7).
+PROTECTED_DIRS = ('openspec', 'backlog')
 TREE_MODE, FILE_MODE, EXEC_MODE, LINK_MODE, GITLINK_MODE = 0o040000, 0o100644, 0o100755, 0o120000, 0o160000
 REGULAR_MODES = (FILE_MODE, EXEC_MODE)
 MAX_HISTORY = 10000            # commits walked to find the design commit in the base's history
-MAX_FILES = 5000               # files of a seeded or a result tree
+MAX_FILES = 5000               # entries of a seeded or a result tree
+MAX_DEPTH = 64                 # directory depth of a seeded or a result tree (review S1)
+MAX_INFLATED = 64 << 20        # the result tree's blobs, inflated, in all (review N4)
 BASE_BRANCH = 'refs/heads/main'
 HEX40 = re.compile(r'[0-9a-f]{40}')
 ATTEMPT_ID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')   # store.attempt_id_for
@@ -101,7 +130,12 @@ TITLE_MAX = 200
 # the RESULT command on an export of the committed tree.
 TEST_COMMAND = 'python -m unittest discover -s tests'
 TEST_LABEL = ('run by the dispatcher\'s fixed command in the attempt\'s container on an export of the committed '
-              'tree; not independent CI')
+              'tree; not independent CI. The agent\'s own code runs in it (the tests are its tests), so it can '
+              'influence the test status and output; the commit\'s custody is the host\'s commit-id equality and tree '
+              'policy, not this run')
+EXCLUSION_RULE = ('RESULT takes out of its commit any path with a component that, NFC-normalized, case-folded and '
+                  'without trailing dots and spaces, is .claude or .mcp.json, and any change under openspec/ or '
+                  'backlog/ (left as the base holds them); each excluded path is reported')
 TEST_TIMEOUT_S = 300
 TEST_OUTPUT_BYTES = 65536      # the tail of the test run's output the command reports
 SEED_TIMEOUT_S = 120
@@ -110,6 +144,7 @@ TURN_CEILING_S = 3600          # a ceiling on the turn, not an expected duration
 POLL_S = 10
 TERMINAL = ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation', 'deleting')
 CLOCK = time.monotonic
+RUN_NOT_STARTED = 429          # the Agent Server saved the message and did not start the run
 
 
 def WAIT(seconds):
@@ -125,6 +160,20 @@ PART_BEGIN, PART_END, PART_DELIVERED = 'AIEH-EXCHANGE-PART', 'AIEH-EXCHANGE-END'
 
 def _refused(code: str, detail: str, **context) -> DispatchRefused:
     return DispatchRefused(code, detail, **context)
+
+
+def _digest(data: bytes) -> dict:
+    """A text of the agent's held as its digest and size only (review S7)."""
+    return {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+
+
+def folded(component: str) -> str:
+    """A path component as the R3 names are compared: NFC, case-folded, trailing dots and spaces stripped."""
+    return unicodedata.normalize('NFC', component).casefold().rstrip(' .')
+
+
+def forbidden_component(path: str, names=FORBIDDEN_NAMES) -> bool:
+    return any(folded(part) in names for part in path.split('/'))
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +208,11 @@ class Base:
     def seed_sha256(self) -> str:
         return hashlib.sha256(self.payload).hexdigest()
 
+    @cached_property
+    def protected(self) -> frozenset:
+        """(path, mode, blob id) of every base file under PROTECTED_DIRS."""
+        return frozenset((p, m, object_id('blob', d)) for p, m, d in self.files if p.split('/')[0] in PROTECTED_DIRS)
+
     def summary(self) -> dict:
         return {'repository': self.repository, 'ref': self.ref, 'commit': self.commit,
                 'seed': {'sha256': self.seed_sha256, 'files': len(self.files)}}
@@ -168,6 +222,14 @@ def _repository_access():
     return di.planning.repository_access
 
 
+class TreeBound(ValueError):
+    """A tree beyond MAX_DEPTH or MAX_FILES; ``reason`` is ``too-deep`` or ``too-many``."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def _parse_tree(repository, oid: str):
     found = repository.read(oid)
     if found is None or found[1] != 'tree':
@@ -175,27 +237,32 @@ def _parse_tree(repository, oid: str):
     return _repository_access().dulwich_modules().objects.parse_tree(found[2], len(oid) // 2)
 
 
-def tree_entries(repository, tree: str, prefix: str = '') -> list[tuple[str, int, str]]:
-    """Every non-tree entry below TREE as (path, mode, oid), in git's order, read object by object."""
-    out = []
-    for name, mode, oid in _parse_tree(repository, tree):
-        name, oid = name.decode('utf-8', 'surrogateescape'), oid.decode('ascii')
-        path = f'{prefix}/{name}' if prefix else name
-        if mode == TREE_MODE:
-            out.extend(tree_entries(repository, oid, path))
-        else:
-            out.append((path, mode, oid))
-        if len(out) > MAX_FILES:
-            raise ValueError(f'more than {MAX_FILES} files')
-    return out
+def tree_entries(repository, tree: str) -> list[tuple[str, int, str]]:
+    """Every non-tree entry below TREE as (path, mode, oid), walked iteratively (no recursion), at most MAX_DEPTH
+    deep and MAX_FILES entries (TreeBound otherwise)."""
+    out, pending = [], [(tree, '', 0)]
+    while pending:
+        oid, prefix, depth = pending.pop()
+        if depth > MAX_DEPTH:
+            raise TreeBound('too-deep')
+        for name, mode, child in _parse_tree(repository, oid):
+            name, child = name.decode('utf-8', 'surrogateescape'), child.decode('ascii')
+            path = f'{prefix}/{name}' if prefix else name
+            if mode == TREE_MODE:
+                pending.append((child, path, depth + 1))
+            else:
+                out.append((path, mode, child))
+            if len(out) + len(pending) > MAX_FILES:
+                raise TreeBound('too-many')
+    return sorted(out)
 
 
-def tree_problems(entries) -> list[dict]:
+def tree_problems(entries, names=TREE_FORBIDDEN) -> list[dict]:
     """R3 and the design's tree policy: each entry that is not a regular file (a symbolic link, a gitlink or any
-    other mode) or that has a forbidden name (.claude, .mcp.json) as any component of its path."""
+    other mode) or that has a forbidden name (NAMES, compared as ``folded``) as any component of its path."""
     problems = []
     for path, mode, _ in entries:
-        if FORBIDDEN_NAMES & set(path.split('/')):
+        if forbidden_component(path, names):
             problems.append({'path': path, 'reason': 'forbidden-name'})
         elif mode == LINK_MODE:
             problems.append({'path': path, 'reason': 'link'})
@@ -233,8 +300,9 @@ def contains(repository, head: str, commit: str) -> bool:
 def read_base(project, *, repository: str, design_commit: str, ref: str = BASE_BRANCH) -> Base:
     """The approved REPOSITORY's base from its project clone PROJECT (the work source's own clone), opened under the
     planning adapter's configuration policy: REF's commit, which must contain DESIGN_COMMIT (BASE_LACKS_DESIGN), its
-    tree's files, refused when one is not a regular file or has a forbidden name (SEED_TREE_REFUSED, R3), and a
-    complete bundle of REF. BASE_UNAVAILABLE when it cannot be read."""
+    tree's files, refused when one is not a regular file or has a forbidden name, .git included (SEED_TREE_REFUSED,
+    R3, review N5), or the tree is beyond its bounds, and a complete bundle of REF. BASE_UNAVAILABLE when it cannot
+    be read."""
     if not isinstance(design_commit, str) or HEX40.fullmatch(design_commit) is None:
         raise _refused('BASE_UNAVAILABLE', 'the design commit is not a full commit id')
     ra = _repository_access()
@@ -251,7 +319,11 @@ def read_base(project, *, repository: str, design_commit: str, ref: str = BASE_B
                 raise _refused('BASE_LACKS_DESIGN', f'{ref} at {commit} does not contain the accepted design commit '
                                f'{design_commit}', base=commit, design=design_commit)
             tree, _ = _commit_header(opened.read(commit)[2])
-            entries = tree_entries(opened, tree)
+            try:
+                entries = tree_entries(opened, tree)
+            except TreeBound as bound:
+                raise _refused('SEED_TREE_REFUSED', f'the base tree is {bound.reason}',
+                               problems=[{'path': '', 'reason': bound.reason}]) from None
             problems = tree_problems(entries)
             if problems:
                 raise _refused('SEED_TREE_REFUSED', f'the base tree holds {len(problems)} entr(ies) that are not '
@@ -261,7 +333,7 @@ def read_base(project, *, repository: str, design_commit: str, ref: str = BASE_B
             if header.get('prerequisites') or [r for _, r in header.get('refs') or []] != [ref]:
                 raise _refused('BASE_UNAVAILABLE', 'the base bundle is not one complete reference')
             bundle = (Path(scratch) / 'base.bundle').read_bytes()
-    except (ra.RepositoryError, ValueError, OSError, TypeError) as exc:
+    except (ra.RepositoryError, ValueError, OSError, TypeError, RecursionError) as exc:
         raise _refused('BASE_UNAVAILABLE', f'the base cannot be read: {type(exc).__name__}: '
                        f'{getattr(exc, "code", exc)}') from None
     finally:
@@ -285,7 +357,7 @@ with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
 print("AIEH-SEED ok", sys.argv[2], count)
 """
 
-RESULT_SCRIPT = r"""import hashlib, json, os, shutil, subprocess, sys, tempfile
+RESULT_SCRIPT = r"""import hashlib, json, os, shutil, subprocess, sys, tempfile, unicodedata
 p = json.loads(bytes.fromhex(sys.stdin.read().strip()).decode("utf-8"))
 work = os.path.abspath(sys.argv[1])
 root = tempfile.mkdtemp(prefix="aieh-result-")
@@ -306,12 +378,26 @@ def stop(step, err=b""):
     sys.exit(3)
 
 
-def git(step, *args, data=None, over=None):
+def git(step, *args, data=None, over=None, raw=False):
     done = subprocess.run(["git", "-c", "safe.directory=*", *args], input=data, capture_output=True,
                           env=over or env)
     if done.returncode != 0:
         stop(step, done.stderr)
-    return done.stdout.decode("ascii", "replace").strip()
+    return done.stdout if raw else done.stdout.decode("ascii", "replace").strip()
+
+
+def entries(text, at):
+    out = {}
+    for item in text.split(b"\0"):
+        if item:
+            meta, _, path = item.partition(b"\t")
+            words = meta.split()
+            out[path] = (words[0].decode(), words[at].decode())
+    return out
+
+
+def folded(part):
+    return unicodedata.normalize("NFC", part.decode("utf-8", "surrogateescape")).casefold().rstrip(" .")
 
 
 bundle = os.path.join(root, "base.bundle")
@@ -326,35 +412,58 @@ if git("base", "rev-parse", "--verify", "refs/aieh/base^{commit}") != p["base"]:
     stop("base")
 git("read-tree", "read-tree", p["base"])
 git("add", "add", "-A")
+index = entries(git("exclude", "ls-files", "-s", "-z", raw=True), 1)
+based = entries(git("exclude", "ls-tree", "-r", "-z", "--full-tree", p["base"], raw=True), 2)
+drop, put, excluded = [], [], []
+for path in sorted(set(index) | set(based)):
+    parts = path.split(b"/")
+    if any(folded(part) in p["forbidden"] for part in parts):
+        if path in index:
+            drop.append(path)
+            excluded.append({"path": path.decode("utf-8", "replace"), "reason": "forbidden-name"})
+    elif parts[0].decode("utf-8", "replace") in p["protected"] and index.get(path) != based.get(path):
+        if path in index:
+            drop.append(path)
+        if path in based:
+            put.append(path)
+        excluded.append({"path": path.decode("utf-8", "replace"), "reason": "protected-dir"})
+if drop or put:
+    lines = [b"0 " + b"0" * 40 + b"\t" + path for path in drop]
+    lines += [(based[path][0] + " " + based[path][1]).encode() + b"\t" + path for path in put]
+    git("exclude", "update-index", "-z", "--index-info", data=b"\0".join(lines) + b"\0")
 tree = git("write-tree", "write-tree")
 commit = git("commit", "commit-tree", tree, "-p", p["base"], data=p["message"].encode("utf-8"))
 git("ref", "update-ref", p["ref"], commit)
 out = os.path.join(root, "result.bundle")
 git("bundle", "bundle", "create", "-q", out, p["ref"])
+with open(out, "rb") as handle:
+    data = handle.read()
+digest = hashlib.sha256(data).hexdigest()
 export = os.path.join(root, "export")
 os.mkdir(export)
 xenv = dict(env, GIT_WORK_TREE=export, GIT_INDEX_FILE=os.path.join(root, "export.index"))
 git("export", "read-tree", commit, over=xenv)
 git("export", "checkout-index", "-a", "-f", over=xenv)
-try:
-    run = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=export,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=p["test_timeout"],
-                         env=dict(keep, HOME=root, PYTHONDONTWRITEBYTECODE="1"))
-    status, output = str(run.returncode), run.stdout
-except subprocess.TimeoutExpired as exc:
-    status, output = "timeout", exc.output or b""
-with open(out, "rb") as handle:
-    data = handle.read()
 say("base", p["base"])
 say("tree", tree)
 say("commit", commit)
+say("excluded", json.dumps(excluded, sort_keys=True).encode("utf-8").hex())
+say("bundle", digest, len(data))
+try:
+    run = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=export,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         timeout=p["test_timeout"], env=dict(keep, HOME=export, PYTHONDONTWRITEBYTECODE="1"))
+    status, output = str(run.returncode), run.stdout
+except subprocess.TimeoutExpired as exc:
+    status, output = "timeout", exc.output or b""
 say("tests", status)
 say("test-output", output[-p["output_limit"]:].hex())
-print(p["part_begin"], p["part"], hashlib.sha256(data).hexdigest(), len(data))
-hexed = data.hex()
-for start in range(0, len(hexed), 76):
-    print(hexed[start:start + 76])
-print(p["part_end"], p["part"])
+if p["frame"]:
+    print(p["part_begin"], p["part"], digest, len(data))
+    hexed = data.hex()
+    for start in range(0, len(hexed), 76):
+        print(hexed[start:start + 76])
+    print(p["part_end"], p["part"])
 say("done")
 shutil.rmtree(root, ignore_errors=True)
 """
@@ -388,28 +497,36 @@ def result_ref(attempt_id: str) -> str:
 
 
 @di.command_builder('d1-result')
-def build_result(base: Base, *, attempt_id: str, message: str, when: int) -> dict:
+def build_result(base: Base, *, attempt_id: str, message: str, when: int, deliver: bool = True) -> dict:
     """RESULT: one commit of ``/workspace/<repository>`` on a fresh git directory the command brings (from the base
-    bundle in its text), bundled and delivered into the guest exchange as ``work-<attempt id>.bundle``; the accepted
-    design's test command on an export of the committed tree. Every value in the command's text is hex-encoded
-    JSON, from the base, the reserved record (``commit_message``) and the store's time (``attempt_time``)."""
+    bundle in its text), under EXCLUSION_RULE, bundled and, with DELIVER, delivered into the guest exchange as
+    ``work-<attempt id>.bundle``; the accepted design's test command on an export of the committed tree. Without
+    DELIVER (a resumed result step whose bundle is already in the exchange) no frame is printed. Every value in the
+    command's text is hex-encoded JSON, from the base, the reserved record (``commit_message``) and the store's time
+    (``attempt_time``)."""
     if not isinstance(attempt_id, str) or ATTEMPT_ID_RE.fullmatch(attempt_id) is None:
         raise _refused('TAIL_BODY_INVALID', 'not an attempt id')
     if type(when) is not int or when <= 0:
         raise _refused('TAIL_BODY_INVALID', 'the commit time is not a positive integer of seconds')
+    if type(deliver) is not bool:
+        raise _refused('TAIL_BODY_INVALID', 'deliver is a bool')
     params = {'base': base.commit, 'base_ref': base.ref, 'bundle': base.bundle.hex(), 'ref': result_ref(attempt_id),
               'name': BOT_NAME, 'email': BOT_EMAIL, 'date': f'{when} +0000', 'message': message,
               'test_timeout': TEST_TIMEOUT_S, 'output_limit': TEST_OUTPUT_BYTES, 'part': PART,
-              'part_begin': PART_BEGIN, 'part_end': PART_END}
+              'part_begin': PART_BEGIN, 'part_end': PART_END, 'frame': deliver,
+              'forbidden': sorted(FORBIDDEN_NAMES), 'protected': list(PROTECTED_DIRS)}
     payload = json.dumps(params, sort_keys=True, separators=(',', ':')).encode('utf-8').hex()
-    return {'command': f"printf %s '{payload}' | python -c '{RESULT_SCRIPT}' '{workspace_of(base.repository)}'",
-            'timeout': RESULT_TIMEOUT_S, 'deliver': {'part': PART, 'name': result_name(attempt_id)}}
+    made = {'command': f"printf %s '{payload}' | python -c '{RESULT_SCRIPT}' '{workspace_of(base.repository)}'",
+            'timeout': RESULT_TIMEOUT_S}
+    if deliver:
+        made['deliver'] = {'part': PART, 'name': result_name(attempt_id)}
+    return made
 
 
 # ---------------------------------------------------------------------------
 # The message: one frame in dispatcher code (G4)
 
-FRAME_VERSION = 'aieh-d1-message/v1'
+FRAME_VERSION = 'aieh-d1-message/v2'
 FRAME = """You are the implementing agent for one task of the repository in {workdir}.
 
 Task: {work_id}. Its Backlog.md file is {workdir}/{task_file}.
@@ -417,9 +534,10 @@ Design: the accepted OpenSpec change {change}, in {workdir}/openspec/changes/{ch
 
 1. Read the task file and the change's files, then implement the change as designed, in {workdir}.
 2. Run the accepted design's test command there, offline, with what this container holds: {test_command}
-3. Do not edit anything under backlog/ or openspec/: Backlog.md alone owns the task's status, and the accepted \
-design is bound by its acceptance.
-4. Do not commit and do not push: the dispatcher records the result from the files you leave in {workdir}.
+3. Do not change anything under backlog/ or openspec/: Backlog.md alone owns the task's status, and the accepted \
+design is bound by its acceptance. Changes there are left out of the result.
+4. Do not create .claude or .mcp.json files or directories anywhere in {workdir}: they are left out of the result.
+5. Do not commit and do not push: the dispatcher records the result from the files you leave in {workdir}.
 """
 WORK_ID_RE = re.compile(r'[A-Za-z][A-Za-z0-9]*-[0-9]{1,9}')
 SLOT_PATH_RE = re.compile(r'[A-Za-z0-9 ()._,+-]+(?:/[A-Za-z0-9 ()._,+-]+)*')
@@ -494,6 +612,23 @@ def attempt_time(integration_store, operation_key: str) -> int:
     raise _refused('ATTEMPT_NOT_CONFIRMED', f'{operation_key} has no confirmed transition')
 
 
+@dataclass(frozen=True)
+class Prepared:
+    """Everything the run sends, built before anything is sent (review S2)."""
+    text: str
+    message: str
+    when: int
+    seed: object
+    result: object
+
+
+def prepare(resolved, base: Base, attempt_id: str, when: int, *, deliver: bool = True) -> Prepared:
+    text = build_message(resolved, base)
+    message = commit_message(resolved, base, attempt_id)
+    return Prepared(text=text, message=message, when=when, seed=build_seed(base),
+                    result=build_result(base, attempt_id=attempt_id, message=message, when=when, deliver=deliver))
+
+
 # ---------------------------------------------------------------------------
 # The turn journal and the message
 
@@ -523,7 +658,8 @@ def send_message(integration_store, operation_key: str, client, base: Base, text
     """The one message of the attempt: the turn journal reserved with its intent (TURN_CONFLICT for another one),
     ``dispatched`` immediately before the one POST, ``confirmed`` with the answer's status. A journal already past
     ``reserved`` is TURN_ALREADY_SENT with zero calls: the message is never sent twice. A lost answer (no answer or a
-    5xx) is ``unknown`` and is settled only by reading the conversation's events (``reconcile_turn``)."""
+    5xx) is ``unknown`` and is settled only by reading the conversation's events (``reconcile_turn``). A 429 (the
+    message saved, the run not started) is ``failed`` and TURN_RUN_NOT_STARTED: never settled as sent (review S4)."""
     body = message_body(text)
     di.TAIL_GRAMMARS[di.MESSAGE_TAIL](body)                 # the client's own grammar, before anything is recorded
     intent = turn_intent(operation_key, base, text)
@@ -549,7 +685,11 @@ def send_message(integration_store, operation_key: str, client, base: Base, text
     status = answer.get('status') if isinstance(answer, Mapping) else None
     if type(status) is int and 200 <= status < 300:
         di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'sent', {'status': status})
-    elif type(status) is int and 400 <= status < 500 and status != 429:
+    elif status == RUN_NOT_STARTED:
+        di._mark(integration_store, key, 'dispatched', 'failed', actor, 'run-not-started', {'status': status})
+        raise _refused('TURN_RUN_NOT_STARTED', 'the Agent Server answered 429: the message is saved and the run did '
+                       'not start; it is not settled as sent', status=status)
+    elif type(status) is int and 400 <= status < 500:
         di._mark(integration_store, key, 'dispatched', 'failed', actor, 'refused', {'status': status})
         raise _refused('TURN_REFUSED', f'the message was answered {status}', status=status)
     else:
@@ -587,18 +727,23 @@ def wait_for_turn(client, conversation_id: str, *, ceiling_s: float = TURN_CEILI
     clock, wait = clock or CLOCK, wait or WAIT
     deadline = clock() + ceiling_s
     while True:
-        status, body = AE._answer(client, 'GET', AE.CONVERSATION_ROUTE, conversation_id, 'CONVERSATION_UNOBSERVED',
-                                  'the conversation')
-        execution = body.get('execution_status') if isinstance(body, Mapping) else None
-        if status != 200 or execution not in AE.EXECUTION_STATUSES:
-            raise _refused('CONVERSATION_UNOBSERVED', f'the conversation answered {status} without its status',
-                           status=status)
+        status, execution = conversation_status(client, conversation_id)
         if execution in TERMINAL:
             return execution
         remaining = deadline - clock()
         if remaining <= 0:
             raise _refused('TURN_CEILING', f'the turn is still {execution} after {ceiling_s} s', status=execution)
         wait(min(poll_s, remaining))
+
+
+def conversation_status(client, conversation_id: str) -> tuple[int, str]:
+    status, body = AE._answer(client, 'GET', AE.CONVERSATION_ROUTE, conversation_id, 'CONVERSATION_UNOBSERVED',
+                              'the conversation')
+    execution = body.get('execution_status') if isinstance(body, Mapping) else None
+    if status != 200 or execution not in AE.EXECUTION_STATUSES:
+        raise _refused('CONVERSATION_UNOBSERVED', f'the conversation answered {status} without its status',
+                       status=status)
+    return status, execution
 
 
 # ---------------------------------------------------------------------------
@@ -633,51 +778,95 @@ def _plain(client, method: str, route: str):
     return status, answer.get('body') if isinstance(answer, Mapping) else None
 
 
+def _command(client, conversation_id: str, command, code: str) -> Mapping:
+    """One built command through the client; no answer (a raw OSError or a transport error) is CODE (review S3)."""
+    try:
+        answer = client.call('POST', PROXY, params={'conversation_id': conversation_id, 'tail': di.COMMAND_TAIL},
+                             body=command)
+    except DispatchRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001 - no answer: the command may or may not have run
+        raise _refused(code, f'the {command.builder} command was not answered ({type(exc).__name__}); its step is '
+                       'resumed, never assumed', error=type(exc).__name__) from None
+    return answer if isinstance(answer, Mapping) else {}
+
+
 # ---------------------------------------------------------------------------
 # The result: the command's answer, then the host's intake of the pulled bundle
 
 LINE_RE = re.compile(r'AIEH-RESULT (base|tree|commit) ([0-9a-f]{40})|AIEH-RESULT tests (-?[0-9]{1,5}|timeout)'
-                     r'|AIEH-RESULT test-output ([0-9a-f]*)|AIEH-RESULT (done)|AIEH-RESULT failed ([a-z-]{1,32}) '
-                     r'([0-9a-f]*)|AIEH-EXCHANGE-DELIVERED bundle ([0-9a-f]{64}) ([0-9]{1,12})')
+                     r'|AIEH-RESULT (test-output|excluded) ([0-9a-f]*)|AIEH-RESULT (done)'
+                     r'|AIEH-RESULT failed ([a-z-]{1,32}) ([0-9a-f]*)|AIEH-RESULT bundle ([0-9a-f]{64}) ([0-9]{1,12})'
+                     r'|AIEH-EXCHANGE-DELIVERED bundle ([0-9a-f]{64}) ([0-9]{1,12})')
+RESULT_MARKERS = ('base', 'tree', 'commit', 'excluded', 'bundle', 'tests', 'test-output', 'done')
 
 
-def parse_result(answer) -> dict:
-    """The RESULT command's answer: its printed base, tree, commit, test status and output, and the probe's
-    ``delivered``. Each marker line once; a ``failed`` line, a missing or repeated marker, a delivery error, or a
-    delivered line that is not the probe's ``delivered``, is RESULT_COMMAND_FAILED."""
+def parse_result(answer, *, delivered_expected: bool = True) -> dict:
+    """The RESULT command's answer: its printed base, tree, commit, excluded paths, bundle digest, test status and
+    output, and the probe's ``delivered``. The command exits 0 (review S8); each marker line once; a ``failed`` line,
+    a missing or repeated marker, a delivery error, or a delivery that is not the printed bundle digest, is
+    RESULT_COMMAND_FAILED. Agent-controlled text (the test output, the excluded paths, a failed step's stderr) is
+    returned in memory; a refusal carries only its digest (review S7)."""
     body = answer.get('body') if isinstance(answer, Mapping) else None
     stdout = body.get('stdout') if isinstance(body, Mapping) else None
     delivered = answer.get('delivered') if isinstance(answer, Mapping) else None
     if answer.get('status') != 200 or not isinstance(stdout, str):
         raise _refused('RESULT_COMMAND_FAILED', f'the result command answered {answer.get("status")} without its '
-                       'output', delivered=delivered)
+                       'output', delivered=di._json_value(delivered))
     found: dict = {}
     for line in stdout.splitlines():
         match = LINE_RE.fullmatch(line.strip())
         if match is None:
             continue
-        if match.group(6):
-            raise _refused('RESULT_COMMAND_FAILED', f'the result command failed at {match.group(6)}',
-                           step=match.group(6), stderr=bytes.fromhex(match.group(7))[-500:].decode('utf-8', 'replace'))
-        name = match.group(1) or ('tests' if match.group(3) else 'test-output' if match.group(4) is not None
-                                  else 'done' if match.group(5) else 'delivered')
-        value = (match.group(2) or match.group(3) or match.group(4) or match.group(5)
-                 or (match.group(8), int(match.group(9))))
+        if match.group(7):
+            raise _refused('RESULT_COMMAND_FAILED', f'the result command failed at {match.group(7)}',
+                           step=match.group(7), stderr=_digest(bytes.fromhex(match.group(8))))
+        if match.group(1):
+            name, value = match.group(1), match.group(2)
+        elif match.group(3):
+            name, value = 'tests', match.group(3)
+        elif match.group(4):
+            name, value = match.group(4), match.group(5)
+        elif match.group(6):
+            name, value = 'done', 'done'
+        elif match.group(9):
+            name, value = 'bundle', (match.group(9), int(match.group(10)))
+        else:
+            name, value = 'delivered', (match.group(11), int(match.group(12)))
         if name in found:
             raise _refused('RESULT_COMMAND_FAILED', f'the result output repeats {name}')
         found[name] = value
-    missing = [n for n in ('base', 'tree', 'commit', 'tests', 'test-output', 'delivered', 'done') if n not in found]
+    missing = [n for n in RESULT_MARKERS + (('delivered',) if delivered_expected else ()) if n not in found]
     if missing:
-        raise _refused('RESULT_COMMAND_FAILED', f'the result output lacks {missing}', delivered=delivered)
-    if not isinstance(delivered, Mapping) or 'error' in delivered \
-            or (delivered.get('sha256'), delivered.get('size')) != found['delivered']:
-        raise _refused('RESULT_COMMAND_FAILED', 'the bundle was not delivered into the exchange as printed',
-                       delivered=delivered)
-    output = bytes.fromhex(found['test-output']).decode('utf-8', 'replace')
-    return {'base': found['base'], 'tree': found['tree'], 'commit': found['commit'],
-            'tests': {'status': found['tests'], 'output': _data_text(output), 'command': TEST_COMMAND,
-                      'label': TEST_LABEL},
-            'delivered': {'name': delivered.get('name'), 'sha256': delivered['sha256'], 'size': delivered['size']}}
+        raise _refused('RESULT_COMMAND_FAILED', f'the result output lacks {missing}',
+                       delivered=di._json_value(delivered))
+    if body.get('exit_code') != 0:
+        raise _refused('RESULT_COMMAND_FAILED', 'the result command did not exit 0',
+                       exit_code=di._json_value(body.get('exit_code')))
+    if delivered_expected and (not isinstance(delivered, Mapping) or 'error' in delivered
+                               or (delivered.get('sha256'), delivered.get('size')) != found['delivered']
+                               or found['delivered'] != found['bundle']):
+        raise _refused('RESULT_COMMAND_FAILED', 'the bundle was not delivered into the exchange as printed before '
+                       'the tests ran', delivered=di._json_value(delivered))
+    output = bytes.fromhex(found['test-output'])
+    excluded_raw = bytes.fromhex(found['excluded'])
+    try:
+        excluded = json.loads(excluded_raw.decode('utf-8'))
+        if not isinstance(excluded, list) or not all(isinstance(e, dict) and set(e) == {'path', 'reason'}
+                                                     and e['reason'] in ('forbidden-name', 'protected-dir')
+                                                     and isinstance(e['path'], str) for e in excluded):
+            raise ValueError
+    except ValueError:
+        raise _refused('RESULT_COMMAND_FAILED', 'the excluded paths are not the command\'s list') from None
+    printed = {'base': found['base'], 'tree': found['tree'], 'commit': found['commit'],
+               'bundle': {'sha256': found['bundle'][0], 'size': found['bundle'][1]},
+               'tests': {'status': found['tests'], 'output': _data_text(output.decode('utf-8', 'replace')),
+                         'output_digest': _digest(output), 'command': TEST_COMMAND, 'label': TEST_LABEL},
+               'excluded': excluded, 'excluded_digest': _digest(excluded_raw)}
+    if delivered_expected:
+        printed['delivered'] = {'name': delivered.get('name'), 'sha256': delivered['sha256'],
+                                'size': delivered['size']}
+    return printed
 
 
 def _data_text(text: str) -> str:
@@ -699,7 +888,8 @@ def object_id(kind: str, raw: bytes) -> str:
 @dataclass(frozen=True)
 class VerifiedResult:
     """A result the host accepted: the bundle's one commit, equal to the specified one, over a tree of regular
-    files."""
+    files. ``tests`` (with its output) and ``excluded`` (the paths RESULT left out) are agent-controlled text, held
+    in memory only: ``to_json`` (every record) holds their digests and sizes (review S7)."""
     attempt_id: str
     conversation_id: str
     repository: str
@@ -712,13 +902,21 @@ class VerifiedResult:
     staged: str
     verify_repo: str
     files: int
-    tests: dict
+    inflated_bytes: int
+    tests: dict = field(repr=False)
+    excluded: tuple = field(repr=False)
+    excluded_digest: dict = field(default_factory=dict)
+    resumed: bool = False
 
     def to_json(self) -> dict:
         return {'format': RESULT_FORMAT, 'attemptId': self.attempt_id, 'conversationId': self.conversation_id,
                 'repository': self.repository, 'base': self.base, 'commit': self.commit, 'tree': self.tree,
                 'ref': self.ref, 'bundle': {'sha256': self.bundle_sha256, 'bytes': self.bundle_bytes},
-                'files': self.files, 'tests': dict(self.tests)}
+                'files': self.files, 'inflatedBytes': self.inflated_bytes, 'resumed': self.resumed,
+                'tests': {'status': self.tests.get('status'), 'command': self.tests.get('command'),
+                          'label': self.tests.get('label'), 'output': dict(self.tests.get('output_digest') or {})},
+                'excluded': {'count': len(self.excluded), **dict(self.excluded_digest)},
+                'exclusionRule': EXCLUSION_RULE}
 
 
 def _check_attempt(integration_store, operation_key: str):
@@ -729,13 +927,23 @@ def _check_attempt(integration_store, operation_key: str):
     return resolved
 
 
+def _tree_refused(problems: list[dict], what: str) -> DispatchRefused:
+    """RESULT_TREE_REFUSED with each problem's reason and the digest of its path (agent-controlled text, S7)."""
+    return _refused('RESULT_TREE_REFUSED', f'the result tree {what}',
+                    problems=[{'reason': p['reason'], 'path': _digest(p['path'].encode('utf-8', 'surrogateescape'))}
+                              for p in problems[:20]])
+
+
 def intake_result(integration_store, operation_key: str, *, base: Base, printed: dict, pulled: Mapping,
-                  message: str, when: int) -> VerifiedResult:
+                  message: str, when: int, resumed: bool = False) -> VerifiedResult:
     """The host's intake of the pulled bundle: the attempt confirmed with no end record (ATTEMPT_ENDED) and its turn
-    confirmed; the pull verified by the retained verifier at the delivered digest (RESULT_NOT_VERIFIED); exactly the
-    reference ``refs/heads/work/<attempt id>``, no prerequisite (RESULT_REFS_INVALID); its commit the printed one and
-    byte for byte ``expected_commit`` over its own tree (RESULT_COMMIT_MISMATCH); the tree regular files only, no
-    link, gitlink or forbidden name (RESULT_TREE_REFUSED)."""
+    confirmed; the pull verified by the retained verifier (RESULT_NOT_VERIFIED) at the bundle digest the command
+    printed before the tests and the probe delivered (a resumed intake: the pulled bundle's own digest, the
+    commit-id equality its integrity check); exactly the reference ``refs/heads/work/<attempt id>``, no prerequisite
+    (RESULT_REFS_INVALID); its commit the printed one and byte for byte ``expected_commit`` over its own tree
+    (RESULT_COMMIT_MISMATCH); the tree within its bounds, regular files only, no link, gitlink or forbidden name,
+    ``openspec/`` and ``backlog/`` exactly the base's, the blobs at most MAX_INFLATED inflated (RESULT_TREE_REFUSED
+    with a reason). Any repository error is RESULT_NOT_VERIFIED."""
     resolved = _check_attempt(integration_store, operation_key)
     attempt_id = store.attempt_id_for(operation_key)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
@@ -743,24 +951,25 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
         raise _refused('TURN_NOT_CONFIRMED', f'the turn journal is {getattr(turn, "state", None)}, not confirmed')
     staged = pulled.get('staged') if isinstance(pulled, Mapping) else None
     verified = pulled.get('bundle') if isinstance(pulled, Mapping) else None
-    delivered = printed['delivered']
+    want = (printed['bundle']['sha256'], printed['bundle']['size']) if not resumed else None
     if not isinstance(staged, Mapping) or not isinstance(verified, Mapping) or pulled.get('result') != 'pulled' \
             or verified.get('verified') is not True \
-            or (staged.get('sha256'), staged.get('bytes')) != (delivered['sha256'], delivered['size']):
-        raise _refused('RESULT_NOT_VERIFIED', 'the pulled bundle did not pass the retained verifier at the delivered '
-                       'digest', delivered=dict(delivered))
+            or (want is not None and ((staged.get('sha256'), staged.get('bytes')) != want
+                                      or (printed['delivered']['sha256'], printed['delivered']['size']) != want)):
+        raise _refused('RESULT_NOT_VERIFIED', 'the pulled bundle did not pass the retained verifier at the digest '
+                       'printed before the tests and delivered')
     header = verified.get('header') if isinstance(verified.get('header'), Mapping) else {}
     refs = [list(r) for r in header.get('refs') or ()]
     if header.get('prerequisites') or len(refs) != 1 or refs[0][1] != result_ref(attempt_id):
-        raise _refused('RESULT_REFS_INVALID', f'the bundle holds {[r[1] for r in refs]} with prerequisites '
-                       f'{header.get("prerequisites")}, not exactly {result_ref(attempt_id)}')
+        raise _refused('RESULT_REFS_INVALID', f'the bundle holds {len(refs)} reference(s) with prerequisites '
+                       f'{bool(header.get("prerequisites"))}, not exactly {result_ref(attempt_id)}')
     commit = refs[0][0]
     if commit != printed['commit'] or printed['base'] != base.commit:
         raise _refused('RESULT_COMMIT_MISMATCH', 'the bundle\'s commit is not the one the command printed')
     ra = _repository_access()
     try:
         opened = ra.open_repository(verified['verify_repo'], config='repository', work_tree=False)
-    except (ra.CannotRun, ra.RepositoryError, KeyError, TypeError) as exc:
+    except (ra.CannotRun, ra.RepositoryError, KeyError, TypeError, OSError) as exc:
         raise _refused('RESULT_NOT_VERIFIED', f'the verified repository cannot be read ({type(exc).__name__})') \
             from None
     try:
@@ -774,19 +983,37 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
                            'tree (parent, identity, time, message or header)', commit=commit)
         try:
             entries = tree_entries(opened, tree)
-        except ValueError as exc:
-            raise _refused('RESULT_TREE_REFUSED', f'the result tree cannot be walked: {exc}') from None
+        except TreeBound as bound:
+            raise _tree_refused([{'path': '', 'reason': bound.reason}], f'is {bound.reason}') from None
         problems = tree_problems(entries)
+        protected = frozenset((p, m, o) for p, m, o in entries if p.split('/')[0] in PROTECTED_DIRS)
+        if protected != base.protected:
+            problems += [{'path': p, 'reason': 'protected-changed'} for p in
+                         sorted({e[0] for e in protected ^ base.protected})]
         if problems:
-            raise _refused('RESULT_TREE_REFUSED', f'the result tree holds {len(problems)} entr(ies) that are not '
-                           'regular files or have a forbidden name', problems=problems[:20])
+            raise _tree_refused(problems, f'holds {len(problems)} entr(ies) outside its policy')
+        inflated = 0
+        for _, _, oid in entries:
+            blob = opened.read(oid)
+            if blob is None or blob[1] != 'blob':
+                raise _refused('RESULT_NOT_VERIFIED', f'the result tree names {oid}, not a blob of the repository')
+            inflated += len(blob[2])
+            if inflated > MAX_INFLATED:
+                raise _tree_refused([{'path': '', 'reason': 'too-large'}], f'inflates beyond {MAX_INFLATED} bytes')
+    except DispatchRefused:
+        raise
+    except (ra.RepositoryError, ValueError, OSError, TypeError, RecursionError) as exc:
+        raise _refused('RESULT_NOT_VERIFIED', f'the verified repository cannot be read ({type(exc).__name__}: '
+                       f'{getattr(exc, "code", "")})') from None
     finally:
         opened.close()
     return VerifiedResult(attempt_id=attempt_id, conversation_id=store.conversation_id_for(operation_key),
                           repository=resolved.repository, base=base.commit, commit=commit, tree=tree,
-                          ref=result_ref(attempt_id), bundle_sha256=delivered['sha256'],
-                          bundle_bytes=delivered['size'], staged=str(staged.get('path')),
-                          verify_repo=str(verified['verify_repo']), files=len(entries), tests=printed['tests'])
+                          ref=result_ref(attempt_id), bundle_sha256=str(staged.get('sha256')),
+                          bundle_bytes=int(staged.get('bytes')), staged=str(staged.get('path')),
+                          verify_repo=str(verified['verify_repo']), files=len(entries), inflated_bytes=inflated,
+                          tests=printed['tests'], excluded=tuple(printed['excluded']),
+                          excluded_digest=printed['excluded_digest'], resumed=resumed)
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +1021,7 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
 
 @dataclass(frozen=True)
 class RunOutcome:
-    outcome: str                       # verified, stopped, inspection-failed, turn-not-finished
+    outcome: str      # verified, stopped, inspection-failed, run-not-started, turn-not-finished
     attempt_id: str
     conversation_id: str
     turn_status: str | None = None
@@ -816,23 +1043,51 @@ def _stop(integration_store, operation_key, transport, actor, records, read_arti
                                       read_artifact=read_artifact)
 
 
-def run_attempt(integration_store, operation_key: str, *, transport, base: Base, actor: str,
-                inspect: Callable[[str], Sequence[str]], pull: Callable[[str], Mapping],
-                observe: Callable[..., Sequence[Mapping]] | None = None,
-                reserve_result: Callable[[VerifiedResult], object] | None = None,
-                ceiling_s: float = TURN_CEILING_S, clock=None, wait=None,
-                read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
-    """The attempt run (the module docstring's steps 1 to 7) of a confirmed attempt on BASE (``read_base`` of the
-    approved repository). Refusals (DispatchRefused) leave the conversation as it is, for a resumed step; only an
-    inspection failure or an observer's record ends the attempt."""
+def _start(integration_store, operation_key, base, transport, read_artifact):
     resolved = _check_attempt(integration_store, operation_key)
     design = _design(resolved)
     if base.repository != resolved.repository or base.design_commit != design['commit']:
         raise _refused('BASE_LACKS_DESIGN', 'the base is not the approved repository checked against the attempt\'s '
                        'accepted design commit')
-    attempt_id = store.attempt_id_for(operation_key)
-    conversation_id = store.conversation_id_for(operation_key)
     client = AE._client(resolved, transport)(read_artifact)
+    return resolved, client, store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
+
+
+def _result_step(integration_store, operation_key, client, *, base, prepared, pull, observe, reserve_result,
+                 stopped, resumed, status):
+    """RESULT, the intake, the after-result observation, the runtime stop and the result hook."""
+    attempt_id, conversation_id = store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
+    answer = _command(client, conversation_id, prepared.result, 'RESULT_UNANSWERED')
+    printed = parse_result(answer, delivered_expected=not resumed)
+    verified = intake_result(integration_store, operation_key, base=base, printed=printed,
+                             pulled=pull(result_name(attempt_id)), message=prepared.message, when=prepared.when,
+                             resumed=resumed)
+    records = AE.check_records(list(observe('after-result', result=verified) or ()))
+    if records:
+        return stopped(records, status=status)
+    runtime = AE.stop_runtime(client, conversation_id)
+    if reserve_result is not None:
+        reserve_result(verified.to_json(), verified)
+    return RunOutcome('verified', attempt_id, conversation_id, turn_status=status, result=verified, runtime=runtime)
+
+
+def run_attempt(integration_store, operation_key: str, *, transport, base: Base, actor: str,
+                inspect: Callable[[str], Sequence[str]], pull: Callable[[str], Mapping],
+                observe: Callable[..., Sequence[Mapping]] | None = None,
+                reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
+                ceiling_s: float = TURN_CEILING_S, clock=None, wait=None,
+                read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
+    """The attempt run (the module docstring's steps 0 to 7) of a confirmed attempt on BASE (``read_base`` of the
+    approved repository). An attempt whose turn journal exists is TURN_ALREADY_SENT before any call (its result step
+    is ``resume_result``'s). Refusals (DispatchRefused) leave the conversation as it is, for a resumed step; only an
+    inspection failure, a run that did not start, or an observer's record ends the attempt."""
+    resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
+                                                           read_artifact)
+    held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
+    if held is not None:
+        raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the run is not repeated; a result step '
+                       'is resumed with resume_result', state=held.state)
+    prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key))   # S2: first
     observe = observe or (lambda phase, **facts: ())
 
     def stopped(records, outcome='stopped', problems=(), status=None):
@@ -852,11 +1107,8 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
         return stopped([{'kind': 'containment-stop', 'code': 'INSPECTION_FAILED',
                          'ref': f'attempt:{attempt_id}#inspection'}], 'inspection-failed', problems)
     # 2. SEED
-    text = build_message(resolved, base)
-    answer = client.call('POST', PROXY, params={'conversation_id': conversation_id, 'tail': di.COMMAND_TAIL},
-                         body=build_seed(base))
-    body = answer.get('body') if isinstance(answer, Mapping) else None
-    body = body if isinstance(body, Mapping) else {}
+    answer = _command(client, conversation_id, prepared.seed, 'SEED_FAILED')
+    body = answer.get('body') if isinstance(answer.get('body'), Mapping) else {}
     stdout = body.get('stdout')
     want = f'AIEH-SEED ok {base.seed_sha256} {len(base.files)}'
     if answer.get('status') != 200 or body.get('exit_code') != 0 or not isinstance(stdout, str) \
@@ -867,26 +1119,56 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     if records:
         return stopped(records)
     # 3. the message, 4. the turn
-    send_message(integration_store, operation_key, client, base, text, actor=actor)
+    try:
+        send_message(integration_store, operation_key, client, base, prepared.text, actor=actor)
+    except DispatchRefused as refusal:
+        if refusal.code != 'TURN_RUN_NOT_STARTED':
+            raise
+        return stopped([{'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED',
+                         'ref': f'attempt:{attempt_id}#turn'}], 'run-not-started')
     status = wait_for_turn(client, conversation_id, ceiling_s=ceiling_s, clock=clock, wait=wait)
     records = AE.check_records(list(observe('after-turn', status=status) or ()))
     if records:
         return stopped(records, status=status)
     if status != 'finished':
         return RunOutcome('turn-not-finished', attempt_id, conversation_id, turn_status=status)
-    # 5. RESULT and 6. the intake
-    when = attempt_time(integration_store, operation_key)
-    message = commit_message(resolved, base, attempt_id)
-    answer = client.call('POST', PROXY, params={'conversation_id': conversation_id, 'tail': di.COMMAND_TAIL},
-                         body=build_result(base, attempt_id=attempt_id, message=message, when=when))
-    printed = parse_result(answer)
-    verified = intake_result(integration_store, operation_key, base=base, printed=printed,
-                             pulled=pull(printed['delivered']['name']), message=message, when=when)
-    records = AE.check_records(list(observe('after-result', result=verified) or ()))
-    if records:
-        return stopped(records, status=status)
-    # 7. close
-    runtime = AE.stop_runtime(client, conversation_id)
-    if reserve_result is not None:
-        reserve_result(verified)
-    return RunOutcome('verified', attempt_id, conversation_id, turn_status=status, result=verified, runtime=runtime)
+    # 5. RESULT, 6. the intake, 7. close
+    return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
+                        observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=False,
+                        status=status)
+
+
+def resume_result(integration_store, operation_key: str, *, transport, base: Base, actor: str,
+                  pull: Callable[[str], Mapping], exists: Callable[[str], bool],
+                  observe: Callable[..., Sequence[Mapping]] | None = None,
+                  reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
+                  read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
+    """Resume the result step of an attempt whose turn journal is confirmed, which has no end record and whose result
+    journal is not dispatched, and whose conversation finished (review S3). When ``exists(name)`` says the exchange
+    already holds the attempt's bundle, RESULT is re-run without a delivery (the same inputs: the same commit) and
+    the bundle there is pulled and verified, the commit-id equality its integrity check; otherwise RESULT runs with
+    its delivery, as in ``run_attempt``."""
+    resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
+                                                           read_artifact)
+    turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
+    if turn is None or turn.state != 'confirmed':
+        raise _refused('TURN_NOT_CONFIRMED', f'the turn journal is {getattr(turn, "state", None)}, not confirmed')
+    result = integration_store.get(AE.RESULT_KEY.format(attempt_id=attempt_id))
+    if result is not None and result.state in AE.HANDED_ON:
+        raise _refused('ATTEMPT_RESULT_HANDED_ON', f'the result journal is {result.state}: the result step is the '
+                       'result path\'s now', result_state=result.state)
+    _, status = conversation_status(client, conversation_id)
+    if status != 'finished':
+        raise _refused('TURN_NOT_FINISHED', f'the conversation is {status}, not finished: no result is taken',
+                       status=status)
+    resumed = bool(exists(result_name(attempt_id)))
+    prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
+                       deliver=not resumed)
+    observe = observe or (lambda phase, **facts: ())
+
+    def stopped(records, outcome='stopped', problems=(), status=None):
+        end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
+        return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
+    return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
+                        observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=resumed,
+                        status=status)

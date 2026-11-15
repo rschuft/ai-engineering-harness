@@ -71,8 +71,8 @@ PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
 # The golden texts' sha256 (a change to a builder or the frame is a change of what the agent's container runs or
 # reads: review it, then update these).
 SEED_SCRIPT_SHA256 = 'd103e6a4c0b32b1a2c1c419fb4400dcdff4bc3a90664292f79ecfdf54ca5fbe5'
-RESULT_SCRIPT_SHA256 = 'c99306040351f33cab879ce0ce59a15d5fddb9758a5c6e72a7f6490bc58bc5c5'
-FRAME_SHA256 = '3efb3ece1fafa73d10321782d5e08cd61e676c484e6b55f8503bda991732d723'
+RESULT_SCRIPT_SHA256 = '0e1cb6a9ce4926f56170c0987f369e7763280cc1029de0ce4c10f459cc4806c2'
+FRAME_SHA256 = '4f15a93b1e6d846fadf104bdfd5e367a1623cff1865948c2ca0cc970cd780a79'
 # The fixture's seeded tar, before gzip (deterministic: a fixed tree, sorted, times and owners 0; the gzip bytes
 # themselves depend on the zlib build, so they are not pinned).
 SEED_TAR_SHA256 = '9496e43d4350e1258576acbb771557f46c2c68454ba14653cb766b52f692f131'
@@ -266,7 +266,7 @@ class Goldens(Scratch):
             with self.subTest(name):
                 self.assertEqual(hashlib.sha256(text.encode('utf-8')).hexdigest(), pinned)
         self.assertNotIn("'", AR.SEED_SCRIPT + AR.RESULT_SCRIPT)
-        self.assertEqual(AR.FRAME_VERSION, 'aieh-d1-message/v1')
+        self.assertEqual(AR.FRAME_VERSION, 'aieh-d1-message/v2')
 
     def test_the_seed_command_of_the_fixture_is_pinned(self):
         import gzip
@@ -295,11 +295,17 @@ class Goldens(Scratch):
             'ref': f'refs/heads/work/{attempt}', 'name': 'aieh-bot-builder',
             'email': 'aieh-bot-builder@localhost.invalid', 'date': f'{WHEN} +0000', 'message': 'TASK-1: x\n',
             'test_timeout': AR.TEST_TIMEOUT_S, 'output_limit': AR.TEST_OUTPUT_BYTES, 'part': 'bundle',
-            'part_begin': 'AIEH-EXCHANGE-PART', 'part_end': 'AIEH-EXCHANGE-END'})
+            'part_begin': 'AIEH-EXCHANGE-PART', 'part_end': 'AIEH-EXCHANGE-END', 'frame': True,
+            'forbidden': ['.claude', '.mcp.json'], 'protected': ['openspec', 'backlog']})
+        # a resumed step's RESULT: no delivery, no frame
+        again = AR.build_result(base, attempt_id=attempt, message='TASK-1: x\n', when=WHEN, deliver=False)
+        self.assertIsNone(again.deliver)
+        self.assertFalse(json.loads(bytes.fromhex(re.search(r"printf %s '([0-9a-f]+)'", again.command).group(1)))
+                         ['frame'])
         self.assertEqual((command.builder, command.timeout), ('d1-result', AR.RESULT_TIMEOUT_S))
         self.assertEqual(command.deliver, {'part': 'bundle', 'name': f'work-{attempt}.bundle'})
         for bad in ({'attempt_id': 'x'}, {'attempt_id': attempt.upper()}, {'when': 0}, {'when': 1.5},
-                    {'when': True}):
+                    {'when': True}, {'deliver': 1}):
             kwargs = dict({'attempt_id': attempt, 'message': 'm\n', 'when': WHEN}, **bad)
             with self.subTest(bad=bad), self.assertRaises(di.DispatchRefused) as caught:
                 AR.build_result(base, **kwargs)
@@ -364,6 +370,9 @@ class Base(Scratch):
             'a nested .mcp.json': ({'sub/.mcp.json': b'{}'}, 'forbidden-name'),
             'a symbolic link': ({'link': (AR.LINK_MODE, b'/etc/passwd')}, 'link'),
             'a gitlink': ({'vendor/mod': (AR.GITLINK_MODE, b'1' * 40)}, 'gitlink'),
+            'a case variant': ({'.Claude/settings.json': b'{}'}, 'forbidden-name'),
+            'a trailing dot': ({'docs/.MCP.json.': b'{}'}, 'forbidden-name'),
+            'a .git directory (N5)': ({'sub/.git/config': b'[core]\n'}, 'forbidden-name'),
         }
         for n, (name, (extra, reason)) in enumerate(cases.items()):
             with self.subTest(name), self.assertRaises(di.DispatchRefused) as caught:
@@ -372,6 +381,32 @@ class Base(Scratch):
             self.assertEqual([p['reason'] for p in caught.exception.context['problems']], [reason])
         base, _ = self.demo(extra={'tools/run.sh': (AR.EXEC_MODE, b'#!/bin/sh\n')}, name='exec')
         self.assertIn(('tools/run.sh', AR.EXEC_MODE), [(p, m) for p, m, _ in base.files])
+
+
+class Policy(unittest.TestCase):
+    """B1 (the reviewer's probe): the R3 names compared per component, NFC-normalized, case-folded, trailing dots and
+    spaces stripped; .git refused too (N5)."""
+    category = 'unit'
+
+    def test_every_variant_of_a_forbidden_name_is_found(self):
+        refused = ('.claude/settings.json', '.Claude/settings.json', '.CLAUDE/settings.local.json', 'sub/.MCP.json',
+                   '.Mcp.Json', '.claude./settings.json', '.claude /settings.json', 'a/.mcp.json. ', '.git/config',
+                   'sub/.GIT/HEAD', 'x/.Git./y', '\u002eclaude/x')
+        for path in refused:
+            with self.subTest(path=path):
+                self.assertEqual([p['reason'] for p in AR.tree_problems([(path, AR.FILE_MODE, 'x')])],
+                                 ['forbidden-name'])
+        for path in ('claude/x', '.claudex/y', 'x.claude', '.mcp.json.bak', 'mcp.json', '.gitignore', '.github/w.yml',
+                     'docs/claude.md'):
+            with self.subTest(path=path):
+                self.assertEqual(AR.tree_problems([(path, AR.FILE_MODE, 'x')]), [])
+        # NFC: a decomposed name equal to a composed one compares equal (no R3 name has a combining form; the rule
+        # is shown on a name that does)
+        self.assertEqual(AR.folded('e\u0301.'), AR.folded('\u00e9'))
+        self.assertEqual(AR.folded('.CLAUDE. .'), '.claude')
+        # RESULT excludes .claude and .mcp.json only; the host's tree policy adds .git
+        self.assertEqual(AR.FORBIDDEN_NAMES, frozenset(('.claude', '.mcp.json')))
+        self.assertEqual(AR.TREE_FORBIDDEN, frozenset(('.claude', '.mcp.json', '.git')))
 
 
 class Message(Scratch):
@@ -397,9 +432,11 @@ class Message(Scratch):
             '/workspace/aieh-d1-demo.\n'
             '2. Run the accepted design\'s test command there, offline, with what this container holds: '
             'python -m unittest discover -s tests\n'
-            '3. Do not edit anything under backlog/ or openspec/: Backlog.md alone owns the task\'s status, and the '
-            'accepted design is bound by its acceptance.\n'
-            '4. Do not commit and do not push: the dispatcher records the result from the files you leave in '
+            '3. Do not change anything under backlog/ or openspec/: Backlog.md alone owns the task\'s status, and '
+            'the accepted design is bound by its acceptance. Changes there are left out of the result.\n'
+            '4. Do not create .claude or .mcp.json files or directories anywhere in /workspace/aieh-d1-demo: they '
+            'are left out of the result.\n'
+            '5. Do not commit and do not push: the dispatcher records the result from the files you leave in '
             '/workspace/aieh-d1-demo.\n'))
         di.TAIL_GRAMMARS[di.MESSAGE_TAIL](AR.message_body(text))
         self.assertEqual(AR.commit_message(self.resolved(), base, 'a' * 8 + '-0000-4000-8000-' + '0' * 12), (
@@ -558,8 +595,8 @@ class Oracle(OracleFixture):
 
     def refused(self, edit, code, reason=None):
         fixture, result, base, answer, puller, message = self.prepared(edit)
+        printed = AR.parse_result(answer)
         with self.assertRaises(di.DispatchRefused) as caught:
-            printed = AR.parse_result(answer)
             AR.intake_result(fixture.store, result.operation_key, base=base, printed=printed,
                              pulled=puller(printed['delivered']['name']), message=message, when=WHEN)
         self.assertEqual(caught.exception.code, code, caught.exception.detail)
@@ -567,14 +604,102 @@ class Oracle(OracleFixture):
             self.assertIn(reason, [p['reason'] for p in caught.exception.context['problems']])
         return caught.exception
 
-    def test_a_forbidden_name_in_the_result_is_refused(self):
-        """R3: never dropped silently: the intake refuses it with a stable code."""
-        for n, path in enumerate(('.claude/settings.json', 'sub/.mcp.json')):
-            with self.subTest(path=path):
-                def edit(ws, path=path):
-                    (ws / path).parent.mkdir(parents=True, exist_ok=True)
-                    (ws / path).write_text('{}', encoding='utf-8')
-                self.refused(edit, 'RESULT_TREE_REFUSED', 'forbidden-name')
+    FORBIDDEN = ('.claude/settings.local.json', '.Claude/settings.json', '.CLAUDE/x.json', 'sub/.mcp.json',
+                 '.MCP.json', '.Mcp.Json', 'docs/.claude./x', 'docs/.claude /y')
+
+    def write_forbidden(self, ws):
+        for path in self.FORBIDDEN:
+            if os.name == 'nt' and path.split('/')[-2:-1] and path.split('/')[-2][-1:] in '. ':
+                continue    # Windows drops a directory name's trailing dot or space: not creatable here
+            (ws / path).parent.mkdir(parents=True, exist_ok=True)
+            (ws / path).write_text('{}', encoding='utf-8')
+
+    def test_forbidden_names_are_left_out_of_the_commit_and_reported(self):
+        """R3 as revised (A3, review N7) and B1: RESULT takes any path whose component case-folds (NFC, trailing dots
+        and spaces stripped) to .claude or .mcp.json out of its commit, and reports each; the record holds only their
+        count and digest (S7)."""
+        def edit(ws):
+            self.write_forbidden(ws)
+            (ws / 'kept.txt').write_text('kept\n', encoding='utf-8', newline='\n')
+        verified, files, base = self.accepted(edit)
+        self.assertEqual([p for p in files if AR.forbidden_component(p)], [])
+        self.assertIn('kept.txt', files)
+        excluded = {e['path'] for e in verified.excluded}
+        self.assertTrue(excluded and all(AR.forbidden_component(p) for p in excluded), excluded)
+        # case variants (a case-insensitive file system holds one of each name; a case-sensitive one, all)
+        self.assertEqual({AR.folded(part) for path in excluded for part in path.split('/')} & AR.FORBIDDEN_NAMES,
+                         AR.FORBIDDEN_NAMES)
+        self.assertTrue(any(p.split('/')[0] != p.split('/')[0].lower() for p in excluded), excluded)
+        self.assertEqual({e['reason'] for e in verified.excluded}, {'forbidden-name'})
+        record = json.dumps(verified.to_json())
+        self.assertEqual(verified.to_json()['excluded']['count'], len(excluded))
+        for path in excluded:
+            self.assertNotIn(path, record)
+
+    def refused_unexcluded(self, edit, patch, reason):
+        """A RESULT built with its exclusion rule patched off (PATCH), so that the host's own check is what refuses."""
+        with mock.patch.object(AR, *patch):
+            fixture, result, base, answer, puller, message = self.prepared(edit)
+        printed = AR.parse_result(answer)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AR.intake_result(fixture.store, result.operation_key, base=base, printed=printed,
+                             pulled=puller(printed['delivered']['name']), message=message, when=WHEN)
+        self.assertEqual(caught.exception.code, 'RESULT_TREE_REFUSED', caught.exception.detail)
+        self.assertIn(reason, [p['reason'] for p in caught.exception.context['problems']])
+        return caught.exception
+
+    def test_a_result_holding_a_forbidden_name_is_refused_by_the_host(self):
+        """B1, defence in depth: a RESULT that did not exclude them (its rule patched off here) is refused by the
+        intake, case variants included."""
+        exc = self.refused_unexcluded(self.write_forbidden, ('FORBIDDEN_NAMES', frozenset()), 'forbidden-name')
+        self.assertNotIn('settings', json.dumps(exc.to_json()))     # paths as digests only (S7)
+        self.assertGreaterEqual(len(exc.context['problems']), 5)
+
+    def test_openspec_and_backlog_are_left_as_the_base_holds_them(self):
+        """Review N7: a change under openspec/ or backlog/ (modified, added, deleted, a directory replaced by a file)
+        is taken out of the commit and reported; the committed openspec/ and backlog/ are the base's."""
+        def edit(ws):
+            change = next((ws / 'openspec' / 'changes').iterdir())
+            (change / 'proposal.md').write_text('# rewritten\n', encoding='utf-8', newline='\n')
+            (change / 'tasks.md').unlink()
+            (ws / 'openspec' / 'new.md').write_text('new\n', encoding='utf-8', newline='\n')
+            for task in (ws / 'backlog' / 'tasks').iterdir():
+                task.unlink()
+            (ws / 'backlog' / 'tasks').rmdir()
+            (ws / 'backlog' / 'tasks').write_text('a file now\n', encoding='utf-8', newline='\n')
+            (ws / 'feature.py').write_text('x = 1\n', encoding='utf-8', newline='\n')
+        verified, files, base = self.accepted(edit)
+        protected = {p: d for p, _, d in base.files if p.split('/')[0] in AR.PROTECTED_DIRS}
+        self.assertEqual({p: d for p, d in files.items() if p.split('/')[0] in AR.PROTECTED_DIRS}, protected)
+        self.assertIn('feature.py', files)
+        reported = {e['path'] for e in verified.excluded if e['reason'] == 'protected-dir'}
+        self.assertTrue({'openspec/new.md', 'backlog/tasks'} <= reported, reported)
+
+    def test_a_result_changing_openspec_is_refused_by_the_host(self):
+        def edit(ws):
+            (ws / 'openspec' / 'new.md').write_text('new\n', encoding='utf-8', newline='\n')
+        self.refused_unexcluded(edit, ('PROTECTED_DIRS', ()), 'protected-changed')
+
+    def test_the_tests_cannot_change_the_delivered_bundle(self):
+        """Review S8: the bundle is read and hashed before the tests run; a test that rewrites it on disk changes
+        nothing delivered."""
+        def edit(ws):
+            (ws / 'tests' / 'test_tamper.py').write_text(
+                'import os, unittest\n\n\nclass T(unittest.TestCase):\n    def test_t(self):\n'
+                '        root = os.path.dirname(os.getcwd())\n'
+                '        with open(os.path.join(root, "result.bundle"), "ab") as h:\n'
+                '            h.write(b"tampered")\n', encoding='utf-8', newline='\n')
+        verified, files, _ = self.accepted(edit)
+        self.assertEqual(verified.tests['status'], '0')
+
+    def test_a_gitignored_file_is_not_committed(self):
+        """Review N1, as documented: the workspace's own .gitignore applies to RESULT's add -A."""
+        def edit(ws):
+            (ws / '.gitignore').write_text('*.py\n', encoding='utf-8', newline='\n')
+            (ws / 'aieh_d1_demo' / 'slugify.py').write_text('x = 1\n', encoding='utf-8', newline='\n')
+        verified, files, _ = self.accepted(edit)
+        self.assertNotIn('aieh_d1_demo/slugify.py', files)
+        self.assertIn('.gitignore', files)
 
     def test_a_nested_repository_is_a_gitlink_and_refused(self):
         def edit(ws):
@@ -640,7 +765,9 @@ class Intake(Scratch):
         confirm_turn(self.fixture.store, self.key, self.base)
         self.commit = '1' * 40
         self.printed = {'base': self.base.commit, 'tree': '2' * 40, 'commit': self.commit,
+                        'bundle': {'sha256': 'a' * 64, 'size': 10},
                         'tests': {'status': '0', 'output': '', 'command': AR.TEST_COMMAND, 'label': AR.TEST_LABEL},
+                        'excluded': [], 'excluded_digest': {'sha256': 'e' * 64, 'bytes': 2},
                         'delivered': {'name': AR.result_name(self.attempt), 'sha256': 'a' * 64, 'size': 10}}
 
     def pulled(self, refs=None, prerequisites=(), verified=True, sha='a' * 64, size=10, result='pulled'):
@@ -675,6 +802,42 @@ class Intake(Scratch):
                              ('another size', self.pulled(size=11)), ('nothing', {})):
             with self.subTest(name):
                 self.refused('RESULT_NOT_VERIFIED', pulled)
+        # S8: the delivery must be the digest printed before the tests ran
+        self.refused('RESULT_NOT_VERIFIED', self.pulled(), dict(self.printed, bundle={'sha256': 'b' * 64, 'size': 10}))
+        self.refused('RESULT_NOT_VERIFIED', self.pulled(sha='b' * 64),
+                     dict(self.printed, delivered=dict(self.printed['delivered'], sha256='b' * 64)))
+
+    def test_a_tree_beyond_its_bounds_is_refused(self):
+        """Review S1: the walk is iterative and bounded (depth, entries); a tree 1200 deep (the reviewer's probe) is
+        too-deep, never a RecursionError."""
+        d = ra.dulwich_modules()
+        path = self.tmp / 'deep'
+        repo = d.repo.Repo.init(str(path), mkdir=True)
+        try:
+            blob = d.objects.Blob.from_string(b'x\n')
+            repo.object_store.add_object(blob)
+            tree = d.objects.Tree()
+            tree.add(b'f', AR.FILE_MODE, blob.id)
+            repo.object_store.add_object(tree)
+            for _ in range(1200):
+                parent = d.objects.Tree()
+                parent.add(b'a', AR.TREE_MODE, tree.id)
+                repo.object_store.add_object(parent)
+                tree = parent
+            wide = d.objects.Tree()
+            for n in range(AR.MAX_FILES + 1):
+                wide.add(f'f{n}'.encode(), AR.FILE_MODE, blob.id)
+            repo.object_store.add_object(wide)
+        finally:
+            repo.close()
+        opened = ra.open_repository(path, config='repository', work_tree=True)
+        try:
+            for top, reason in ((tree.id.decode(), 'too-deep'), (wide.id.decode(), 'too-many')):
+                with self.subTest(reason), self.assertRaises(AR.TreeBound) as caught:
+                    AR.tree_entries(opened, top)
+                self.assertEqual(caught.exception.reason, reason)
+        finally:
+            opened.close()
 
     def test_a_commit_other_than_the_printed_one_is_refused(self):
         self.refused('RESULT_COMMIT_MISMATCH', self.pulled(), dict(self.printed, commit='4' * 40))
@@ -699,23 +862,45 @@ class Intake(Scratch):
         self.assertIn(caught.exception.code, ('RESERVATION_INVALID', 'ATTEMPT_NOT_CONFIRMED'))
 
     def test_the_result_output_is_parsed_strictly(self):
+        excluded = json.dumps([{'path': '.claude/x', 'reason': 'forbidden-name'}]).encode()
         good = '\n'.join(['noise', f'AIEH-RESULT base {"a" * 40}', f'AIEH-RESULT tree {"b" * 40}',
-                          f'AIEH-RESULT commit {"c" * 40}', 'AIEH-RESULT tests 0',
+                          f'AIEH-RESULT commit {"c" * 40}', 'AIEH-RESULT excluded ' + excluded.hex(),
+                          f'AIEH-RESULT bundle {"d" * 64} 7', 'AIEH-RESULT tests 0',
                           'AIEH-RESULT test-output ' + 'ok\x1b[31m\n'.encode().hex(),
                           f'AIEH-EXCHANGE-DELIVERED bundle {"d" * 64} 7', 'AIEH-RESULT done'])
         delivered = {'name': 'w.bundle', 'sha256': 'd' * 64, 'size': 7}
 
-        def answer(stdout, delivered=delivered, status=200):
-            return {'status': status, 'body': {'stdout': stdout, 'exit_code': 0}, 'delivered': delivered}
+        def answer(stdout, delivered=delivered, status=200, exit_code=0):
+            return {'status': status, 'body': {'stdout': stdout, 'exit_code': exit_code}, 'delivered': delivered}
         printed = AR.parse_result(answer(good))
         self.assertEqual((printed['commit'], printed['tests']['status'], printed['tests']['output']),
                          ('c' * 40, '0', 'ok[31m\n'))
+        self.assertEqual(printed['excluded'], [{'path': '.claude/x', 'reason': 'forbidden-name'}])
+        self.assertEqual(printed['excluded_digest'], {'sha256': hashlib.sha256(excluded).hexdigest(),
+                                                      'bytes': len(excluded)})
+        self.assertEqual(printed['tests']['output_digest']['bytes'], 8)
+        # CRLF lines are read as well (review S5)
+        self.assertEqual(AR.parse_result(answer(good.replace('\n', '\r\n')))['commit'], 'c' * 40)
+        # a resumed step: no delivery expected
+        resumed = AR.parse_result(answer(good.replace(f'AIEH-EXCHANGE-DELIVERED bundle {"d" * 64} 7\n', ''),
+                                         delivered=None), delivered_expected=False)
+        self.assertNotIn('delivered', resumed)
+        with self.assertRaises(di.DispatchRefused) as caught:     # a failed step: its stderr as a digest only
+            AR.parse_result(answer(good.replace('AIEH-RESULT done', 'AIEH-RESULT failed add ' +
+                                                b'secret-ish stderr'.hex()), exit_code=3))
+        self.assertEqual((caught.exception.code, caught.exception.context['step']), ('RESULT_COMMAND_FAILED', 'add'))
+        self.assertNotIn('secret-ish', json.dumps(caught.exception.to_json()))
         cases = {
             'a failed step': good.replace('AIEH-RESULT done', 'AIEH-RESULT failed commit ' + b'no'.hex()),
             'no commit': good.replace(f'AIEH-RESULT commit {"c" * 40}\n', ''),
             'a repeated commit': good + f'\nAIEH-RESULT commit {"c" * 40}',
             'no done': good.replace('\nAIEH-RESULT done', ''),
             'no delivered line': good.replace(f'AIEH-EXCHANGE-DELIVERED bundle {"d" * 64} 7\n', ''),
+            'no bundle digest': good.replace(f'AIEH-RESULT bundle {"d" * 64} 7\n', ''),
+            'no excluded list': good.replace('AIEH-RESULT excluded ' + excluded.hex() + '\n', ''),
+            'an excluded list of another shape': good.replace(excluded.hex(), b'{"a": 1}'.hex()),
+            'a delivery other than the printed digest': good.replace(f'AIEH-RESULT bundle {"d" * 64} 7',
+                                                                     f'AIEH-RESULT bundle {"f" * 64} 7'),
         }
         for name, stdout in cases.items():
             with self.subTest(name), self.assertRaises(di.DispatchRefused) as caught:
@@ -723,7 +908,8 @@ class Intake(Scratch):
             self.assertEqual(caught.exception.code, 'RESULT_COMMAND_FAILED')
         for name, kwargs in (('a delivery error', {'delivered': {'error': 'EXISTS'}}),
                              ('another delivered digest', {'delivered': dict(delivered, sha256='e' * 64)}),
-                             ('no delivery', {'delivered': None}), ('a 500', {'status': 500})):
+                             ('no delivery', {'delivered': None}), ('a 500', {'status': 500}),
+                             ('a non-zero exit (S8)', {'exit_code': 1})):
             with self.subTest(name), self.assertRaises(di.DispatchRefused) as caught:
                 AR.parse_result(answer(good, **kwargs))
             self.assertEqual(caught.exception.code, 'RESULT_COMMAND_FAILED')
@@ -812,6 +998,18 @@ class Turn(Scratch):
             other.send()
         self.assertEqual((caught.exception.code, other.journal().state), ('TURN_REFUSED', 'failed'))
 
+    def test_a_429_is_never_settled_as_sent(self):
+        """Review S4 (the reviewer's probe): the message saved, the run not started: the journal is failed and the
+        refusal TURN_RUN_NOT_STARTED, even though the events hold the message."""
+        self.answer = {'status': 429, 'body': {}}
+        self.fixture.server.set(self.cid, status='idle', events=[{
+            'kind': 'MessageEvent', 'id': 'e1', 'source': 'user',
+            'llm_message': {'content': [{'type': 'text', 'text': 'the message'}]}}])
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.send()
+        self.assertEqual((caught.exception.code, self.journal().state), ('TURN_RUN_NOT_STARTED', 'failed'))
+        self.assertEqual(len(self.posts), 1)
+
     def test_the_wait_reads_to_a_terminal_status_within_its_ceiling(self):
         now, waits = [0.0], []
 
@@ -849,6 +1047,7 @@ class RunServer(te.ConversationServer):
         super().__init__(**kwargs)
         self.test, self.count, self.log, self.after_message = test, 1, [], 'finished'
         self.workspace = self.exchange = None
+        self.message_status, self.lose_results = 200, 0
 
     def __call__(self, method, path, body, **kwargs):
         if path == '/api/conversations/count':
@@ -859,6 +1058,11 @@ class RunServer(te.ConversationServer):
         cid, tail = path.split('/')[3], '/'.join(path.split('/')[4:]).partition('?')[0]
         self.log.append((method, tail or 'conversation'))
         if (method, tail) == ('POST', 'events'):
+            if self.message_status == 429:      # saved, the run not started (the Agent Server's 429)
+                self.set(cid, status='idle', events=[{'kind': 'MessageEvent', 'id': 'm1', 'source': 'user',
+                                                      'llm_message': {'content': [{'type': 'text', 'text':
+                                                                                   body['content'][0]['text']}]}}])
+                return {'status': 429, 'body': {'detail': 'run not started'}}
             self.set(cid, status=self.after_message, events=[{'kind': 'MessageEvent', 'id': 'm1', 'source': 'user',
                                                               'llm_message': {'content': [{'type': 'text',
                                                                                            'text': body['content'][0]
@@ -874,6 +1078,9 @@ class RunServer(te.ConversationServer):
             if deliver_to:
                 out, delivered = deliver(out, self.exchange, deliver_to['name'])
             answer = {'status': 200, 'body': {'stdout': out, 'stderr': err, 'exit_code': rc}}
+            if 'AIEH-RESULT' in out and self.lose_results:
+                self.lose_results -= 1
+                raise OSError('the channel dropped after the command ran')
             return dict(answer, delivered=delivered) if deliver_to else answer
         return super().__call__(method, path, body)
 
@@ -912,9 +1119,16 @@ class Run(Scratch):
             return observe(phase, **facts) if observe else ()
         return AR.run_attempt(self.store, self.key, transport=self.server, base=self.base, actor='a2-test',
                               inspect=inspect, pull=pull or (lambda name: self.fail('no pull expected')),
-                              observe=recording, reserve_result=self.reserved.append,
+                              observe=recording, reserve_result=lambda record, verified: self.reserved.append(
+                                  (record, verified)),
                               clock=lambda: 0.0, wait=lambda s: self.fail('no wait expected'),
                               read_artifact=self.fixture.read_artifact)
+
+    def resume(self, pull, exists):
+        return AR.resume_result(self.store, self.key, transport=self.server, base=self.base, actor='a3-test',
+                                pull=pull, exists=exists,
+                                reserve_result=lambda record, verified: self.reserved.append((record, verified)),
+                                read_artifact=self.fixture.read_artifact)
 
     def real(self):
         if BASH is None:
@@ -939,7 +1153,12 @@ class Run(Scratch):
             ('DELETE', 'runtime'), ('GET', 'runtime')])                               # 7. the runtime stopped
         self.assertEqual(self.observed, ['before-message', 'after-turn', 'after-result'])
         self.assertEqual(puller.names, [AR.result_name(store_mod.attempt_id_for(self.key))])
-        self.assertEqual(self.reserved, [outcome.result])
+        self.assertEqual(self.reserved, [(outcome.result.to_json(), outcome.result)])
+        record = json.dumps(self.reserved[0][0])                  # S7: digests and sizes, never the text
+        self.assertNotIn('Ran 1 test', record)
+        self.assertIn('Ran 1 test', outcome.result.tests['output'])
+        self.assertEqual(self.reserved[0][0]['tests']['output']['sha256'],
+                         outcome.result.tests['output_digest']['sha256'])
         self.assertEqual((outcome.runtime, outcome.turn_status), ('missing', 'finished'))
         self.assertEqual(outcome.result.base, self.base.commit)
         self.assertEqual(self.store.get(AR.TURN_KEY.format(attempt_id=outcome.attempt_id)).state, 'confirmed')
@@ -1009,6 +1228,96 @@ class Run(Scratch):
         self.assertEqual((outcome.outcome, outcome.end['classification']), ('stopped', AE.NON_RETRYABLE))
         self.assertEqual(self.reserved, [])
         self.assertEqual(outcome.end['causes'], ['provider-process'])
+
+    def test_everything_sent_is_built_before_anything_is_sent(self):
+        """Review S2 (the reviewer's probe_review_b): a title the commit message cannot take is found before any call,
+        not after the turn."""
+        task = AR.task_file(self.base, di.stored_inputs(self.store, self.key, state='confirmed').work_id)
+        for name, title in (('long', 'x' * 201), ('missing', None)):
+            with self.subTest(name):
+                text = '---\nid: X\n' + (f'title: {title}\n' if title else '') + 'status: To Do\n---\n'
+                files = tuple((p, m, text.encode() if p == task else d) for p, m, d in self.base.files)
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    AR.run_attempt(self.store, self.key, transport=self.server,
+                                   base=dataclasses.replace(self.base, files=files), actor='a3-test',
+                                   inspect=lambda c: (), pull=lambda n: None, read_artifact=self.fixture.read_artifact)
+                self.assertEqual(caught.exception.code, 'MESSAGE_SLOT_UNRESOLVED')
+                self.assertEqual(self.server.log, [])
+
+    def test_a_run_that_did_not_start_ends_the_attempt_as_an_interruption(self):
+        """Review S4: a 429 at the message (saved, the run not started) is not settled as sent: the turn journal is
+        failed and the attempt ended as a provider interruption, so a new attempt is admissible; no wait, no
+        RESULT."""
+        self.server.message_status = 429
+        outcome = self.run_attempt()
+        self.assertEqual(outcome.outcome, 'run-not-started')
+        self.assertEqual(self.store.get(AR.TURN_KEY.format(attempt_id=outcome.attempt_id)).state, 'failed')
+        self.assertEqual((outcome.end['classification'], outcome.end['causes'], outcome.end['retryable']),
+                         (AE.INTERRUPTION, ['run-not-started'], True))
+        self.assertEqual(self.server.log.count(('POST', 'bash/execute_bash_command')), 1, 'the SEED only')
+        self.assertEqual(self.reserved, [])
+
+    def test_a_second_run_of_an_attempt_makes_no_call(self):
+        self.server.after_message = 'error'
+        self.assertEqual(self.run_attempt().outcome, 'turn-not-finished')
+        calls = list(self.server.log)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_attempt()
+        self.assertEqual(caught.exception.code, 'TURN_ALREADY_SENT')
+        self.assertEqual(self.server.log, calls)
+
+    def test_a_lost_result_answer_is_resumed_from_the_delivered_bundle(self):
+        """Review S3 (the reviewer's probe): the RESULT ran and delivered, its answer was lost (a raw OSError, now
+        RESULT_UNANSWERED); a second run_attempt makes no call; resume_result finds the bundle in the exchange, re-runs
+        RESULT without a delivery and verifies the bundle there by the commit-id equality."""
+        puller = self.real()
+        self.server.lose_results = 1
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_attempt(pull=puller)
+        self.assertEqual(caught.exception.code, 'RESULT_UNANSWERED')
+        name = AR.result_name(store_mod.attempt_id_for(self.key))
+        self.assertTrue((self.server.exchange / name).is_file())
+        with self.assertRaises(di.DispatchRefused) as again:
+            self.run_attempt(pull=puller)
+        self.assertEqual(again.exception.code, 'TURN_ALREADY_SENT')
+        before = len(self.server.log)
+        outcome = self.resume(puller, exists=lambda n: (self.server.exchange / n).is_file())
+        self.assertEqual((outcome.outcome, outcome.result.resumed, outcome.runtime), ('verified', True, 'missing'))
+        self.assertEqual(self.server.log[before:], [('GET', 'conversation'), ('POST', 'bash/execute_bash_command'),
+                                                    ('DELETE', 'runtime'), ('GET', 'runtime')])
+        self.assertEqual(puller.names, [name])
+        self.assertEqual(len(self.reserved), 1)
+
+    def test_a_result_step_without_a_delivered_bundle_runs_result_again(self):
+        puller = self.real()
+        self.server.lose_results = 1
+
+        def lost_before_delivery(name):
+            raise AssertionError('no pull before the resume')
+        with self.assertRaises(di.DispatchRefused):
+            self.run_attempt(pull=lost_before_delivery)
+        for path in self.server.exchange.iterdir():     # as if the delivery itself had not happened
+            path.unlink()
+        outcome = self.resume(puller, exists=lambda n: (self.server.exchange / n).is_file())
+        self.assertEqual((outcome.outcome, outcome.result.resumed), ('verified', False))
+
+    def test_the_resume_refuses_what_it_cannot_resume(self):
+        with self.assertRaises(di.DispatchRefused) as caught:      # no turn yet
+            self.resume(lambda n: None, lambda n: False)
+        self.assertEqual(caught.exception.code, 'TURN_NOT_CONFIRMED')
+        self.server.after_message = 'error'
+        self.run_attempt()
+        with self.assertRaises(di.DispatchRefused) as caught:      # a turn that did not finish
+            self.resume(lambda n: None, lambda n: False)
+        self.assertEqual(caught.exception.code, 'TURN_NOT_FINISHED')
+        attempt = store_mod.attempt_id_for(self.key)
+        self.server.set(self.cid, status='finished')
+        key = AE.RESULT_KEY.format(attempt_id=attempt)
+        self.store.reserve(key, {'format': 'test/result', 'attemptId': attempt}, actor='a3-test')
+        di._mark(self.store, key, 'reserved', 'dispatched', 'a3-test', 'push', None)
+        with self.assertRaises(di.DispatchRefused) as caught:      # the result is the result path's
+            self.resume(lambda n: None, lambda n: False)
+        self.assertEqual(caught.exception.code, 'ATTEMPT_RESULT_HANDED_ON')
 
     def test_a_base_of_another_repository_or_design_is_refused_before_any_call(self):
         for change in (dict(repository='other-repo'), dict(design_commit='e' * 40)):

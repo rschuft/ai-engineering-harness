@@ -590,8 +590,9 @@ def _deliver_command(name='work-1.bundle', part='bundle'):
 
 
 # registered once per process
-deliver_command = cc.di._COMMAND_BUILDERS.get('a1-test-delivery') or \
-    cc.di.command_builder('a1-test-delivery')(_deliver_command)
+cc.di.allow_test_builders('test-a1-delivery')   # tests only (D1 review S6)
+deliver_command = cc.di._COMMAND_BUILDERS.get('test-a1-delivery') or \
+    cc.di.command_builder('test-a1-delivery')(_deliver_command)
 
 
 class ExchangeDeliveryTests(unittest.TestCase):
@@ -671,7 +672,9 @@ class ExchangeDeliveryTests(unittest.TestCase):
             'base64, not hex': ('AIEH-EXCHANGE-PART bundle ' + '0' * 64 + ' 3\nQUJD\nAIEH-EXCHANGE-END bundle',
                                 'PART_MALFORMED'),
             'another part': (framed(self.PAYLOAD, part='other'), 'PART_MALFORMED'),
-            'no part at all': ('Ran 3 tests\n', 'PART_MALFORMED'),
+            'no part at all': ('Ran 3 tests\n', 'NO_PART'),
+            'a failed step, no frame': ('AIEH-RESULT failed add 6e6f\n', 'NO_PART'),
+            'an end marker alone': ('AIEH-EXCHANGE-END bundle\n', 'PART_MALFORMED'),
         }
         for number, (name, (stdout, code)) in enumerate(cases.items()):
             with self.subTest(name):
@@ -681,6 +684,15 @@ class ExchangeDeliveryTests(unittest.TestCase):
                 self.assertNotIn(self.PAYLOAD.hex()[:64], self.host_side(answer))
                 if code == 'PART_MALFORMED':
                     self.assertIsNone(answer['body']['stdout'])   # withheld: its frame could not be cut out
+                if code == 'NO_PART':                              # D1 review S5: no marker, kept whole
+                    self.assertEqual(answer['body']['stdout'], stdout)
+
+    def test_a_frame_with_crlf_lines_is_delivered(self):
+        """D1 review S5: a frame whose lines end in CRLF is taken."""
+        answer = self.run_command('Ran 3 tests\r\n' + framed(self.PAYLOAD).replace('\n', '\r\n') + '\r\n')
+        self.assertEqual(answer['delivered']['sha256'], hashlib.sha256(self.PAYLOAD).hexdigest())
+        self.assertEqual((self.exchange / 'work-1.bundle').read_bytes(), self.PAYLOAD)
+        self.assertNotIn(self.PAYLOAD.hex()[:64], self.host_side(answer))
 
     def test_the_bound_is_the_profiles_pull_bound(self):
         self.profile['exchange']['pull']['max_bytes'] = len(self.PAYLOAD) - 1

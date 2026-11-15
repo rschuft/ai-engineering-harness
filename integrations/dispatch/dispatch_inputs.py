@@ -269,6 +269,10 @@ REFUSALS = {
                          'sent again',
     'TURN_NOT_CONFIRMED': 'the attempt\'s turn journal is not confirmed: no result is taken',
     'TURN_CEILING': 'the turn did not end within its ceiling',
+    'TURN_RUN_NOT_STARTED': 'the Agent Server saved the message and did not start the run (429): never settled as '
+                            'sent; the attempt is ended as a provider interruption',
+    'TURN_NOT_FINISHED': 'the conversation did not finish: no result step is resumed',
+    'RESULT_UNANSWERED': 'the result command was not answered: its step is resumed (resume_result), never assumed',
     'RESULT_COMMAND_FAILED': 'the result command did not report a commit, its tests and a bundle delivered into the '
                              'exchange as printed',
     'RESULT_NOT_VERIFIED': 'the pulled bundle did not pass the retained verifier (decision 0014 row R6) at the '
@@ -2462,7 +2466,7 @@ class ContainerCommand:
     immutable. ``deliver``, when set, is ``{"part", "name"}``: the transport's exchange delivery of that part of the
     answer (``tools/guest.py`` GuestApi)."""
 
-    __slots__ = ('builder', 'command', 'timeout', 'deliver')
+    __slots__ = ('builder', 'command', 'timeout', 'deliver', '__weakref__')
 
     def __init__(self, seal, builder: str, command: str, timeout: int, deliver: Mapping | None):
         if seal is not _BUILDER_SEAL:
@@ -2483,15 +2487,46 @@ class ContainerCommand:
 
 _BUILDER_SEAL = object()
 _COMMAND_BUILDERS: dict[str, Callable] = {}
+# The builders the command tail admits, pinned (D1 review S6): attempt_run.py's SEED and RESULT. A test registers its
+# own builders only through allow_test_builders, which no production module calls (a test reads the tree for it).
+COMMAND_BUILDER_NAMES = frozenset(('d1-seed', 'd1-result'))
+TEST_BUILDER_RE = re.compile(r'test-[a-z0-9-]{1,27}')
+_TEST_BUILDER_NAMES: set[str] = set()
+# Each command a registered builder made, with the digest of its fields at that moment: a command not made by a
+# builder (one forged with the seal) or changed after it was made (past its immutability) is refused. The residual,
+# stated: these are module state, so code running in the dispatcher's own process can still reach them; the guard is
+# against free-form or altered commands, not against a hostile caller inside the process (single-process design).
+_BUILT: 'weakref.WeakKeyDictionary[ContainerCommand, str]' = weakref.WeakKeyDictionary()
+
+
+def allow_test_builders(*names: str) -> None:
+    """Tests only: admit builders named ``test-...`` besides COMMAND_BUILDER_NAMES. No production module calls this
+    (``test_conversation_create`` reads every non-test module of integrations/ and tools/ for the name)."""
+    for name in names:
+        if not isinstance(name, str) or TEST_BUILDER_RE.fullmatch(name) is None:
+            raise ValueError(f'a test builder name is {TEST_BUILDER_RE.pattern}')
+        _TEST_BUILDER_NAMES.add(name)
+
+
+def _builder_admitted(name) -> bool:
+    return name in COMMAND_BUILDER_NAMES or name in _TEST_BUILDER_NAMES
+
+
+def _command_digest(command) -> str:
+    return _sha256(json.dumps([command.builder, command.command, command.timeout, command.deliver], sort_keys=True,
+                              ensure_ascii=True, default=repr))
 
 
 def command_builder(name: str):
-    """Register the decorated function as the builder NAME of the command tail's bodies. The function returns
-    ``{"command": <text>, "timeout": <seconds>}`` and optionally ``"deliver": {"part", "name"}``; the registered
-    builder returns that as a ``ContainerCommand``, refusing (``DispatchRefused('TAIL_BODY_INVALID')``) a value
-    outside the tail's grammar. A name is registered once."""
+    """Register the decorated function as the builder NAME of the command tail's bodies; NAME must be one of
+    COMMAND_BUILDER_NAMES (or a name allow_test_builders admitted). The function returns ``{"command": <text>,
+    "timeout": <seconds>}`` and optionally ``"deliver": {"part", "name"}``; the registered builder returns that as a
+    ``ContainerCommand``, refusing (``DispatchRefused('TAIL_BODY_INVALID')``) a value outside the tail's grammar. A
+    name is registered once."""
     if not isinstance(name, str) or not BUILDER_NAME_RE.fullmatch(name):
         raise ValueError(f'a command builder name is {BUILDER_NAME_RE.pattern}')
+    if not _builder_admitted(name):
+        raise ValueError(f'{name!r} is not a pinned command builder ({sorted(COMMAND_BUILDER_NAMES)})')
     if name in _COMMAND_BUILDERS:
         raise ValueError(f'the command builder {name!r} is already registered')
 
@@ -2503,6 +2538,7 @@ def command_builder(name: str):
                 raise DispatchRefused('TAIL_BODY_INVALID', f'the builder {name!r} made no '
                                       '{command, timeout[, deliver]}')
             command = ContainerCommand(_BUILDER_SEAL, name, made['command'], made['timeout'], made.get('deliver'))
+            _BUILT[command] = _command_digest(command)
             _check_command(command)
             return command
         build.__name__ = build.__qualname__ = getattr(function, '__name__', name)
@@ -2527,10 +2563,18 @@ def _text_in_bounds(value, limit: int) -> bool:
 def _check_command(command) -> dict:
     """The command tail's grammar: a registered builder's ContainerCommand; the wire body
     ``{"command", "cwd": "/workspace", "timeout"}`` it is sent as."""
-    if type(command) is not ContainerCommand or _COMMAND_BUILDERS.get(command.builder) is None:
+    if type(command) is not ContainerCommand or _COMMAND_BUILDERS.get(command.builder) is None \
+            or not _builder_admitted(command.builder) or command not in _BUILT:
         raise DispatchRefused('COMMAND_NOT_BUILT', f'the {COMMAND_TAIL} tail takes only a command made by a '
                               'registered builder (command_builder), never a raw string or object',
                               body=type(command).__name__)
+    try:
+        altered = _BUILT.get(command) != _command_digest(command)
+    except (TypeError, ValueError):
+        altered = True
+    if altered:
+        raise DispatchRefused('COMMAND_NOT_BUILT', 'the command was changed after its builder made it',
+                              builder=str(command.builder))
     timeout, deliver = command.timeout, command.deliver
     if not _text_in_bounds(command.command, COMMAND_MAX_CHARS):
         raise DispatchRefused('TAIL_BODY_INVALID', f'the command is not 1 to {COMMAND_MAX_CHARS} characters of '

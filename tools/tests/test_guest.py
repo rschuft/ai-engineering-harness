@@ -4457,7 +4457,8 @@ class ApiProbe(unittest.TestCase):
         for name, stdout, code in (('a.bundle', frame(sha='1' * 64), 'DIGEST_MISMATCH'),
                                    ('b.bundle', frame(size=3), 'PART_SIZE'),
                                    ('c.bundle', frame() + frame(), 'PART_MALFORMED'),
-                                   ('d.bundle', 'no part\n', 'PART_MALFORMED')):
+                                   ('d.bundle', 'no part\n', 'NO_PART'),
+                                   ('e.bundle', 'AIEH-EXCHANGE-PART bundle\n', 'PART_MALFORMED')):
             with self.subTest(code=code, name=name):
                 self.assertEqual(run(name, stdout)['delivered'], {'error': code})
         self.assertEqual(sorted(p.name for p in exchange.iterdir()), ['w.bundle'])

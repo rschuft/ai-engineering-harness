@@ -119,7 +119,9 @@ NON_RETRYABLE_RECORDS = {'containment-stop': 'containment', 'credential-stop': '
                          # R2 (the engineering manager, 2026-11-15): a model identifier outside the attempt's model
                          # record, and the provider process check after the turn (slice C's producers)
                          'model-stop': 'unexpected-model', 'provider-stop': 'provider-process'}
-INTERRUPTION_RECORDS = {'provider-path-lost': PATH_LOST}
+INTERRUPTION_RECORDS = {'provider-path-lost': PATH_LOST,
+                        # D1 review S4: the message was saved and the run did not start (429): an interruption
+                        'run-not-started': 'run-not-started'}
 RECORD_KINDS = (*NON_RETRYABLE_RECORDS, *INTERRUPTION_RECORDS)
 RECORD_REF_RE = re.compile(r'[A-Za-z0-9._:/@#-]{1,256}')
 

@@ -9020,7 +9020,9 @@ CONVERSATION_SMOKE_SCHEMA = 'ai-engineering-harness/profiles/conversation-smoke-
 # EXCHANGE_PART_END) is checked against the sha256 and size its frame states, written
 # exclusively into the exchange directory under the given name, and replaced in the answer by
 # one EXCHANGE_PART_DELIVERED line; the response's ``delivered`` is {name, sha256, size} or
-# {error}. The part's bytes never come back: a field whose frame cannot be cut out is withheld.
+# {error}. The part's bytes never come back: a field whose frame cannot be cut out is withheld; an
+# answer with no frame marker at all is kept whole (NO_PART; D1 review S5), and a frame's lines may
+# end in CRLF.
 API_PROBE = r'''import base64, errno, hashlib, http.client, json, os, re, sys, time
 key_path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
 PART_BEGIN, PART_END, PART_DONE = 'AIEH-EXCHANGE-PART', 'AIEH-EXCHANGE-END', 'AIEH-EXCHANGE-DELIVERED'
@@ -9030,10 +9032,13 @@ def deliver(spec, entry):
     value = entry.get('body')
     text = value.get(spec['field']) if isinstance(value, dict) else None
     if not isinstance(text, str):
-        entry['body'] = None
+        if isinstance(value, str) and (PART_BEGIN in value or PART_END in value):
+            entry['body'] = None
+        return {'error': 'NO_PART'}
+    if PART_BEGIN not in text and PART_END not in text:
         return {'error': 'NO_PART'}
     part = re.escape(spec['part'])
-    frame = re.compile(r'^%s %s ([0-9a-f]{64}) ([0-9]{1,12})\n((?:[0-9a-f]*\n)*)%s %s$'
+    frame = re.compile(r'^%s %s ([0-9a-f]{64}) ([0-9]{1,12})\r?\n((?:[0-9a-f]*\r?\n)*)%s %s\r?$'
                        % (PART_BEGIN, part, PART_END, part), re.M)
     found = list(frame.finditer(text))
     if len(found) != 1 or text.count(PART_BEGIN) != 1 or text.count(PART_END) != 1:
