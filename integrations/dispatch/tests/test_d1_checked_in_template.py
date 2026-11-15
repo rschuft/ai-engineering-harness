@@ -122,6 +122,45 @@ class TheProbeDerivation(unittest.TestCase):
         self.assertEqual(di.admission_policy(derived, REAL, 'implement'),
                          di.admission_policy(REAL_DECLARED, REAL, 'review'))
 
+    def test_every_byte_outside_the_removed_member_is_the_checked_in_declarations(self):
+        """Review S1: the removal is textual; the result is the checked-in bytes with exactly the member's span cut
+        out, and it parses with the dispatcher's strict reader to the checked-in declaration less that key."""
+        text = REAL_BYTES.decode('utf-8')
+        start, end = self.ds.removed_span(text)
+        derived = self.ds.derived_declaration_bytes()
+        self.assertEqual(derived, REAL_BYTES[:len(text[:start].encode('utf-8'))] +
+                         REAL_BYTES[len(text[:end].encode('utf-8')):])
+        self.assertEqual(len(REAL_BYTES) - len(derived), len(text[start:end].encode('utf-8')))
+        removed = text[start:end]
+        self.assertTrue(removed.lstrip().startswith('"stage_create_template": {'), removed[:40])
+        self.assertTrue(removed.endswith('},\n'), removed[-10:])
+        self.assertEqual(di._canonical(di._strict_loads(derived.decode('utf-8'))),
+                         di._canonical(self.ds.without_d1_stage_pin(di._strict_loads(text))))
+        # the member as the last of its object: the preceding comma goes with it
+        last = '{\n  "a": 1,\n  "stage_create_template": {"stage": "implement"}\n}\n'
+        s, e = self.ds.removed_span(last)
+        self.assertEqual(last[:s] + last[e:], '{\n  "a": 1\n}\n')
+
+    def test_drift_the_dispatcher_refuses_fails_the_derivation(self):
+        """Review S1, the reviewer's reproduction: a duplicate status.operational (false first) in the source. The
+        dispatcher's strict reader refuses it (PROFILE_INVALID); the derivation refuses it too, never hiding it."""
+        text = REAL_BYTES.decode('utf-8')
+        duplicate = text.replace('"status": {', '"status": {\n    "operational": false,', 1)
+        with self.assertRaises(ValueError):
+            di._strict_loads(duplicate)
+        cases = {
+            'a duplicate status.operational': duplicate,
+            'a duplicate key inside the pin': text.replace('"stage": "implement",',
+                                                           '"stage": "implement",\n        "stage": "implement",', 1),
+            'a non-standard constant': text.replace('"ipv6": false', '"ipv6": NaN', 1),
+            'the key elsewhere too': text.replace('"status": {', '"status": {\n    "stage_create_template": 1,', 1),
+        }
+        for name, source in cases.items():
+            with self.subTest(name):
+                self.assertNotEqual(source, text)
+                with self.assertRaises(ValueError):
+                    self.ds.derived_declaration_bytes(source.encode('utf-8'))
+
     def test_the_derivation_is_one_removal_never_a_pass_through(self):
         without = copy.deepcopy(REAL_DECLARED)
         del without['provisioning']['agent_server'][di.STAGE_TEMPLATE_KEY]

@@ -216,9 +216,9 @@ stage, and every profile without the declaration, keeps the admission above unch
 
 | Rule | Where | Refused as |
 |---|---|---|
-| the declaration names a known stage and pins a file under `profiles/<id>/` by sha256 | resolution (any stage) | `PROFILE_ADMISSION_INVALID` |
+| the declaration names a known stage and pins a file under `profiles/<id>/` by sha256 (no path part a Windows device name, since review N3: `is_artifact_path`, which every pinned artifact path and `read_profile_artifact` also apply) | resolution (any stage) | `PROFILE_ADMISSION_INVALID` |
 | it does not pin the profile's F-04.2 fixture (same path or same sha256) | resolution | `STAGE_TEMPLATE_DISPOSABLE` |
-| the pinned template is not tagged disposable (a tag value ending `-disposable`: the F-04.2 fixture's and the S-03.3 qualification create's) | admission and `send_create` | `STAGE_TEMPLATE_DISPOSABLE` |
+| the pinned template is not tagged disposable (a tag value ending `-disposable` in any case and with any surrounding whitespace, or a list holding one, since review N2: `is_disposable_tag`; the F-04.2 fixture's and the S-03.3 qualification create's) | admission and `send_create` | `STAGE_TEMPLATE_DISPOSABLE` |
 | the pinned template carries an ACP agent block (`agent_settings` with `agent_kind` `acp`) | admission and `send_create` | `AGENT_BLOCK_NOT_ACP` |
 | the reserved policy's create template is the stage's pin | admission and `send_create` | `ADMISSION_MISMATCH` |
 | the body's agent block is exactly the template's (canonical JSON), as every allowlisted field | admission and `send_create` | `BODY_NOT_TEMPLATE` (field `agent_settings`) |
@@ -1274,10 +1274,10 @@ transport called zero times:
 | `TheApprovedTemplate` (unit) | its agent block is, field by field, the one in E-05.11's create as `native_qualification.py` builds it (no named difference); the template differs from that create only in the named per-attempt fields (`conversation_id`, `secrets`, `secrets_encrypted`) and the tag, each with its reason; it is an allowlisted body without `secrets`, tagged `e-05.2-d1`, otherwise the F-04.2 fixture's runtime, workspace, title and container, and it passes the native stage's agent check |
 | `AcceptsTheApprovedBlock` | the D1 stage admits exactly the pinned template (its pin in the policy, the body sent once, the template's sha256 in the record); another ACP block re-pinned is admitted as itself under another policy digest, and bytes changed without a new pin are `PROFILE_ARTIFACT_DRIFTED`; the boundary: the same profile's review stage and a profile without the declaration keep E-01.2.2's template |
 | `RefusesAnyOtherBlock` | eighteen other agent blocks in the body (the F-04.2 bare agent, another kind or server, the `npx` form, an `npx` or wrapper command, arguments, another model or session mode, a shared data dir, an MCP server, tools, an agent profile or context, a missing key, wrong types) are `BODY_NOT_TEMPLATE` at the send and in `check_create_body`; another agent source beside it is `BODY_FIELD_UNKNOWN`; an approved template without an ACP block is `AGENT_BLOCK_NOT_ACP` |
-| `RefusesTheF042Fixture` | the fixture pinned by path, by digest or both is `STAGE_TEMPLATE_DISPOSABLE` at resolution, nothing reserved; a re-serialized copy or its tag is refused at admission; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `BODY_NOT_TEMPLATE` (its block) |
+| `RefusesTheF042Fixture` | the fixture pinned by path, by digest or both is `STAGE_TEMPLATE_DISPOSABLE` at resolution, nothing reserved; a re-serialized copy or its tag is refused at admission; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `BODY_NOT_TEMPLATE` (its block); since review N2 a tag in another case, with surrounding whitespace or in a list is refused too |
 | `RefusesTheQualificationFixture` | its file cannot be pinned (`PROFILE_ADMISSION_INVALID`; the reader refuses its path); its body pinned is `STAGE_TEMPLATE_DISPOSABLE`, untagged `BODY_FIELD_UNKNOWN` (`secrets`); its filled create is `BODY_FIELD_UNKNOWN`, and without `secrets` `BODY_NOT_TEMPLATE` (`tags`) |
 | `SendCreateRechecks` | the review's R1: an admitted create built with admission's content check skipped (a non-ACP or a disposable template) is refused by `send_create` with the content check's code, and admission itself refuses it; the carried profile must be the approved one (`PROFILE_DRIFTED`: another profile, one byte more, empty; `PROFILE_MISSING`: none) |
-| `DeclarationRefusals` | eleven malformed declarations are `PROFILE_ADMISSION_INVALID` for either stage; a missing pinned file is `PROFILE_ARTIFACT_MISSING` |
+| `DeclarationRefusals` | eleven malformed declarations are `PROFILE_ADMISSION_INVALID` for either stage; a missing pinned file is `PROFILE_ARTIFACT_MISSING`; since review N3 an artifact path with a Windows device name part (`CON`, `nul.json`, `Com1.txt`, ...) is refused, its look-alikes are not |
 
 [`tests/test_d1_checked_in_template.py`](tests/test_d1_checked_in_template.py) (E-05.2, the pin) shows the
 same proof on the checked-in `strong-windows-qemu-whpx` declaration, copied byte for byte:
@@ -1289,6 +1289,7 @@ same proof on the checked-in `strong-windows-qemu-whpx` declaration, copied byte
 | `RefusesAnyOtherBlock` | six blocks the native agent check admits but that are not the template's are `BODY_NOT_TEMPLATE` (field `agent_settings`); fifteen others are refused first by the shared native check, each with its code |
 | `RefusesTheF042Fixture` | the fixture pinned for `implement` (by path, digest or both) is `STAGE_TEMPLATE_DISPOSABLE` at resolution; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `NATIVE_ACP_COMMAND_NOT_PINNED` (its block) |
 | `RefusesADriftedTemplate` | template bytes other than the pin (one byte more, re-serialized, another model, another tag) are `PROFILE_ARTIFACT_DRIFTED` at admission, and at the send |
+| `TheProbeDerivation` (unit) | E-01.3.3's custody probe and E-01.2.2's drill use the checked-in declaration less exactly the `stage_create_template` member, removed textually (every other byte copied); the derivation refuses what the dispatcher's strict reader refuses (a duplicate key, a non-standard constant), a declaration without the pin, and a key that occurs twice |
 
 [`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same
 fixture, with a fake Agent Server that replays the recorded answers of

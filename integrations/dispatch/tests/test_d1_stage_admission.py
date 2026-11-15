@@ -422,6 +422,23 @@ class RefusesTheF042Fixture(D1Fixture):
                 resolved = self.resolve_d1(manifest)
                 self.assertDenied('STAGE_TEMPLATE_DISPOSABLE', self.admit, resolved, manifest)
 
+    def test_a_disposable_tag_in_any_case_spacing_or_list_is_refused(self):
+        """Review N2 (the reviewer's three variants): an approved ACP template whose tag marks it disposable in
+        another case, with surrounding whitespace, or inside a list is STAGE_TEMPLATE_DISPOSABLE at admission."""
+        cases = {
+            'upper case': {'aieh': 'f-04.2-DISPOSABLE'},
+            'a trailing space': {'aieh': 'f-04.2-disposable '},
+            'in a list': {'aieh': ['f-04.2-disposable']},
+        }
+        for name, tags in cases.items():
+            with self.subTest(name):
+                manifest = self.approve_d1(template_with(lambda body: body.update(tags=tags)))
+                self.assertDenied('STAGE_TEMPLATE_DISPOSABLE', self.admit, self.resolve_d1(manifest), manifest)
+        for value in ('x-disposable', ' X-Disposable\t', ['a', ['b-DISPOSABLE']]):
+            self.assertTrue(di.is_disposable_tag(value), value)
+        for value in ('e-05.2-d1', 'disposable-x', '-disposable-not', ['e-05.2-d1'], {'a': 'x-disposable'}, 1, None):
+            self.assertFalse(di.is_disposable_tag(value), value)
+
     def test_a_create_built_from_the_fixture_is_refused_on_the_d1_stage(self):
         _, resolved, admitted = self.reserved_d1()
         fixture_body = self.body_for(resolved, FIXTURE)
@@ -546,6 +563,28 @@ class DeclarationRefusals(D1Fixture):
                 self.assertRefused('PROFILE_ADMISSION_INVALID',
                                    self.d1_request(repository='other-app', stage='review', catalog_pin='reviewer-pin'),
                                    manifest, self.d1_sources)
+
+    def test_a_windows_device_name_in_an_artifact_path_is_refused(self):
+        """Review N3 (unrelated-but-detected): a profile artifact path with a part that is a Windows device name (any
+        case, with or without an extension) is refused as the workspace rule refuses one: not an artifact path."""
+        directory = f'profiles/{D1}/agent-server'
+        reserved = (f'{directory}/CON', f'{directory}/con.json', f'{directory}/NUL.json', f'{directory}/nul',
+                    f'{directory}/Com1.txt', f'profiles/{D1}/AUX/d1-create.json', f'{directory}/lpt9.tar.gz')
+        for path in reserved:
+            with self.subTest(path):
+                self.assertFalse(di.is_artifact_path(path))
+                with self.assertRaises(ValueError):
+                    di.read_profile_artifact(path, repo_root=self.tmp)
+                manifest = self.approve_d1(pin={'stage': 'implement', 'path': path, 'sha256': sha(D1_TEMPLATE_BYTES)})
+                self.assertRefused('PROFILE_ADMISSION_INVALID', self.d1_request(), manifest, self.d1_sources)
+        for path in (D1_PATH, f'{directory}/console.json', f'{directory}/connect.json', f'{directory}/nul-x.json',
+                     f'{directory}/com10.json'):
+            self.assertTrue(di.is_artifact_path(path), path)
+        declared = json.loads(base.profile_bytes('strong-test-profile'))
+        declared['provisioning']['agent_server']['fixture']['path'] = 'profiles/strong-test-profile/agent-server/NUL'
+        with self.assertRaises(di.DispatchRefused) as caught:
+            di.admission_policy(declared, 'strong-test-profile')
+        self.assertEqual(caught.exception.code, 'PROFILE_ADMISSION_INVALID')
 
     def test_a_missing_template_is_refused_at_admission(self):
         manifest = self.approve_d1(template=None, pin={'stage': 'implement', 'path': f'profiles/{D1}/agent-server/absent.json',

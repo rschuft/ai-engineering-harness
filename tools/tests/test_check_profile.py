@@ -1181,7 +1181,35 @@ class AgentServerBlock(unittest.TestCase):
         stage['path'] = stage['path'].replace('d1-create.json', 'absent.json')
         self.assertFails('stage_create_template: pinned file')
         stage.update(path=self.server['fixture']['path'], sha256=self.server['fixture']['sha256'])
-        self.assertFails('stage_create_template: must not pin the F-04.2 fixture')
+        self.assertFails('stage_create_template: the dispatcher refuses it (STAGE_TEMPLATE_DISPOSABLE')
+
+    def test_stage_create_template_is_checked_by_the_dispatchers_own_rule(self):
+        """Review S2: the reviewer's cases, each refused here as the dispatcher refuses it (its rule is called, not
+        mirrored), and a known stage other than implement refused by the D1-only rule."""
+        good = dict(self.server['stage_create_template'])
+        readme = 'profiles/README.md'
+        readme_sha = check_profile.sha256_file(self.tmp / readme)
+        other = 'profiles/strong-incus-vm/profile.json'
+        other_sha = check_profile.sha256_file(self.tmp / other)
+        invalid = 'the dispatcher refuses it (PROFILE_ADMISSION_INVALID'
+        cases = {
+            'an unknown stage': (dict(good, stage='bogus'), invalid),
+            'no stage': ({k: v for k, v in good.items() if k != 'stage'}, invalid),
+            'a path outside the profile': (dict(good, path=readme, sha256=readme_sha), invalid),
+            'a path in another profile': (dict(good, path=other, sha256=other_sha), invalid),
+            'a path with ..': (dict(good, path='profiles/strong-windows-qemu-whpx/../README.md', sha256=readme_sha),
+                               invalid),
+            'execution_profile NATIVE': (dict(good, execution_profile='NATIVE'), invalid),
+            'native with an inference grant': (dict(good, inference_grant={'ttl_s': 60}), invalid),
+            'brokered without a grant': ({k: v for k, v in good.items() if k != 'execution_profile'}, invalid),
+            'stage review': (dict(good, stage='review'), 'stage_create_template: stage must be implement'),
+        }
+        for name, (pin, fragment) in cases.items():
+            with self.subTest(name):
+                self.server['stage_create_template'] = pin
+                self.assertFails(fragment)
+        self.server['stage_create_template'] = good
+        self.assertEqual(self.errors(), [])
 
 
 class AdmissionBlock(unittest.TestCase):

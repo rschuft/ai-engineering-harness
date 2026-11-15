@@ -1146,6 +1146,29 @@ def _strict_loads(text):
     return json.loads(text, object_pairs_hook=_strict_object, parse_constant=_no_constant)
 
 
+def _reserved_name(part: str) -> bool:
+    """A path part whose name before any extension (spaces trimmed, any case) is a Windows device name."""
+    return part.split('.')[0].rstrip(' ').upper() in RESERVED_NAMES
+
+
+def is_artifact_path(path) -> bool:
+    """A repository-relative ``profiles/<id>/...`` artifact path of ARTIFACT_PATH_RE with no part that is a Windows
+    device name (RESERVED_NAMES: ``CON``, ``nul.json``, ``Com1.txt`` ...; review N3 of E-05.2, as the workspace
+    rule refuses them)."""
+    return isinstance(path, str) and ARTIFACT_PATH_RE.fullmatch(path) is not None \
+        and not any(_reserved_name(part) for part in path.split('/'))
+
+
+def is_disposable_tag(value) -> bool:
+    """A tag value that marks a disposable fixture: a string ending DISPOSABLE_TAG_SUFFIX in any case and with any
+    surrounding whitespace, or a list holding one (review N2 of E-05.2)."""
+    if isinstance(value, str):
+        return value.strip().lower().endswith(DISPOSABLE_TAG_SUFFIX)
+    if isinstance(value, list):
+        return any(is_disposable_tag(item) for item in value)
+    return False
+
+
 def _same(a, b) -> bool:
     """Equal as canonical JSON: types matter (2 is not 2.0, true is not 1)."""
     try:
@@ -1206,7 +1229,7 @@ def check_admission_policy(policy, profile: str) -> None:
     for name in ('routes', 'create_template'):
         pin = policy[name]
         if set(pin) != {'path', 'sha256'} or not isinstance(pin['path'], str) \
-                or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
+                or not is_artifact_path(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
                 or not isinstance(pin['sha256'], str) or not SHA256_RE.fullmatch(pin['sha256']):
             invalid(f'{name} must pin a file under profiles/{profile}/ by sha256')
     if not _same(policy['workspace'], {'category': WORKSPACE_CATEGORY, 'working_dir': WORKING_DIR}):
@@ -1258,7 +1281,7 @@ def _check_stage_create_template(pin, fixture, profile: str) -> dict:
     ``tokens`` budget is refused by name, S-03.6) or when it pins the profile's F-04.2 fixture, by path or by
     sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are descriptive and ignored."""
     if not isinstance(pin, dict) or pin.get('stage') not in STAGES or not isinstance(pin.get('path'), str) \
-            or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
+            or not is_artifact_path(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
             or not isinstance(pin.get('sha256'), str) or not SHA256_RE.fullmatch(pin['sha256']):
         raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY} must name '
                               f'one of {STAGES} and pin a file under profiles/{profile}/ by sha256', profile=profile)
@@ -1309,7 +1332,7 @@ def check_stage_template(template: dict, stage: str) -> None:
     (``STAGE_TEMPLATE_DISPOSABLE``), and carrying an ACP agent block (``AGENT_BLOCK_NOT_ACP``). The block's
     content is approved by the template's digest, never re-derived here (no role-profile materialization)."""
     tags = template.get('tags')
-    if isinstance(tags, dict) and any(isinstance(v, str) and v.endswith(DISPOSABLE_TAG_SUFFIX) for v in tags.values()):
+    if isinstance(tags, dict) and any(is_disposable_tag(v) for v in tags.values()):
         raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'the {stage} stage\'s create template is tagged '
                               f'disposable ({tags})', stage=stage)
     settings = template.get('agent_settings')
@@ -1361,7 +1384,7 @@ def admission_policy(declared: dict, profile: str, stage: str | None = None) -> 
 
 def read_profile_artifact(path: str, *, repo_root=REPO) -> bytes:
     """The bytes of a profile-pinned artifact, by its repository-relative ``profiles/<id>/...`` path."""
-    if not (isinstance(path, str) and ARTIFACT_PATH_RE.fullmatch(path)):
+    if not is_artifact_path(path):
         raise ValueError(f'not a profile artifact path: {path!r}')
     return Path(repo_root).joinpath(*path.split('/')).read_bytes()
 
@@ -1480,7 +1503,7 @@ def _workspace_parts(planned) -> list[str]:
     grammar: a lower-case repository id, a canonical upper-case Work id, a lower-case uuid."""
     parts = planned.replace(BACKSLASH, '/').split('/') if isinstance(planned, str) else []
     for part in parts:
-        if part.split('.')[0].rstrip(' ').upper() in RESERVED_NAMES:
+        if _reserved_name(part):
             raise DispatchRefused('WORKSPACE_RESERVED_NAME', f'{part!r} is a Windows reserved device name',
                                   part=part)
     parts = planned.split('/') if isinstance(planned, str) else []

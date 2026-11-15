@@ -1327,6 +1327,43 @@ def memory_mib(text):
     return int(match.group(1)) * {'k': 1 / 1024, 'm': 1, 'g': 1024}[match.group(2)]
 
 
+D1_STAGE = 'implement'   # the one stage a profile's stage_create_template may name (E-05.2: the D1 stage only)
+
+
+def load_dispatch_inputs():
+    """integrations/dispatch/dispatch_inputs.py, the dispatcher's admission (standard library only), loaded once
+    under its own name: its stage_create_template rule is called here, never mirrored."""
+    module = sys.modules.get('dispatch_inputs')
+    if module is None:
+        path = REPO / 'integrations' / 'dispatch' / 'dispatch_inputs.py'
+        spec = importlib.util.spec_from_file_location('dispatch_inputs', path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['dispatch_inputs'] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop('dispatch_inputs', None)
+            raise
+    return module
+
+
+def check_stage_create_template(report, profile, root, server):
+    """provisioning.agent_server.stage_create_template (E-05.2): the dispatcher's own rule
+    (dispatch_inputs.stage_create_template: a known stage, a file under profiles/<name>/ by sha256, an
+    execution profile, the native one without an inference grant, never the F-04.2 fixture), then the stage is
+    the D1 stage and the pinned file is committed with its sha256."""
+    label = 'provisioning.agent_server.stage_create_template'
+    di = load_dispatch_inputs()
+    try:
+        pin = di.stage_create_template(profile, profile.get('name'))
+    except di.DispatchRefused as exc:
+        report.fail(f'{label}: the dispatcher refuses it ({exc.code}: {exc.detail})')
+        return
+    if pin['stage'] != D1_STAGE:
+        report.fail(f'{label}: stage must be {D1_STAGE} (the D1 stage; every other stage is A-01.2\'s)')
+    check_repo_file(report, root, label, server[di.STAGE_TEMPLATE_KEY])
+
+
 def check_agent_server(report, profile, root, conf):
     """provisioning.agent_server (F-04.1 slice (c), decisions 0001 and 0006): the release
     binary of the lock, a no-login service user in group docker (never agent), a
@@ -1445,13 +1482,8 @@ def check_agent_server(report, profile, root, conf):
     if openapi.get('sha256') != locked_openapi_sha256(root):
         report.fail(f'{label}.fixture.openapi.sha256: must be the locked openapi.json '
                     '(composition/lock/components.lock.json release_assets)')
-    if 'stage_create_template' in server:   # E-05.2: the D1 stage's create template (the dispatcher checks the rest)
-        stage = server['stage_create_template']
-        check_repo_file(report, root, f'{label}.stage_create_template', stage)
-        if isinstance(stage, dict) and (stage.get('path') == fixture.get('path')
-                                        or stage.get('sha256') == fixture.get('sha256')):
-            report.fail(f'{label}.stage_create_template: must not pin the F-04.2 fixture '
-                        '(the dispatcher refuses it: STAGE_TEMPLATE_DISPOSABLE)')
+    if 'stage_create_template' in server:   # E-05.2: the D1 stage's create template
+        check_stage_create_template(report, profile, root, server)
     if 'conversations' in server:
         check_conversations(report, profile, server)
         check_facts_rate(report, profile, root)

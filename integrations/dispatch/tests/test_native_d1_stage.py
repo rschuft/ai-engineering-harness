@@ -26,10 +26,12 @@ The proof, clause by clause:
   control with positive controls (``NoOtherCredential``).
 * No store record, admitted-create record, report or log carries the token, only its fingerprint (``Custody``).
 
-The template is E-05.2's approved template with a synthetic model, pinned by a synthetic profile in a throwaway directory
-that declares the native profile and a tunnel endpoint (no checked-in stage template declares the native profile
-yet; since E-05.10 the checked-in strong-windows-qemu-whpx profile declares the tunnel endpoint). The Agent Server is the E-01.3.1 fake. The credential provider is in memory; the token is synthetic,
-built at run time. No broker, guest, provider, model or credential store is used.
+The template is E-05.2's approved template with a synthetic model, pinned by a synthetic profile in a throwaway
+directory that declares the native profile and a tunnel endpoint. (Since E-05.2's pin, 2026-11-15, the checked-in
+strong-windows-qemu-whpx profile itself declares the native profile for implement, with the approved template and
+the tunnel endpoint; ``test_d1_checked_in_template.py`` shows the D1 stage on it.) The Agent Server is the E-01.3.1
+fake. The credential provider is in memory; the token is synthetic, built at run time. No broker, guest, provider,
+model or credential store is used.
 """
 from pathlib import Path
 import ast
