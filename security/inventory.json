@@ -1892,9 +1892,11 @@
       "name": "Push a proposal branch and open a PR",
       "mechanism": "Gitea API or git push with the builder's bot token",
       "principal": "engineering-agent",
+      "planned_performer": "management-dispatcher",
       "owner_only": false,
       "credentials": ["cred-gitea-bot-builder"],
       "assets": ["gitea-server"],
+      "performed_via": "For a D1 attempt's result, only through the dispatch module: integrations/dispatch/result_path.py (E-05.4, nm-dispatcher-bot-gitea; built offline, not yet verified live) in the dispatcher's attempt context (attempt_tokens.attempt_role_token: the builder's standing token, never in a container), after the outbound token search and a reconciliation with Gitea's state: the push of work/<attempt id> at the verified commit from the verified repository (integrations/repository push, git over HTTP, never forced) and one draft pull request into main through attempt_tokens.ResultSession, a closed route list with no merge, review or contents route.",
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
     },
