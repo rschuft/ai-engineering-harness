@@ -10,13 +10,14 @@ refuses the F-04.2 disposable fixture template for a real stage (and, here too, 
 qualification create). The D1 stage is the stage an approved profile's
 ``provisioning.agent_server.stage_create_template`` names.
 
-The approved template is the CANDIDATE ``profiles/strong-windows-qemu-whpx/agent-server/d1-create.json``
-(S-03.3 slice 2's ACP block, its model a sentinel, tagged ``e-05.2-d1-candidate``), pinned by a
-synthetic profile in a throwaway directory: no checked-in profile pins it yet. Since E-05.6 the D1
-stage's create carries the attempt's inference token and endpoint, so a create that is sent takes a
-grant from a real inference broker in process (its control listener on 127.0.0.1, no upstream
-contacted), and the sent template is the candidate with a synthetic model of that broker's allowlist
-(TEST_TEMPLATE: the sentinel is never a model). Every create goes through the E-01.2.2 counting fake
+The approved template is ``profiles/strong-windows-qemu-whpx/agent-server/d1-create.json``: since
+2026-11-15 its agent block is the one E-05.11 qualified on the native profile (``TheApprovedTemplate``
+derives that block from ``native_qualification.py`` and compares it field by field), tagged
+``e-05.2-d1``. Here it is pinned by a synthetic profile in a throwaway directory, on the brokered
+profile E-05.6 built: the D1 stage's create carries the attempt's inference token and endpoint, so a
+create that is sent takes a grant from a real inference broker in process (its control listener on
+127.0.0.1, no upstream contacted), and the sent template is the approved one with a synthetic model of
+that broker's allowlist (TEST_TEMPLATE). Every create goes through the E-01.2.2 counting fake
 transport; each refusal asserts it was called zero times.
 """
 from pathlib import Path
@@ -52,14 +53,34 @@ store_mod = base.store_mod
 D1 = 'strong-d1-profile'
 D1_PATH = f'profiles/{D1}/agent-server/d1-create.json'
 FIXTURE_PATH = f'profiles/{D1}/agent-server/conversation-create.json'
-CANDIDATE_FILE = base.AGENT_SERVER / 'd1-create.json'
-CANDIDATE_BYTES = CANDIDATE_FILE.read_bytes()
-CANDIDATE = json.loads(CANDIDATE_BYTES)
+D1_TEMPLATE_FILE = base.AGENT_SERVER / 'd1-create.json'     # the approved D1 create template
+D1_TEMPLATE_BYTES = D1_TEMPLATE_FILE.read_bytes()
+D1_TEMPLATE = json.loads(D1_TEMPLATE_BYTES)
 FIXTURE_BYTES = base.TEMPLATE_BYTES          # the F-04.2 disposable fixture
 FIXTURE = json.loads(FIXTURE_BYTES)
 QUALIFICATION_PATH = 'integrations/dispatch/qualification/acp-claude-code-create.json'
 QUALIFICATION_BYTES = base.REPO.joinpath(*QUALIFICATION_PATH.split('/')).read_bytes()
 QUALIFICATION = json.loads(QUALIFICATION_BYTES)
+# E-05.11's native qualification create, built by its own module (not a copy): the block the approved template must
+# carry. Its three values are synthetic: a conversation id, a token of the native shape, the checked-in profile's
+# tunnel endpoint.
+nq = _load('native_qualification', HERE.parent / 'native_qualification.py')
+NS = _load('native_support', HERE / 'native_support.py')
+REAL_PROFILE = 'strong-windows-qemu-whpx'
+REAL_DECLARED = json.loads((base.REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
+QUALIFIED_CONVERSATION = 'a0333c00-0000-4000-8000-0000000e0502'
+# The intended differences between E-05.11's qualified create and the approved D1 template, each with its reason
+# (the engineering manager's ruling: a field that differs without a stated reason is a defect). None is in the
+# agent block.
+QUALIFIED_AGENT_DIFFERENCES = {}
+QUALIFIED_BODY_DIFFERENCES = {
+    'conversation_id': 'per attempt: the template holds a fixed uuid that admission replaces with the reserved '
+                       'conversation id (the qualified create carried its own reserved id)',
+    'secrets': 'per attempt: the pinned template carries none; admit_secrets adds the attempt\'s native set (E-05.9)',
+    'secrets_encrypted': 'per attempt: added with the secrets block by admit_secrets (E-05.9)',
+    'tags': 'the qualified create is tagged e-05.11-disposable, which the D1 stage refuses as its template '
+            '(STAGE_TEMPLATE_DISPOSABLE); the approved template is tagged e-05.2-d1',
+}
 DEFAULT = object()
 # E-05.6: the D1 stage's grant, from a real broker in process (integrations/inference/tests/broker_support.py).
 S = _load('broker_support', base.REPO / 'integrations' / 'inference' / 'tests' / 'broker_support.py')
@@ -79,14 +100,15 @@ def as_bytes(body):
     return json.dumps(body, indent=2).encode('utf-8')
 
 
-def candidate_with(change):
-    body = copy.deepcopy(CANDIDATE)
+def template_with(change):
+    body = copy.deepcopy(D1_TEMPLATE)
     change(body)
     return as_bytes(body)
 
 
-# The candidate with a model of the test broker's allowlist: the template a sent D1 create is built from.
-TEST_TEMPLATE_BYTES = candidate_with(lambda body: body['agent_settings'].update(acp_model=TEST_MODEL))
+# The approved template with a model of the test broker's allowlist: the template a sent brokered D1 create is built
+# from (the broker admits only its allowlist's models).
+TEST_TEMPLATE_BYTES = template_with(lambda body: body['agent_settings'].update(acp_model=TEST_MODEL))
 TEST_TEMPLATE = json.loads(TEST_TEMPLATE_BYTES)
 
 
@@ -193,28 +215,61 @@ class D1Fixture(adm.AdmissionFixture):
         return dataclasses.replace(admitted, body_json=di._canonical(body))
 
 
-class TheCandidate(unittest.TestCase):
-    """The candidate template is S-03.3 slice 2's ACP block, inside E-01.2.2's body allowlist."""
+def qualified_create():
+    """E-05.11's native qualification create as native_qualification.py builds it (its pinned fixture, checked
+    against FIXTURE_SHA256 and the model record, filled and admitted by its own check_create)."""
+    return nq.build_create(conversation_id=QUALIFIED_CONVERSATION, native_token=NS.token('E-05.2 parity token'),
+                           profile=REAL_DECLARED)
+
+
+class TheApprovedTemplate(unittest.TestCase):
+    """The approved D1 template carries exactly the agent block E-05.11 qualified (field by field, derived from
+    native_qualification.py), inside E-01.2.2's body allowlist; it differs from the qualified create only in the
+    named per-attempt fields and the tag."""
     category = 'unit'
 
-    def test_the_candidate_block_is_the_qualification_block_but_the_model(self):
-        mine, qualified = CANDIDATE['agent_settings'], QUALIFICATION['body']['agent_settings']
+    def test_its_agent_block_is_the_one_e_05_11_qualified(self):
+        qualified, mine = qualified_create()['agent_settings'], D1_TEMPLATE['agent_settings']
+        differing = {name for name in set(qualified) | set(mine)
+                     if name not in qualified or name not in mine or not di._same(qualified[name], mine[name])}
+        self.assertEqual(differing, set(QUALIFIED_AGENT_DIFFERENCES))
+        self.assertEqual(sorted(mine), sorted(qualified))
+        for name in sorted(qualified):
+            with self.subTest(field=name):
+                self.assertTrue(di._same(mine[name], qualified[name]), (name, mine[name], qualified[name]))
+        self.assertEqual(di._canonical(mine), di._canonical(qualified))
+        # The fields E-05.11's create fixes, spelled out once more (the qualified run's shape).
+        self.assertEqual(mine, {'agent_kind': 'acp', 'acp_server': 'claude-code', 'acp_command': ['claude-agent-acp'],
+                                'acp_args': [], 'acp_model': nq.MODEL, 'acp_session_mode': None,
+                                'acp_isolate_data_dir': True, 'mcp_config': {}})
+        # The S-03.3 qualification create (the optional brokered profile) has the same run shape but its model slot.
         self.assertEqual({k: v for k, v in mine.items() if k != 'acp_model'},
-                         {k: v for k, v in qualified.items() if k != 'acp_model'})
-        self.assertEqual((mine['agent_kind'], mine['acp_server'], mine['acp_command']),
-                         ('acp', 'claude-code', ['claude-agent-acp']))
-        # No model is selected yet (S-03.3, decision 0018 point 3): a sentinel, never a name from memory.
-        self.assertEqual((mine['acp_model'], qualified['acp_model']), ('candidate-unselected', '{acp_model}'))
+                         {k: v for k, v in QUALIFICATION['body']['agent_settings'].items() if k != 'acp_model'})
 
-    def test_the_candidate_is_an_admissible_body_marked_candidate(self):
-        self.assertEqual(set(CANDIDATE), set(di.BODY_FIELDS))
-        self.assertNotIn('secrets', CANDIDATE)
-        self.assertEqual(CANDIDATE['tags'], {'aieh': 'e-05.2-d1-candidate'})
+    def test_it_differs_from_the_qualified_create_only_in_the_named_fields(self):
+        qualified = qualified_create()
+        differing = {name for name in set(qualified) | set(D1_TEMPLATE)
+                     if name not in qualified or name not in D1_TEMPLATE
+                     or not di._same(qualified[name], D1_TEMPLATE[name])}
+        self.assertEqual(differing, set(QUALIFIED_BODY_DIFFERENCES))
+        self.assertEqual(set(qualified) - set(D1_TEMPLATE), {'secrets', 'secrets_encrypted'})
+        self.assertEqual(qualified['tags'], {'aieh': 'e-05.11-disposable'})
+        with self.assertRaises(di.DispatchRefused) as caught:
+            di.check_stage_template(qualified, 'implement')
+        self.assertEqual(caught.exception.code, 'STAGE_TEMPLATE_DISPOSABLE')
+
+    def test_it_is_an_admissible_native_d1_template(self):
+        self.assertEqual(set(D1_TEMPLATE), set(di.BODY_FIELDS))
+        self.assertNotIn('secrets', D1_TEMPLATE)
+        self.assertEqual(D1_TEMPLATE['tags'], {'aieh': 'e-05.2-d1'})
+        self.assertNotIn(b'candidate', D1_TEMPLATE_BYTES)
         for key in ('conversation_runtime', 'workspace', 'autotitle', 'container'):
             with self.subTest(key):
-                self.assertEqual(CANDIDATE[key], FIXTURE[key])
-        self.assertTrue(CANDIDATE_BYTES.endswith(b'}\n') and b'\r' not in CANDIDATE_BYTES)
-        di.check_stage_template(CANDIDATE, 'implement')  # ACP, not disposable
+                self.assertEqual(D1_TEMPLATE[key], FIXTURE[key])
+        self.assertTrue(D1_TEMPLATE_BYTES.endswith(b'}\n') and b'\r' not in D1_TEMPLATE_BYTES)
+        di.check_stage_template(D1_TEMPLATE, 'implement')  # ACP, not disposable
+        # The native D1 stage's check of its pinned template before any token is read (E-05.9).
+        di.secrets_check.check_native_agent(D1_TEMPLATE, refused=di.DispatchRefused)
 
 
 class AcceptsTheApprovedBlock(D1Fixture):
@@ -230,14 +285,14 @@ class AcceptsTheApprovedBlock(D1Fixture):
         self.assertEqual(self.transport.calls, [('POST', '/api/conversations', expected)])
         self.assertEqual(self.transport.calls[0][2]['agent_settings'], TEST_TEMPLATE['agent_settings'])
         self.assertEqual(admitted.to_json()['create_template_sha256'], pin['sha256'])
-        # The admitted block is the candidate's but its model, which no sentinel may be (decision 4 of E-05.6).
+        # The admitted block is the approved template's but its model, the test broker's (decision 4 of E-05.6).
         self.assertEqual({k: v for k, v in TEST_TEMPLATE.items() if k != 'agent_settings'},
-                         {k: v for k, v in CANDIDATE.items() if k != 'agent_settings'})
+                         {k: v for k, v in D1_TEMPLATE.items() if k != 'agent_settings'})
 
     def test_the_digest_binds_the_block_into_the_attempt(self):
         """Another approved ACP block (re-pinned by its digest) is admitted as itself, under another policy
         digest; bytes changed after approval, without a new pin, are refused."""
-        other = candidate_with(lambda body: body['agent_settings'].update(acp_model=OTHER_MODEL))
+        other = template_with(lambda body: body['agent_settings'].update(acp_model=OTHER_MODEL))
         first = self.resolve_d1(self.approve_d1())
         manifest = self.approve_d1(other)
         second = self.resolve_d1(manifest)
@@ -335,7 +390,7 @@ class RefusesAnyOtherBlock(D1Fixture):
         }
         for name, change in cases.items():
             with self.subTest(name):
-                manifest = self.approve_d1(candidate_with(change))
+                manifest = self.approve_d1(template_with(change))
                 resolved = self.resolve_d1(manifest)
                 self.assertDenied('AGENT_BLOCK_NOT_ACP', self.admit, resolved, manifest)
 
@@ -344,7 +399,7 @@ class RefusesTheF042Fixture(D1Fixture):
     def test_the_fixture_pinned_as_the_d1_template_is_refused_at_resolution(self):
         cases = {
             'its path and digest': {'path': FIXTURE_PATH, 'sha256': sha(FIXTURE_BYTES)},
-            'its path, another digest': {'path': FIXTURE_PATH, 'sha256': sha(CANDIDATE_BYTES)},
+            'its path, another digest': {'path': FIXTURE_PATH, 'sha256': sha(D1_TEMPLATE_BYTES)},
             'its bytes at the D1 path': {'path': D1_PATH, 'sha256': sha(FIXTURE_BYTES)},
         }
         for name, pin in cases.items():
@@ -358,7 +413,7 @@ class RefusesTheF042Fixture(D1Fixture):
         """Its content under other bytes (another serialization), and its tag on an ACP template."""
         cases = {
             'the fixture re-serialized': json.dumps(FIXTURE, indent=1).encode('utf-8'),
-            'the fixture\'s tag on the ACP block': candidate_with(
+            'the fixture\'s tag on the ACP block': template_with(
                 lambda body: body.update(tags=copy.deepcopy(FIXTURE['tags']))),
         }
         for name, template in cases.items():
@@ -377,7 +432,7 @@ class RefusesTheF042Fixture(D1Fixture):
 
 
 class RefusesTheQualificationFixture(D1Fixture):
-    def filled_qualification(self, conversation_id, model=CANDIDATE['agent_settings']['acp_model']):
+    def filled_qualification(self, conversation_id, model=D1_TEMPLATE['agent_settings']['acp_model']):
         values = {'{conversation_id}': conversation_id, '{acp_model}': model,
                   '{attempt_token}': 'synthetic-attempt-token', '{inference_endpoint}': 'http://172.17.0.1:8090'}
 
@@ -400,7 +455,7 @@ class RefusesTheQualificationFixture(D1Fixture):
         body = QUALIFICATION['body']
         manifest = self.approve_d1(as_bytes(body))
         self.assertDenied('STAGE_TEMPLATE_DISPOSABLE', self.admit, self.resolve_d1(manifest), manifest)
-        untagged = dict(copy.deepcopy(body), tags=copy.deepcopy(CANDIDATE['tags']))
+        untagged = dict(copy.deepcopy(body), tags=copy.deepcopy(D1_TEMPLATE['tags']))
         manifest = self.approve_d1(as_bytes(untagged))
         refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.admit, self.resolve_d1(manifest), manifest)
         self.assertEqual(refusal.context['field'], 'secrets')
@@ -443,7 +498,7 @@ class SendCreateRechecks(D1Fixture):
 
     def test_an_admitted_create_that_skipped_the_content_check_is_refused_at_send(self):
         cases = {
-            'AGENT_BLOCK_NOT_ACP': candidate_with(lambda body: body['agent_settings'].update(agent_kind='openhands')),
+            'AGENT_BLOCK_NOT_ACP': template_with(lambda body: body['agent_settings'].update(agent_kind='openhands')),
             'STAGE_TEMPLATE_DISPOSABLE': json.dumps(FIXTURE, indent=1).encode('utf-8'),
         }
         for code, template in cases.items():
@@ -469,7 +524,7 @@ class SendCreateRechecks(D1Fixture):
 
 class DeclarationRefusals(D1Fixture):
     def test_a_malformed_declaration_is_refused_at_resolution(self):
-        good = {'stage': 'implement', 'path': D1_PATH, 'sha256': sha(CANDIDATE_BYTES)}
+        good = {'stage': 'implement', 'path': D1_PATH, 'sha256': sha(D1_TEMPLATE_BYTES)}
         cases = {
             'not an object': ['implement', D1_PATH],
             'no stage': {k: v for k, v in good.items() if k != 'stage'},
@@ -479,8 +534,8 @@ class DeclarationRefusals(D1Fixture):
             'an absolute path': dict(good, path=f'/{D1_PATH}'),
             'a backslash path': dict(good, path=D1_PATH.replace('/', chr(92))),
             'another profile\'s directory': dict(good, path='profiles/strong-test-profile/agent-server/d1-create.json'),
-            'a short digest': dict(good, sha256=sha(CANDIDATE_BYTES)[:63]),
-            'an upper-case digest': dict(good, sha256=sha(CANDIDATE_BYTES).upper()),
+            'a short digest': dict(good, sha256=sha(D1_TEMPLATE_BYTES)[:63]),
+            'an upper-case digest': dict(good, sha256=sha(D1_TEMPLATE_BYTES).upper()),
             'no digest': {k: v for k, v in good.items() if k != 'sha256'},
         }
         for name, pin in cases.items():
@@ -494,7 +549,7 @@ class DeclarationRefusals(D1Fixture):
 
     def test_a_missing_template_is_refused_at_admission(self):
         manifest = self.approve_d1(template=None, pin={'stage': 'implement', 'path': f'profiles/{D1}/agent-server/absent.json',
-                                                       'sha256': sha(CANDIDATE_BYTES)})
+                                                       'sha256': sha(D1_TEMPLATE_BYTES)})
         self.assertDenied('PROFILE_ARTIFACT_MISSING', self.admit, self.resolve_d1(manifest), manifest)
 
 

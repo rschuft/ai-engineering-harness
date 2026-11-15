@@ -242,18 +242,21 @@ whether it may be admitted is decided by the profile's approval by sha256 in a p
 
 **Scope.** E-05.2 applies to the D1 stage only. Every other real stage keeps E-01.2.2's
 admission, the F-04.2 fixture included, until A-01.2 (whose proof refuses that fixture for every
-real stage). The checked-in `strong-windows-qemu-whpx` profile does not pin the candidate below:
-it gains the pin only when S-03.3 qualifies the real template.
+real stage). The checked-in `strong-windows-qemu-whpx` profile does not yet pin the template
+below (2026-11-15: the pin is held for the engineering manager's decision, see
+[the E-05.2 record](../../evidence/E-05.2-d1-stage-admission.md)).
 
-**The candidate.** [`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json`](../../profiles/strong-windows-qemu-whpx/agent-server/d1-create.json)
-is a CANDIDATE, pinned by no checked-in profile: E-01.2.2's body allowlist (no `secrets`), with
-S-03.3 slice 2's ACP block (`claude-code`, exactly `["claude-agent-acp"]`, no arguments, no MCP
-server, an isolated data directory), its `acp_model` the sentinel `candidate-unselected` (no
-model is selected before S-03.3; never a name from memory) and the tag `e-05.2-d1-candidate`.
-When S-03.3 qualifies the block, its bytes change (the model, the tag) and a profile pins its
-sha256. **Not yet verified:** any live create from it. The D1 create's inference credentials
-(the S-03.3 create's `secrets`), which E-01.2.2's allowlist refuses and E-05.2 does not add, are
-E-05.6's (next section).
+**The approved template.** [`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json`](../../profiles/strong-windows-qemu-whpx/agent-server/d1-create.json)
+(since 2026-11-15; before, a candidate with the sentinel model `candidate-unselected`):
+E-01.2.2's body allowlist (no `secrets`), with the agent block E-05.11 qualified on the native
+profile (decision 0023): `claude-code`, exactly `["claude-agent-acp"]`, no arguments, `acp_model`
+`claude-sonnet-5` (the model record's primary, `evidence/D1-native-model-record.md`, approved
+with OA-31 (c1)), no session mode, an isolated data directory, no MCP server; tagged `e-05.2-d1`.
+`TheApprovedTemplate` derives the qualified block from `native_qualification.py` and compares it
+field by field; the template differs from E-05.11's create only in the conversation id (replaced
+by the reserved one at admission), `secrets` and `secrets_encrypted` (the attempt's, added by
+`admit_secrets`) and the tag (E-05.11's ends `-disposable`). **Not yet verified:** any live create
+from it. The D1 create's credentials are E-05.6's (brokered) or E-05.9's (native) (next sections).
 
 ### The D1 stage's create secrets (E-05.6)
 
@@ -1259,12 +1262,13 @@ managed root is an `AIEH_DATA_ROOT` in the throwaway directory.
 | `TamperDenialTests` | an admitted request altered after construction and refused by `send_create`: 26 body alterations (runtime, working directory, caps, mounts, unknown fields, template fields, conversation id), non-object or non-strict JSON, the mount set (extra, missing, reordered, read-only, altered, none), the route, the template bytes, the identity and digest; resolved policy inputs altered with or without a matching digest, and forged consistent pairs breaking the ceilings, the runtime, the route, the working directory or the mount policy; provenance (another manifest, a drifted profile, a wrong profile digest, wrong types) |
 
 [`tests/test_d1_stage_admission.py`](tests/test_d1_stage_admission.py) (E-05.2), on the E-01.2.2
-fixture with one more synthetic profile that pins the candidate for `implement`; **the proof**,
-clause by clause, every refusal with the counting transport called zero times:
+fixture with one more synthetic profile that pins the approved template (its model the test
+broker's) for `implement`; **the proof**, clause by clause, every refusal with the counting
+transport called zero times:
 
 | Class | What it shows |
 |---|---|
-| `TheCandidate` (unit) | the candidate's block is S-03.3 slice 2's but the model (a sentinel); it is an allowlisted body without `secrets`, tagged candidate, otherwise the F-04.2 fixture's runtime, workspace, title and container |
+| `TheApprovedTemplate` (unit) | its agent block is, field by field, the one in E-05.11's create as `native_qualification.py` builds it (no named difference); the template differs from that create only in the named per-attempt fields (`conversation_id`, `secrets`, `secrets_encrypted`) and the tag, each with its reason; it is an allowlisted body without `secrets`, tagged `e-05.2-d1`, otherwise the F-04.2 fixture's runtime, workspace, title and container, and it passes the native stage's agent check |
 | `AcceptsTheApprovedBlock` | the D1 stage admits exactly the pinned template (its pin in the policy, the body sent once, the template's sha256 in the record); another ACP block re-pinned is admitted as itself under another policy digest, and bytes changed without a new pin are `PROFILE_ARTIFACT_DRIFTED`; the boundary: the same profile's review stage and a profile without the declaration keep E-01.2.2's template |
 | `RefusesAnyOtherBlock` | eighteen other agent blocks in the body (the F-04.2 bare agent, another kind or server, the `npx` form, an `npx` or wrapper command, arguments, another model or session mode, a shared data dir, an MCP server, tools, an agent profile or context, a missing key, wrong types) are `BODY_NOT_TEMPLATE` at the send and in `check_create_body`; another agent source beside it is `BODY_FIELD_UNKNOWN`; an approved template without an ACP block is `AGENT_BLOCK_NOT_ACP` |
 | `RefusesTheF042Fixture` | the fixture pinned by path, by digest or both is `STAGE_TEMPLATE_DISPOSABLE` at resolution, nothing reserved; a re-serialized copy or its tag is refused at admission; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `BODY_NOT_TEMPLATE` (its block) |

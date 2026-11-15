@@ -10,7 +10,7 @@
     "acp_server": "claude-code",
     "acp_command": ["claude-agent-acp"],
     "acp_args": [],
-    "acp_model": "candidate-unselected",
+    "acp_model": "claude-sonnet-5",
     "acp_session_mode": null,
     "acp_isolate_data_dir": true,
     "mcp_config": {}
@@ -20,6 +20,6 @@
     "browser": false
   },
   "tags": {
-    "aieh": "e-05.2-d1-candidate"
+    "aieh": "e-05.2-d1"
   }
 }

@@ -26,7 +26,7 @@ The proof, clause by clause:
   control with positive controls (``NoOtherCredential``).
 * No store record, admitted-create record, report or log carries the token, only its fingerprint (``Custody``).
 
-The template is E-05.2's candidate with a synthetic model, pinned by a synthetic profile in a throwaway directory
+The template is E-05.2's approved template with a synthetic model, pinned by a synthetic profile in a throwaway directory
 that declares the native profile and a tunnel endpoint (no checked-in stage template declares the native profile
 yet; since E-05.10 the checked-in strong-windows-qemu-whpx profile declares the tunnel endpoint). The Agent Server is the E-01.3.1 fake. The credential provider is in memory; the token is synthetic,
 built at run time. No broker, guest, provider, model or credential store is used.
@@ -364,7 +364,7 @@ class Refusals(NativeFixture):
 
     def test_profile_and_template_refusals_come_before_any_read(self):
         def template_with(**changes):
-            return d1.candidate_with(lambda body: body['agent_settings'].update(acp_model=d1.TEST_MODEL, **changes))
+            return d1.template_with(lambda body: body['agent_settings'].update(acp_model=d1.TEST_MODEL, **changes))
         cases = {
             'NATIVE_TUNNEL_UNDECLARED': [dict(endpoints=()), dict(endpoints=(TUNNEL, dict(TUNNEL, guest_port=9))),
                                          dict(endpoints=(dict(TUNNEL, guest_address='127.0.0.1'),)),

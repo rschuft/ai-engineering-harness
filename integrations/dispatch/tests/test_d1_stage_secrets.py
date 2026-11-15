@@ -630,11 +630,11 @@ class Refusals(SecretsFixture):
             'an endpoint without a port': dict(change=endpoints({'class': 'inference', 'guest_address': '172.17.0.1'})),
             'an endpoint by name': dict(change=endpoints(dict(d1.INFERENCE_ENDPOINT,
                                                               guest_address='host.docker.internal'))),
-            'another ACP server': dict(template=d1.candidate_with(
+            'another ACP server': dict(template=d1.template_with(
                 lambda body: body['agent_settings'].update(acp_server='codex', acp_model=d1.TEST_MODEL))),
-            'a wildcard model': dict(template=d1.candidate_with(
+            'a wildcard model': dict(template=d1.template_with(
                 lambda body: body['agent_settings'].update(acp_model='syn-model-*'))),
-            'a model with a space': dict(template=d1.candidate_with(
+            'a model with a space': dict(template=d1.template_with(
                 lambda body: body['agent_settings'].update(acp_model='syn model'))),
         }
         for name, changes in cases.items():
@@ -731,7 +731,7 @@ class Issuance(SecretsFixture):
     def test_a_grant_the_broker_refuses_is_a_refused_attempt(self):
         """The template's model is not in the broker's allowlist: the broker issues nothing."""
         spy = self.spy()
-        manifest = self.approve_d1(d1.candidate_with(
+        manifest = self.approve_d1(d1.template_with(
             lambda body: body['agent_settings'].update(acp_model='syn-unlisted')))
         with self.assertRaises(di.DispatchRefused) as caught:
             self.run_dispatch(cc.FakeAgentServer(), spy, manifest=manifest)
@@ -744,7 +744,7 @@ class Issuance(SecretsFixture):
 
     def drifted(self):
         manifest = self.approve_d1()
-        (self.profiles / d1.D1 / 'agent-server' / 'd1-create.json').write_bytes(d1.CANDIDATE_BYTES)
+        (self.profiles / d1.D1 / 'agent-server' / 'd1-create.json').write_bytes(d1.D1_TEMPLATE_BYTES)
         return manifest
 
     def latest_failed(self):
