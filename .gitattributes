@@ -12,3 +12,4 @@
 /tools/verify_seed.py    -text
 # The publication-safety gate hooks run under sh, including Git for Windows: keep LF.
 /.githooks/**            text eol=lf
+/evidence/D1-demo-design/**  -text
