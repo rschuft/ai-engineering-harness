@@ -134,7 +134,12 @@ The Owner's direction for revision 2, item 1, verbatim:
    the recorded identifiers. Where a leaf's acceptance criteria require the Owner's approval of model identifiers,
    this applies to that leaf only once those criteria are amended through the integrity process to state it (for
    S-03.3, OA-28 item 5); until then that approval is required, and a presentation never stands in for it. A
-   provider, origin or model outside the envelope is an Owner decision per act. And:
+   provider, origin or model outside the envelope is an Owner decision per act. Inside the native execution
+   profile (decision 0023; revision 6, the Owner's decision of 2026-11-14), the engineering manager may change
+   the primary model pinned in the D1 create, and the model record, to another model that is current at the
+   provider and known to the pinned Claude Code, verified from current provider information and recorded
+   before its first use, and reported in the next report; a change of the pinned Claude Code itself remains
+   a planned change. This delegation expires at D1's acceptance. And:
    1. **Architectural decisions.** A decision record is accepted by the lead accountable for its scope under
       point 1, after the architect's consultation where a gate earned one. Accepting it authorizes none of the
       reserved acts (point 4) it names: each is presented separately, and the design does not wait for them. A
@@ -189,7 +194,11 @@ The Owner's direction for revision 2, item 1, verbatim:
    verbatim in the log's Decisions by that session (point 7); the existing mechanisms consume it as they do today (the network matrix's
    `owner_approval` quote for an `owner_act` edge; a decision-0003-style repeatable authorization; the
    inventory's operations). No agent writes, broadens or extends one, and none is ever relayed between sessions.
-   Items 1 to 3 and 8 of point 4 are never standing.
+   Items 1 to 3 and 8 of point 4 are never standing. One exception, by the Owner's decision of 2026-11-14
+   (revision 6): the dispatcher may deliver the native Claude Code token (decision 0023) to E-05.11's
+   qualification runs and to D1 attempts, a new attempt after an interruption included, under OA-31 (b)'s
+   conditions and stop conditions, until D1's acceptance; no other Owner or provider credential, and entering
+   or rotating the token (point 4.1) stays the Owner's act.
 
 6. **Durable state, no new store.** A commitment is a dated entry in the log's Decisions naming a milestone's
    terminal leaf, whose proof is the milestone's acceptance criteria. The committed set is computed from the
@@ -291,6 +300,15 @@ that are never standing, credential custody (point 4.1), the recorder decisions 
 (point 4.7), and points 1, 2, 5, 6 and 7. The Status line keeps its form `Status: Accepted (Owner) -`, which the
 recorders check.
 
+Revision 6 (engineering manager, 2026-11-14, recording the Owner's decision of 2026-11-14 given in its session,
+verbatim in the log's Decisions, anchor `owner-decision-oa-31-2026-11-14`, which reads in part: "OA-31(c2):
+standing delegation of routine model selection within the native Claude Code profile. Amend decision 0018
+point 3 accordingly." and "OA-31(f): standing token delivery authorization for D1 attempts. Amend decision
+0018 point 5 accordingly. Do not request per-attempt approval."). Changed: point 3 (routine model selection
+inside the native profile, as presented in OA-31 (c2)); point 5 (the native token's delivery to D1 attempts as
+the one standing exception, as presented in OA-31 (f) (ii)). Unchanged: every other delegation and reserved
+act, and points 1, 2, 4, 6 and 7.
+
 ## Current facts
 
 - 2026-11-12: Accepted by the Owner (revision 4). Consequences applied the same day: `security/inventory.json`
@@ -301,3 +319,6 @@ recorders check.
 - 2026-11-13: Revision 5 applied (above). Decisions 0015 (amendment 2) and 0021 (amendment 1) and the plan are
   reconciled with it the same day; it authorizes no provider credential, egress or model call (OA-12 stays
   unanswered).
+- 2026-11-14: Revision 6 applied on the Owner's decision (log anchor `owner-decision-oa-31-2026-11-14`): it
+  authorizes the native token's delivery to D1 attempts and routine model selection within the native profile,
+  both until D1's acceptance; entering the token stays the Owner's act (OA-31 (e)).

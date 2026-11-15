@@ -872,6 +872,10 @@
       "builds_at": "E-01.3.1",
       "verify_at": "E-01.3.2",
       "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "I also approve OA-22(d), (f), (h), (i), and (j)"
+      },
       "findings": [
         "fd-session-key-not-fine-grained"
       ],
@@ -1739,6 +1743,10 @@
       "builds_at": "E-05.10",
       "verify_at": "E-05.10",
       "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "OA-31(a): the narrow provider tunnel to"
+      },
       "findings": [
         "fd-native-guest-provider-reach"
       ],
@@ -2150,6 +2158,10 @@
       "builds_at": "E-05.10",
       "verify_at": "E-05.10",
       "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "OA-31(a): the narrow provider tunnel to"
+      },
       "findings": [
         "fd-native-token-residuals"
       ],
@@ -3917,6 +3929,10 @@
       "builds_at": "E-05.10",
       "verify_at": "E-05.10",
       "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "OA-31(a): the narrow provider tunnel to"
+      },
       "findings": [
         "fd-native-token-residuals"
       ],
