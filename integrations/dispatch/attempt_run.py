@@ -8,7 +8,8 @@ the route-checked client (``AgentServerClient``) and its two proxy tails:
 0. **build** everything that is sent before anything is sent (review S2): the message, the commit message, the SEED
    and RESULT commands; a slot that cannot be filled refuses with no call;
 1. **inspect**: ``GET /api/conversations/count`` is 1, ``GET /api/conversations/{id}`` is the reserved conversation,
-   ``GET .../runtime`` is ``running``, and the caller's ``inspect(conversation_id)`` (the container facts, slice C)
+   ``GET .../runtime`` is ``available`` (RUNTIME_SERVING: the pinned server's status of a conversation its container
+   serves; it has no ``running``), and the caller's ``inspect(conversation_id)`` (the container facts, slice C)
    finds no problem. A failure sends no message and ends the attempt (``attempt_end.end_interrupted_attempt``,
    trigger ``attempt-stopped``, a ``containment-stop`` record ``INSPECTION_FAILED``): E-01.3.2's clause;
 2. **SEED**: the base's tree (``read_base``: the approved repository's branch head, which must contain the accepted
@@ -37,8 +38,10 @@ the route-checked client (``AgentServerClient``) and its two proxy tails:
 7. **close**: the runtime stopped and observed ``missing`` (``attempt_end.stop_runtime``, E-05.8's primitive); the
    result path's journal is slice B's (``reserve_result(record, verified)``, called last with the record's digests
    and the in-memory result). ``observe(phase, **facts)`` (slice C's observations) may return dispatcher records at
-   ``before-message``, ``after-turn`` and ``after-result``: any record ends the attempt through
-   ``end_interrupted_attempt`` and no result is handed on.
+   ``before-message``, ``after-message`` (once the message is sent, before the turn is waited for: the provider
+   starts lazily at the first prompt, so its start and the containment while the turn runs are observed here; D1
+   slice C), ``after-turn`` and ``after-result``: any record ends the attempt through ``end_interrupted_attempt`` and
+   no result is handed on.
 
 ``resume_result`` resumes the result step of an attempt whose turn is confirmed (review S3): when the exchange already
 holds the named bundle it re-runs RESULT without a delivery and pulls and verifies the bundle there (the commit-id
@@ -156,6 +159,12 @@ RESULT_TIMEOUT_S = di.COMMAND_MAX_TIMEOUT_S
 TURN_CEILING_S = 3600          # a ceiling on the turn, not an expected duration
 POLL_S = 10
 TERMINAL = ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation', 'deleting')
+# The runtime status of a conversation whose container serves it: the pinned Agent Server's
+# ConversationRuntimeStatus.AVAILABLE (openhands-agent-server 1.60.1, agent_server/models.py ConversationRuntimeStatus:
+# available, starting, missing, ownership_lost, error; docker_runtime/registry.py runtime_info answers AVAILABLE while
+# the registry holds the container). The pinned server has no status "running" (D1 slice C: a defect of slice A2
+# exposed by the live plan; F-04.2's live record observed {"runtime_status": "available"} for a created conversation).
+RUNTIME_SERVING = 'available'
 CLOCK = time.monotonic
 RUN_NOT_STARTED = 429          # the Agent Server saved the message and did not start the run
 
@@ -800,7 +809,7 @@ def conversation_status(client, conversation_id: str) -> tuple[int, str]:
 
 def inspect_conversation(client, conversation_id: str) -> list[str]:
     """The API half of the inspection before any work: exactly one conversation on the server, the reserved one, and
-    its runtime running. Each problem as a sentence; [] when it holds."""
+    its runtime serving it (RUNTIME_SERVING). Each problem as a sentence; [] when it holds."""
     problems = []
     status, body = _plain(client, 'GET', COUNT_ROUTE)
     if status != 200 or type(body) is not int or body != 1:
@@ -810,8 +819,8 @@ def inspect_conversation(client, conversation_id: str) -> list[str]:
     if status != 200 or not isinstance(body, Mapping) or body.get('id') != conversation_id:
         problems.append(f'the conversation answered {status} without the reserved id')
     runtime = AE.runtime_status(client, conversation_id, 'INSPECTION_FAILED')
-    if runtime != 'running':
-        problems.append(f'the runtime is {runtime!r}, not running')
+    if runtime != RUNTIME_SERVING:
+        problems.append(f'the runtime is {runtime!r}, not {RUNTIME_SERVING!r} (its container serving it)')
     return problems
 
 
@@ -1378,6 +1387,9 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
         if refusal.code != 'TURN_RUN_NOT_STARTED':
             raise
         return stopped(not_started, 'run-not-started')
+    records = AE.check_records(list(observe('after-message') or ()))     # D1 slice C: the observations of the turn
+    if records:
+        return stopped(records)
     try:
         status = wait_for_turn(client, conversation_id, ceiling_s=ceiling_s, clock=clock, wait=wait)
     except DispatchRefused as refusal:
@@ -1431,6 +1443,24 @@ def _resumed_result(integration_store, operation_key, base, receipt) -> Verified
                           excluded_digest=dict(record['excluded']), resumed=True)
 
 
+def recorded_result(integration_store, operation_key: str, *, base: Base) -> VerifiedResult:
+    """The VerifiedResult of an attempt whose intake is recorded, re-checked against its verify repository and the
+    recorded digests (as ``resume_result`` resumes the steps after an intake): what the run driver (D1 slice C) hands
+    the result path when it resumes it after the result journal was dispatched, when ``resume_result`` refuses
+    (ATTEMPT_RESULT_HANDED_ON). The attempt must be confirmed with no end record (ATTEMPT_ENDED) and its base the
+    attempt's (BASE_LACKS_DESIGN); RESULT_STAGED_UNVERIFIED when no intake is recorded or it no longer checks. The
+    agent-controlled text is not in a receipt: the test output and the excluded paths are their digests only."""
+    resolved = _check_attempt(integration_store, operation_key)
+    if base.repository != resolved.repository or base.design_commit != _design(resolved)['commit']:
+        raise _refused('BASE_LACKS_DESIGN', 'the base is not the approved repository checked against the attempt\'s '
+                       'accepted design commit')
+    intake = _receipt_of(integration_store, INTAKE_KEY.format(attempt_id=store.attempt_id_for(operation_key)),
+                         INTAKE_FORMAT)
+    if intake is None:
+        raise _refused('RESULT_STAGED_UNVERIFIED', 'no intake is recorded for the attempt')
+    return _resumed_result(integration_store, operation_key, base, intake)
+
+
 def resume_result(integration_store, operation_key: str, *, transport, base: Base, actor: str,
                   pull: Callable[[str], Mapping], exists: Callable[[str], bool],
                   observe: Callable[..., Sequence[Mapping]] | None = None,
@@ -1441,7 +1471,8 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
 
     - an intake already recorded: only the steps after it run again (the after-result observation, the runtime stop,
       the result hook), on the recorded result re-checked against its verify repository;
-    - otherwise the conversation must have finished and its runtime be running (RUNTIME_NOT_RUNNING, A4 N-f), and
+    - otherwise the conversation must have finished and its runtime be serving it (RUNTIME_SERVING; else
+      RUNTIME_NOT_RUNNING, A4 N-f), and
       RESULT runs again: without a delivery when the exchange already holds the bundle (``exists``), the commit-id
       equality the integrity check. A verified pull already recorded is reused (its staged file and verify
       repository re-checked against the recorded digests) instead of pulling again; else the bundle is pulled."""
@@ -1469,7 +1500,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
         raise _refused('TURN_NOT_FINISHED', f'the conversation is {status}, not finished: no result is taken',
                        status=status)
     runtime = AE.runtime_status(client, conversation_id, 'RUNTIME_NOT_RUNNING')
-    if runtime != 'running':
+    if runtime != RUNTIME_SERVING:
         raise _refused('RUNTIME_NOT_RUNNING', f'the runtime is {runtime!r}: RESULT cannot run again', runtime=runtime)
     pulled = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
     reuse = None

@@ -1109,7 +1109,7 @@ reserve_result=)`:
 ```
 build        the message, the commit message, SEED and RESULT, before any call (prepare; review S2)
 inspect      GET /api/conversations/count is 1, GET /api/conversations/{id} is the reserved one,
-             GET .../runtime is running, and inspect(conversation_id) (the container facts) finds
+             GET .../runtime is available (RUNTIME_SERVING), and inspect(conversation_id) (the container facts) finds
              nothing; else no message, and the attempt is ended (containment-stop INSPECTION_FAILED)
 SEED         the base's tree into /workspace/<repository>       (bash tail, build_seed)
 MESSAGE      turn journal reserved, dispatched, then the one POST (events tail, send_message);
@@ -1122,8 +1122,24 @@ intake       pull(name) (exchange-pull: the retained verifier, decision 0014 row
 close        the runtime stopped and observed missing (attempt_end.stop_runtime); reserve_result
 ```
 
-`observe(phase, **facts)` is called at `before-message`, `after-turn` and `after-result`. Slice C
-supplies the observations. Any dispatcher record it returns ends the attempt through
+`observe(phase, **facts)` is called at `before-message`, `after-message` (once the message is sent, before
+the turn is waited for: the provider starts lazily at the first prompt, so its start and the containment while
+the turn runs are observed there; added by slice C), `after-turn` and `after-result`. Slice C supplies the
+observations.
+
+**The runtime that serves a conversation** (slice C, a defect of slice A2 exposed by the live plan). The pinned
+Agent Server's `ConversationRuntimeStatus` is `available`, `starting`, `missing`, `ownership_lost` or `error`
+(openhands-agent-server 1.60.1, `agent_server/models.py`; `docker_runtime/registry.py` `runtime_info` answers
+`available` while its registry holds the conversation's container), and F-04.2's live record observed
+`{"runtime_status": "available", "can_resume": true}` for a created conversation. There is no `running`: the
+inspection and `resume_result` required it, so the live inspection would have ended every attempt. They now
+require `available` (`RUNTIME_SERVING`); anything else, `starting` included, is a failed inspection.
+
+**The recorded result** (slice C). `recorded_result(store, operation_key, base=)` is the `VerifiedResult` of an
+attempt whose intake is recorded, re-checked against its verify repository and the recorded digests, as
+`resume_result` resumes the steps after an intake. The run driver hands it to the result path when it resumes the
+path after the result journal was dispatched, where `resume_result` refuses (`ATTEMPT_RESULT_HANDED_ON`). The
+test output and the excluded paths are then their digests only. Any dispatcher record it returns ends the attempt through
 `attempt_end.end_interrupted_attempt` (trigger `attempt-stopped`), and nothing is handed on. A
 refusal anywhere else leaves the conversation and the guest as they are, for a resumed step. A
 turn that is not `finished` returns `turn-not-finished` and runs no RESULT. `run_attempt` runs
@@ -1152,7 +1168,7 @@ A receipt that conflicts with an earlier one is `RESULT_RECEIPT_CONFLICT`. Any f
 - After a recorded intake, it runs only the steps after the intake: the after-result observation, the runtime stop
   and `reserve_result`. They run on the recorded result, re-checked against its verify repository (commit-id
   equality) and the recorded digests. The test output and the excluded paths are then their digests only.
-- Otherwise it needs a running runtime (`RUNTIME_NOT_RUNNING`, review A4 N-f). A verified pull already recorded is
+- Otherwise it needs the runtime serving the conversation (`available`; `RUNTIME_NOT_RUNNING`, review A4 N-f). A verified pull already recorded is
   reused, its staged file re-checked against the recorded digests (`RESULT_STAGED_UNVERIFIED` otherwise), and is
   never pulled again. A staged file without a recorded verified pull is not reused: the pull refuses to overwrite
   it (`RESULT_PULL_FAILED`), for the engineering manager.
@@ -1308,7 +1324,8 @@ Measured on this host (2026-11-15), the client's role-token guard takes about 0.
 hex body while a role token is held: about 1.7 s at the command tail's 4 MiB bound. That is fast
 enough for the two built commands of an attempt, so the guard is unchanged. **Not yet verified**
 live: whether git runs in a conversation container, how much output the bash route returns and
-whether it masks or alters any, and the inspection's runtime answer for a running conversation.
+whether it masks or alters any, and the inspection's runtime answer for a created conversation (the pinned source
+and F-04.2's record say `available`; slice C's step 0 observes it on the fixture conversation).
 
 ## The result path (E-05.4; D1 slice B)
 
@@ -1833,7 +1850,7 @@ transport called zero times:
 | `Oracle` | the real commands: an edited tree (add, modify, delete) and an untouched one (its tree the base's) are committed once on the base, verified by git (R6), the commit id recomputed on the host and equal; a failing test run is reported (R1); a workspace `.git` with hooks, `HEAD`, `hooksPath` and an `fsmonitor` changes nothing and none of it runs; a forbidden name, a nested repository (a gitlink) and a symbolic link are `RESULT_TREE_REFUSED`; another time or message is `RESULT_COMMIT_MISMATCH`; the seed refuses an existing workspace and writes the base's bytes A3: case variants of `.claude` and `.mcp.json` are left out of the commit and reported (the record holds their count and digest only), and with RESULT's rule patched off the host refuses them (B1); changes under `openspec/` and `backlog/` (modified, added, deleted, a directory replaced by a file) are put back as the base's and reported, and with the rule off the host refuses `protected-changed` (N7); a test that rewrites the bundle on disk changes nothing delivered (S8); a `.gitignore` keeps a file out of the commit, as documented (N1). A4: `git~1`, `sub/GIT~1` and `.claude` are excluded before `add -A` and reported `git-refused` / `forbidden-name` (N-a); 150 excluded paths are printed as count, full-list sha256 and the first 100 (N-b); `Backlog/` is protected as `backlog/` (D1); `object_size` equals each object's length (loose, packed, delta), and `MAX_INFLATED` or a `MemoryError` refuses `too-large` (N-d). |
 | `Intake` | another, a second, another attempt's or no reference and a prerequisite are `RESULT_REFS_INVALID`; an unverified pull, another digest or size `RESULT_NOT_VERIFIED`; a commit or base other than the printed one `RESULT_COMMIT_MISMATCH`; an ended attempt `ATTEMPT_ENDED`, a turn not confirmed `TURN_NOT_CONFIRMED`, an attempt not confirmed refused; the result output parsed strictly (a failed step, a missing or repeated marker, a delivery error or mismatch, a 500) A3: the delivery must equal the digest printed before the tests (S8); a tree 1200 deep is `too-deep`, one of more than 5000 entries `too-many`, never a RecursionError (S1); the output parse requires the excluded list and the bundle digest, exit code 0, CRLF lines read, and a failed step's stderr held as a digest (S7). |
 | `Turn` | the journal is `dispatched` when the one POST is made (seen by the transport); a second send makes zero calls; a lost answer is `unknown`, `TURN_UNRECONCILED` until the events show the message, then `confirmed` (reconciled) with no second POST; a 503 is settled from the events, a 422 `TURN_REFUSED`; the wait reads to a terminal status with bounded waits, and `TURN_CEILING` A3: a 429 is `TURN_RUN_NOT_STARTED`, the journal `failed`, even when the events hold the message (S4). |
-| `Run` | with a fake Agent Server and the real commands: exactly the declared calls (count, conversation, runtime, SEED, message, status, RESULT, runtime stop and read), `reserve_result` called once with the verified result; a second conversation, a runtime not running, a container problem or a failing hook sends no message and ends the attempt (`containment-stop` `INSPECTION_FAILED`, non-retryable); a turn `error`, `stuck` or `paused` runs no RESULT; an observer's record before the message, after the turn or after the result calls `end_interrupted_attempt` with that record and reserves no result; a base of another repository or design is refused before any call A3: a slot that cannot be filled (a title the commit message cannot take) is refused before any call (S2); a 429 ends the attempt as a retryable interruption `run-not-started` with no RESULT (S4); a second `run_attempt` makes no call; a lost RESULT answer (`RESULT_UNANSWERED`) is resumed with `resume_result` from the delivered bundle (re-run without a delivery, verified by the commit-id equality) or by running RESULT again; the resume refuses an attempt with no turn, an unfinished conversation, or a dispatched result journal (S3); `reserve_result` receives the record (digests only) and the in-memory result (S7). A4: a 503 settled from the events that stays idle with no agent event is ended `run-not-started`, a 2xx turn that stays idle is `TURN_CEILING` with no end (D3); a failed runtime stop after the intake is resumed with only the steps after it, twice, no RESULT or pull; a verified pull is reused and never pulled again; a changed staged bundle is `RESULT_STAGED_UNVERIFIED`; a refused pull is `RESULT_PULL_FAILED` (D2); a resume that must run RESULT on a stopped runtime is `RUNTIME_NOT_RUNNING` (N-f). |
+| `Run` | with a fake Agent Server and the real commands: exactly the declared calls (count, conversation, runtime, SEED, message, status, RESULT, runtime stop and read), `reserve_result` called once with the verified result; a second conversation, a runtime not serving it (`starting`; slice C: the serving status is the pinned `available`), a container problem or a failing hook sends no message and ends the attempt (`containment-stop` `INSPECTION_FAILED`, non-retryable); a turn `error`, `stuck` or `paused` runs no RESULT; an observer's record before the message, after the message (slice C), after the turn or after the result calls `end_interrupted_attempt` with that record and reserves no result; a base of another repository or design is refused before any call A3: a slot that cannot be filled (a title the commit message cannot take) is refused before any call (S2); a 429 ends the attempt as a retryable interruption `run-not-started` with no RESULT (S4); a second `run_attempt` makes no call; a lost RESULT answer (`RESULT_UNANSWERED`) is resumed with `resume_result` from the delivered bundle (re-run without a delivery, verified by the commit-id equality) or by running RESULT again; the resume refuses an attempt with no turn, an unfinished conversation, or a dispatched result journal (S3); `reserve_result` receives the record (digests only) and the in-memory result (S7). A4: a 503 settled from the events that stays idle with no agent event is ended `run-not-started`, a 2xx turn that stays idle is `TURN_CEILING` with no end (D3); a failed runtime stop after the intake is resumed with only the steps after it, twice, no RESULT or pull; a verified pull is reused and never pulled again; a changed staged bundle is `RESULT_STAGED_UNVERIFIED`; a refused pull is `RESULT_PULL_FAILED` (D2); a resume that must run RESULT on a stopped runtime is `RUNTIME_NOT_RUNNING` (N-f). Slice C: `recorded_result` returns the recorded intake's result re-checked (digests only), and refuses with no intake (`RESULT_STAGED_UNVERIFIED`) or another base (`BASE_LACKS_DESIGN`). |
 | `Policy` (unit) | the R3 names found in every variant (case, trailing dot or space, `.git` and its variants) and not in near names (`claude/`, `.claudex`, `.gitignore`, `.github`); `folded` is NFC and case-fold A4: `git~1`, `GIT~1` and `.git:` streams are refused; a zero-width space is not folded (the documented residual). |
 | `EndExclusion` | a reserved result journal does not keep a security stop from ending the attempt; a dispatched, confirmed or unknown one is `ATTEMPT_RESULT_HANDED_ON` with no call; `model-stop` and `provider-stop` are security stops |
 

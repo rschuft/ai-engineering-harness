@@ -1192,7 +1192,7 @@ class Run(Scratch):
         self.fixture.server = self.server
         self.result = self.fixture.dispatch_native()
         self.key, self.store, self.cid = self.result.operation_key, self.fixture.store, self.result.conversation_id
-        self.server.set(self.cid, runtime='running')
+        self.server.set(self.cid, runtime=AR.RUNTIME_SERVING)     # the pinned server's 'available' (slice C)
         self.server.log.clear()
         resolved = di.stored_inputs(self.store, self.key, state='confirmed')
         self.base, self.commits = self.demo(work_id=resolved.work_id, change=AR._design(resolved)['change'],
@@ -1243,7 +1243,9 @@ class Run(Scratch):
             ('GET', 'conversation'),                                                  # 4. the turn: finished
             ('POST', 'bash/execute_bash_command'),                                    # 5. RESULT
             ('DELETE', 'runtime'), ('GET', 'runtime')])                               # 7. the runtime stopped
-        self.assertEqual(self.observed, ['before-message', 'after-turn', 'after-result'])
+        # D1 slice C adds 'after-message': the provider starts lazily at the first prompt, so its start and the
+        # containment while the turn runs are observed after the message, before the turn is waited for
+        self.assertEqual(self.observed, ['before-message', 'after-message', 'after-turn', 'after-result'])
         self.assertEqual(puller.names, [AR.result_name(store_mod.attempt_id_for(self.key))])
         self.assertEqual(self.reserved, [(outcome.result.to_json(), outcome.result)])
         record = json.dumps(self.reserved[0][0])                  # S7: digests and sizes, never the text
@@ -1260,7 +1262,7 @@ class Run(Scratch):
     def test_a_failed_inspection_sends_no_message_and_ends_the_attempt(self):
         cases = {
             'a second conversation': (lambda case: setattr(case.server, 'count', 2), lambda cid: ()),
-            'a runtime not running': (lambda case: case.server.set(case.cid, runtime='available'), lambda cid: ()),
+            'a runtime not serving it': (lambda case: case.server.set(case.cid, runtime='starting'), lambda cid: ()),
             'a container off its declaration': (lambda case: None, lambda cid: ['the image is not the pinned one']),
             'a hook that cannot answer': (lambda case: None, lambda cid: 1 / 0),
         }
@@ -1296,7 +1298,8 @@ class Run(Scratch):
                 self.assertEqual(case.reserved, [])
 
     def test_an_observer_stop_ends_the_attempt_and_reserves_no_result(self):
-        for phase, kind in (('before-message', 'credential-stop'), ('after-turn', 'model-stop')):
+        for phase, kind in (('before-message', 'credential-stop'), ('after-message', 'egress-stop'),
+                            ('after-turn', 'model-stop')):
             with self.subTest(phase=phase):
                 case = Run('test_an_observer_stop_ends_the_attempt_and_reserves_no_result')
                 case.setUp()
@@ -1320,6 +1323,24 @@ class Run(Scratch):
         self.assertEqual((outcome.outcome, outcome.end['classification']), ('stopped', AE.NON_RETRYABLE))
         self.assertEqual(self.reserved, [])
         self.assertEqual(outcome.end['causes'], ['provider-process'])
+
+    def test_the_recorded_result_is_the_intake_s_re_checked(self):
+        """D1 slice C: the result path resumed after its journal was dispatched takes the recorded intake's result,
+        re-checked against its verify repository; with no intake recorded it is refused."""
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AR.recorded_result(self.store, self.key, base=self.base)
+        self.assertEqual(caught.exception.code, 'RESULT_STAGED_UNVERIFIED')
+        puller = self.real()
+        outcome = self.run_attempt(pull=puller)
+        recorded = AR.recorded_result(self.store, self.key, base=self.base)
+        self.assertTrue(recorded.resumed)
+        self.assertEqual({k: v for k, v in recorded.to_json().items() if k != 'resumed'},
+                         {k: v for k, v in outcome.result.to_json().items() if k != 'resumed'})
+        self.assertIsNone(recorded.tests['output'])                  # S7: no agent text in a receipt
+        other = dataclasses.replace(self.base, design_commit='0' * 40)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AR.recorded_result(self.store, self.key, base=other)
+        self.assertEqual(caught.exception.code, 'BASE_LACKS_DESIGN')
 
     def test_everything_sent_is_built_before_anything_is_sent(self):
         """Review S2 (the reviewer's probe_review_b): a title the commit message cannot take is found before any call,
