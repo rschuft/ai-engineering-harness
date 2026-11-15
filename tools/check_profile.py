@@ -1445,6 +1445,13 @@ def check_agent_server(report, profile, root, conf):
     if openapi.get('sha256') != locked_openapi_sha256(root):
         report.fail(f'{label}.fixture.openapi.sha256: must be the locked openapi.json '
                     '(composition/lock/components.lock.json release_assets)')
+    if 'stage_create_template' in server:   # E-05.2: the D1 stage's create template (the dispatcher checks the rest)
+        stage = server['stage_create_template']
+        check_repo_file(report, root, f'{label}.stage_create_template', stage)
+        if isinstance(stage, dict) and (stage.get('path') == fixture.get('path')
+                                        or stage.get('sha256') == fixture.get('sha256')):
+            report.fail(f'{label}.stage_create_template: must not pin the F-04.2 fixture '
+                        '(the dispatcher refuses it: STAGE_TEMPLATE_DISPOSABLE)')
     if 'conversations' in server:
         check_conversations(report, profile, server)
         check_facts_rate(report, profile, root)

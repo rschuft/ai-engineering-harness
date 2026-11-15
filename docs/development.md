@@ -761,10 +761,12 @@ For the D1 stage (plan leaf E-05.2) a profile may pin one stage's create templat
 (`provisioning.agent_server.stage_create_template`); for that stage it replaces the F-04.2
 fixture, the policy digest binds its sha256, it must carry an ACP agent block, the F-04.2
 fixture and any template tagged disposable are refused, and the body's agent block must be
-exactly the template's. The template in
-`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json` is a **candidate** that no
-checked-in profile pins: its model is a sentinel until S-03.3 qualifies the block, and nothing
-has created a conversation from it (**not yet verified**). Since plan leaf E-05.6 the D1 stage's
+exactly the template's. The checked-in `strong-windows-qemu-whpx` profile pins
+`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json` for `implement` on the native
+execution profile: its agent block is the one E-05.11 qualified (`acp_model` `claude-sonnet-5`,
+the model record's primary), and nothing has created a conversation from it (**not yet
+verified**). E-01.3.3's custody probe and E-01.2.2's live drill use that declaration with this
+one pin removed. Since plan leaf E-05.6 the D1 stage's
 create also carries a `secrets` block: exactly the pinned ACP registry entry's two names, each a
 `StaticSecret`, `secrets_encrypted` false, the attempt token (issued by the inference broker's
 control listener only after the reservation and every other input are admitted, bound to the

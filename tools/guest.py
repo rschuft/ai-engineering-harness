@@ -15908,7 +15908,9 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
         if (deliveries or {}).get('provider_writes'):
             stop_conditions.append({'stop': 'a credential-provider write', 'count': deliveries['provider_writes']})
         verdict, detail = attempt_deliveries_verdict(deliveries)
-        return verdict, dict(detail, transport_calls=transport.calls)
+        # the declaration the dispatch chain used, as it states it (E-05.2's pin: live_custody_probe.py); not judged
+        return verdict, dict(detail, transport_calls=transport.calls,
+                             declaration_derivation=(deliveries or {}).get('declaration_derivation'))
 
     def key_steps():
         record_ = inspect_fn()

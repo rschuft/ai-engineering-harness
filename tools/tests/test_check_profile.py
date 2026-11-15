@@ -1172,6 +1172,17 @@ class AgentServerBlock(unittest.TestCase):
         self.server['fixture']['openapi']['sha256'] = '0' * 64
         self.assertFails('fixture.openapi.sha256')
 
+    def test_stage_create_template_is_pinned_and_not_the_fixture(self):
+        """E-05.2: the D1 stage's create template, a committed file pinned by sha256, never the F-04.2 fixture."""
+        stage = self.server['stage_create_template']
+        self.assertEqual(self.errors(), [])
+        stage['sha256'] = '0' * 64
+        self.assertFails('stage_create_template: profiles/')
+        stage['path'] = stage['path'].replace('d1-create.json', 'absent.json')
+        self.assertFails('stage_create_template: pinned file')
+        stage.update(path=self.server['fixture']['path'], sha256=self.server['fixture']['sha256'])
+        self.assertFails('stage_create_template: must not pin the F-04.2 fixture')
+
 
 class AdmissionBlock(unittest.TestCase):
     """S-01.3.1: provisioning.agent_server.admission and its pinned route inventory; each

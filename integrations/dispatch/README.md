@@ -242,9 +242,9 @@ whether it may be admitted is decided by the profile's approval by sha256 in a p
 
 **Scope.** E-05.2 applies to the D1 stage only. Every other real stage keeps E-01.2.2's
 admission, the F-04.2 fixture included, until A-01.2 (whose proof refuses that fixture for every
-real stage). The checked-in `strong-windows-qemu-whpx` profile does not yet pin the template
-below (2026-11-15: the pin is held for the engineering manager's decision, see
-[the E-05.2 record](../../evidence/E-05.2-d1-stage-admission.md)).
+real stage). The checked-in `strong-windows-qemu-whpx` profile pins the template below for
+`implement` on the native execution profile (`execution_profile` `native`, no inference grant);
+its review stage keeps the F-04.2 fixture.
 
 **The approved template.** [`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json`](../../profiles/strong-windows-qemu-whpx/agent-server/d1-create.json)
 (since 2026-11-15; before, a candidate with the sentinel model `candidate-unselected`):
@@ -785,7 +785,10 @@ The custody probe (prepared, **not run**) runs from
 [`tests/live_custody_probe.py`](tests/live_custody_probe.py), which drives `tools/guest.py`'s
 `custody_probe` (its decision rule, `CUSTODY_PROBE_RULE`, is fixed before any run) and supplies its
 step (5): one `implement` and one `review` attempt dispatched over this transport on the fixture
-with the real declaration, each delivered its stage's token from the credential provider behind a
+with the real declaration less exactly one key, the `implement` stage's D1 template pin (E-05.2;
+[`tests/declaration_support.py`](tests/declaration_support.py), the engineering manager's ruling
+of 2026-11-15; the step's record quotes the derivation as `declaration_derivation`, and the live
+drill `tests/live_admitted_create.py` uses the same derivation), each delivered its stage's token from the credential provider behind a
 read-only wrapper (a write is a stop), both conversations then deleted
 ([`docs/development.md`](../../docs/development.md), the guest operations).
 
@@ -1275,6 +1278,17 @@ transport called zero times:
 | `RefusesTheQualificationFixture` | its file cannot be pinned (`PROFILE_ADMISSION_INVALID`; the reader refuses its path); its body pinned is `STAGE_TEMPLATE_DISPOSABLE`, untagged `BODY_FIELD_UNKNOWN` (`secrets`); its filled create is `BODY_FIELD_UNKNOWN`, and without `secrets` `BODY_NOT_TEMPLATE` (`tags`) |
 | `SendCreateRechecks` | the review's R1: an admitted create built with admission's content check skipped (a non-ACP or a disposable template) is refused by `send_create` with the content check's code, and admission itself refuses it; the carried profile must be the approved one (`PROFILE_DRIFTED`: another profile, one byte more, empty; `PROFILE_MISSING`: none) |
 | `DeclarationRefusals` | eleven malformed declarations are `PROFILE_ADMISSION_INVALID` for either stage; a missing pinned file is `PROFILE_ARTIFACT_MISSING` |
+
+[`tests/test_d1_checked_in_template.py`](tests/test_d1_checked_in_template.py) (E-05.2, the pin) shows the
+same proof on the checked-in `strong-windows-qemu-whpx` declaration, copied byte for byte:
+
+| Class | What it shows |
+|---|---|
+| `ThePin` (unit) | the declaration pins the approved template for `implement` on the native profile, with no grant; every other stage's policy keeps the F-04.2 fixture |
+| `AdmitsTheApprovedBlock` | `dispatch` sends one native D1 create: the template, the reserved id and E-05.9's four secrets (`HTTPS_PROXY` the profile's tunnel endpoint); the policy and the admitted record bind the pinned sha256; the review stage keeps the F-04.2 fixture |
+| `RefusesAnyOtherBlock` | six blocks the native agent check admits but that are not the template's are `BODY_NOT_TEMPLATE` (field `agent_settings`); fifteen others are refused first by the shared native check, each with its code |
+| `RefusesTheF042Fixture` | the fixture pinned for `implement` (by path, digest or both) is `STAGE_TEMPLATE_DISPOSABLE` at resolution; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `NATIVE_ACP_COMMAND_NOT_PINNED` (its block) |
+| `RefusesADriftedTemplate` | template bytes other than the pin (one byte more, re-serialized, another model, another tag) are `PROFILE_ARTIFACT_DRIFTED` at admission, and at the send |
 
 [`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same
 fixture, with a fake Agent Server that replays the recorded answers of

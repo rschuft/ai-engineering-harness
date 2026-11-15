@@ -238,6 +238,16 @@ class ProbeRun(unittest.TestCase):
                                           ('DELETE', f'/api/conversations/{CID}')])
         self.assertEqual(out['conversation_deleted'], 200)
 
+    def test_step_five_records_the_declaration_derivation_without_judging_it(self):
+        """E-05.2's pin: the dispatch chain states the one derivation of the checked-in declaration it used
+        (live_custody_probe.py, declaration_support.DERIVATION); step (5) records it and its verdict ignores it."""
+        out = self.run_probe(attempts=deliveries(declaration_derivation='the stated derivation'))
+        attempts_step = out['steps'][0]
+        self.assertTrue(attempts_step['step'].startswith('(5)'))
+        self.assertEqual((attempts_step['verdict'], attempts_step['detail']['declaration_derivation']),
+                         ('PASS', 'the stated derivation'))
+        self.assertEqual(out['result'], 'PASS')
+
     def test_without_the_dispatch_chain_it_is_refused(self):
         ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
         with self.assertRaisesRegex(guest.Refused, 'live_custody_probe'):

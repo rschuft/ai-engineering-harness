@@ -468,6 +468,14 @@
           "check": "tools/check_profile.py --openapi <downloaded openapi.json>: the file's sha256 must equal this pin (composition/lock/components.lock.json release_assets); the fixture is then validated against the schema with a standard-library JSON Schema subset. openapi.json is not committed (decision 0005)."
         }
       },
+      "stage_create_template": {
+        "plan_leaf": "E-05.2",
+        "stage": "implement",
+        "path": "profiles/strong-windows-qemu-whpx/agent-server/d1-create.json",
+        "sha256": "660001d24cc0b5c0fda1d0a5a49d94fb949a99ce7f0f83bcb3d19f7d5990fce6",
+        "execution_profile": "native",
+        "purpose": "The D1 stage's create template (E-05.2): the agent block E-05.11 qualified on the native execution profile (decision 0023; acp_model the model record's primary, evidence/D1-native-model-record.md, approved with OA-31 (c1)), approved by this digest. For the implement stage the dispatcher admits exactly this template with the reserved conversation id and the attempt's native secrets (E-05.9; the native profile takes no inference grant); every other stage keeps the fixture above. The F-04.2 fixture, or any template tagged disposable, is refused here (STAGE_TEMPLATE_DISPOSABLE)."
+      },
       "conversations": {
         "plan_leaf": "F-04.2",
         "use": "The declared shape of every conversation container the Agent Server runs (one per Docker conversation, docker_runtime/registry.py _build_container of the locked 1.60.1 wheel), which inspect and conversation-smoke compare exactly with docker container inspect from the on-demand facts. Inspection only: the disposable conversation of the fixture, no LLM, no repository content, no untrusted workload (decision 0006, Owner authorization Part B).",

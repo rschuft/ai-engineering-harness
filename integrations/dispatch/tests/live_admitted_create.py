@@ -7,12 +7,15 @@ request:
     python -I -B integrations/dispatch/tests/live_admitted_create.py \
         --profile profiles/strong-windows-qemu-whpx --state-dir STATE --name NAME [--out FILE]
 
-The request is built exactly as slice (a)'s positive control
-``test_the_checked_in_profile_declaration_admits_when_operational`` builds it: the E-01.2.1
-fixture (the design repository, Backlog.md's recorded readiness, a throwaway store and
-manifest, a managed root under the default TEMP) and the real ``strong-windows-qemu-whpx``
-declaration with only ``status.operational`` set to true in a throwaway copy, with its pinned
-create template and route allowlist. The dispatcher's order runs unchanged: resolve,
+The request is built on the E-01.2.1 fixture (the design repository, Backlog.md's recorded
+readiness, a throwaway store and manifest, a managed root under the default TEMP) and the real
+``strong-windows-qemu-whpx`` declaration in a throwaway copy (operational since E-01.2.2), with
+its pinned F-04.2 create template and route allowlist. Since E-05.2 pinned the D1 stage's
+template for ``implement`` in that declaration, the copy has exactly one derivation: that pin
+removed (``declaration_support.DERIVATION``, the engineering manager's ruling of 2026-11-15;
+the admitted record quotes it as ``declaration_derivation``), so the drill's ``implement``
+create stays E-01.2.2's (before E-05.2 the copy instead set ``status.operational``, then
+already true; slice (a)'s positive control now admits the D1 stage). The dispatcher's order runs unchanged: resolve,
 reserve_attempt, admit, send_create. Since E-01.3.1 ``send_create`` first reads ``GET
 /server_info`` (decision 0001's preconditions P1 to P5) and then sends the create. Since E-01.3.3
 both go through the dispatch module's live transport, ``integrations/dispatch/guest_transport.py``'s
@@ -50,6 +53,7 @@ def admitted_create(transport):
     admitted request (AdmittedCreate.to_json) after send_create read ``GET /server_info`` and
     sent the create through ``transport`` (the dispatch module's live transport), once."""
     adm = _load('test_dispatch_admission', HERE / 'test_dispatch_admission.py')
+    declaration = _load('declaration_support', HERE / 'declaration_support.py')
 
     class Live(adm.AdmissionFixture):
         def runTest(self):
@@ -59,11 +63,11 @@ def admitted_create(transport):
     case = Live()
     try:
         case.setUp()
-        declared = json.loads((REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
-        declared['status']['operational'] = True
+        # The checked-in declaration (operational since E-01.2.2) with exactly one derivation since E-05.2's pin:
+        # the implement stage's D1 template pin removed (declaration_support.DERIVATION, quoted in the record).
         directory = case.profiles / REAL_PROFILE
         directory.mkdir()
-        (directory / 'profile.json').write_bytes(json.dumps(declared, indent=2).encode('utf-8'))
+        (directory / 'profile.json').write_bytes(declaration.derived_declaration_bytes())
         adm.base.write_agent_server(directory)
         data = case.manifest_data()
         data['profiles'].append({'id': REAL_PROFILE, 'sha256': case.profile_sha(REAL_PROFILE)})
@@ -77,6 +81,7 @@ def admitted_create(transport):
                            transport=transport)
         out = admitted.to_json()
         out['admission_caps'] = resolved.policy_inputs['admission']['caps']
+        out['declaration_derivation'] = declaration.DERIVATION
         return out
     finally:
         case.doCleanups()

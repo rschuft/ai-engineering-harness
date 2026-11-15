@@ -221,7 +221,9 @@ class PositiveControlTests(AdmissionFixture):
 
     def test_the_checked_in_profile_declaration_admits_when_operational(self):
         """The real strong-windows-qemu-whpx declaration, only status.operational flipped in a
-        throwaway copy: its configuration, ceilings, mounts, template and allowlist admit."""
+        throwaway copy: its configuration, ceilings, mounts, templates and allowlist admit. Since
+        E-05.2's pin its implement stage is the native D1 stage: the pinned D1 template with the
+        attempt's native secrets (E-05.9); the review stage keeps the F-04.2 fixture."""
         declared = json.loads((base.REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
         declared['status']['operational'] = True
         directory = self.profiles / REAL_PROFILE
@@ -229,15 +231,36 @@ class PositiveControlTests(AdmissionFixture):
         self.addCleanup(base.rmtree, directory)
         (directory / 'profile.json').write_bytes(json.dumps(declared, indent=2).encode('utf-8'))
         base.write_agent_server(directory)
+        d1_template = (base.AGENT_SERVER / 'd1-create.json').read_bytes()
+        (directory / 'agent-server' / 'd1-create.json').write_bytes(d1_template)
         data = self.manifest_data()
         data['profiles'].append({'id': REAL_PROFILE, 'sha256': self.profile_sha(REAL_PROFILE)})
-        data['bindings'][0]['profiles'].append(REAL_PROFILE)
+        data['designs'].append({'repository': 'other-app', 'change': base.CHANGE, 'commit': self.commit})
+        for binding in data['bindings']:
+            binding['profiles'].append(REAL_PROFILE)
         manifest = self.write_manifest(data, self.fresh('real'))
-        resolved = self.resolve(self.request(profile=REAL_PROFILE), manifest)
+        sources = {'demo-app': self.sources['demo-app'], 'other-app': self.sources['demo-app']}
+        resolved = self.resolve(self.request(profile=REAL_PROFILE), manifest, sources)
         self.assertEqual(resolved.policy_inputs['admission']['caps'],
                          {'memory': '4g', 'cpus': 2.0, 'pids_limit': 512, 'max_concurrent_runs': 3})
-        self.send(self.admit(resolved, manifest), resolved)
-        self.assertEqual(self.transport.calls, [('POST', '/api/conversations', self.expected_body(resolved))])
+        self.assertEqual(resolved.policy_inputs['admission']['create_template'],
+                         {'path': f'profiles/{REAL_PROFILE}/agent-server/d1-create.json',
+                          'sha256': hashlib.sha256(d1_template).hexdigest()})
+        native = _load('native_support', HERE / 'native_support.py')
+        token = native.token('E-01.2.2 checked-in profile token')
+        admitted = di.admit_secrets(self.admit(resolved, manifest), resolved=resolved, workspaces=self.workspaces,
+                                    grant=di._native_module().NativeToken(token))
+        self.send(admitted, resolved)
+        [(method, path, body)] = self.transport.calls
+        self.assertEqual((method, path, body['secrets']['CLAUDE_CODE_OAUTH_TOKEN']['value']),
+                         ('POST', '/api/conversations', token))
+        self.assertEqual({k: v for k, v in body.items() if k not in ('secrets', 'secrets_encrypted')},
+                         dict(json.loads(d1_template), conversation_id=admitted.conversation_id))
+        self.transport = CountingTransport()
+        review = self.resolve(self.request(profile=REAL_PROFILE, repository='other-app', stage='review',
+                                           catalog_pin='reviewer-pin'), manifest, sources)
+        self.send(self.admit(review, manifest), review)
+        self.assertEqual(self.transport.calls, [('POST', '/api/conversations', self.expected_body(review))])
 
     def test_ceiling_boundary_is_admitted(self):
         def at_ceiling(declared):  # 4 x 4 GiB = 16 GiB and 4 x 2.0 = 8 vCPU: equal, not above

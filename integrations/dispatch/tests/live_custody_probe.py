@@ -10,8 +10,10 @@ before any run), supplying the dispatch chain for step (5):
 
 Step (5) builds two attempts on the E-01.2.1 fixture (a throwaway design repository, Backlog.md's
 recorded readiness, a throwaway store and manifest), as ``live_admitted_create.py`` builds its request,
-with the checked-in ``strong-windows-qemu-whpx`` declaration copied byte for byte (it is operational
-since E-01.2.2). ``dispatch`` sends one ``implement`` and one ``review`` create through the
+with the checked-in ``strong-windows-qemu-whpx`` declaration (it is operational since E-01.2.2) with
+exactly one derivation since E-05.2's pin: the ``implement`` stage's ``stage_create_template`` removed
+(``declaration_support.DERIVATION``, the engineering manager's ruling of 2026-11-15; step (5)'s record
+quotes it as ``declaration_derivation``). ``dispatch`` sends one ``implement`` and one ``review`` create through the
 dispatch module's live transport (``GuestTransport`` on the probe's ``GuestApi``), and each confirmed
 attempt is delivered its stage's token by ``attempt_role_token`` from the Owner account's credential
 provider, read only (``ReadOnlyProvider`` counts and refuses any write: a write is a stop), checked
@@ -71,6 +73,7 @@ def deliver_attempts(transport, provider, port, http=None):
     fingerprints by role, the refusals and the provider writes."""
     at = _load('attempt_tokens', HERE.parent / 'attempt_tokens.py')
     adm = _load('test_dispatch_admission', HERE / 'test_dispatch_admission.py')
+    declaration = _load('declaration_support', HERE / 'declaration_support.py')
     di = adm.di
     readonly = provider if isinstance(provider, ReadOnlyProvider) else ReadOnlyProvider(provider)
 
@@ -80,14 +83,17 @@ def deliver_attempts(transport, provider, port, http=None):
 
     Live.setUpClass()
     case = Live()
-    out = {'records': [], 'fingerprints': {}, 'refused': [], 'deleted': {}}
+    out = {'records': [], 'fingerprints': {}, 'refused': [], 'deleted': {},
+           'declaration_derivation': declaration.DERIVATION}
     try:
         case.setUp()
         directory = case.profiles / REAL_PROFILE
         directory.mkdir()
-        # the checked-in declaration, byte for byte (operational since E-01.2.2): a declaration that is not
-        # operational is refused by dispatch (PROFILE_NOT_OPERATIONAL) and the step fails
-        (directory / 'profile.json').write_bytes((REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
+        # the checked-in declaration (operational since E-01.2.2: a declaration that is not operational is refused
+        # by dispatch, PROFILE_NOT_OPERATIONAL, and the step fails) with exactly one derivation, the D1 stage's
+        # template pin removed (declaration_support.DERIVATION, quoted in the record): the probe is about bot-token
+        # custody, not the agent's create template
+        (directory / 'profile.json').write_bytes(declaration.derived_declaration_bytes())
         adm.base.write_agent_server(directory)
         data = case.manifest_data()
         data['profiles'].append({'id': REAL_PROFILE, 'sha256': case.profile_sha(REAL_PROFILE)})

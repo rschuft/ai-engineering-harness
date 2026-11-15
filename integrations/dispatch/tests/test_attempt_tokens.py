@@ -618,6 +618,9 @@ class LiveCustodyDriverTests(unittest.TestCase):
         live = self.gt.GuestTransport(api, self.profile, api_login='agent')
         out = self.driver.deliver_attempts(live, provider, PORT, http=gitea)
         self.assertEqual(out['refused'], [])
+        # E-05.2's pin: the checked-in declaration with exactly one derivation, stated in the record
+        self.assertEqual(out['declaration_derivation'],
+                         _load('declaration_support', HERE / 'declaration_support.py').DERIVATION)
         self.assertEqual([(r['stage'], r['bot']) for r in out['records']],
                          [('implement', 'aieh-bot-builder'), ('review', 'aieh-bot-reviewer')])
         self.assertEqual(out['fingerprints'], {'builder': roles.fingerprint(TOKENS['builder']),
