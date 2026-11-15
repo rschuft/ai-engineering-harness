@@ -1,5 +1,5 @@
 """Trusted dispatch input resolution, create admission and the native conversation create
-(plan leaves E-01.2.1, E-01.2.2, E-01.3.1, E-05.2, E-05.6 and E-05.9, blueprint #execution-qualification).
+(plan leaves E-01.2.1, E-01.2.2, E-01.3.1, E-05.2, E-05.3, E-05.6 and E-05.9, blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
@@ -56,9 +56,10 @@ only.
 Check order (the first failing check refuses): the request; the repository; the stage;
 the stage's binding; the profile's approval and binding; the catalog pin (required); the
 profile file's digest and qualification, and its admission policy (``admission_policy``,
-E-01.2.2: runtime, caps within the ceilings, mounts); the Work's native readiness; the design
-pointers and the accepted design revision; the ordinal. Every manifest check runs before
-any file, Backlog.md or git read.
+E-01.2.2: runtime, caps within the ceilings, mounts); the pin's agent assignment at the pinned
+commit of its catalog repository (``read_assignment``, E-05.3: its digest, its shape, no Skill);
+the Work's native readiness; the design pointers and the accepted design revision; the ordinal.
+Every manifest check runs before any file, Backlog.md or git read.
 
 Command line (from the repository root)::
 
@@ -68,6 +69,11 @@ Command line (from the repository root)::
 ``check-manifest`` validates a manifest file and prints a JSON report (exit 0 PASS,
 1 FAIL, 2 could not run); it admits nothing. ``manifest-path`` prints where the live
 manifest is expected under the managed data root; it creates and reads nothing there.
+``resolve`` (E-05.3, under the tools interpreter) resolves one request under the live, promoted
+manifest and prints the resolved record (exit 0), or the refusal (exit 1); it reserves nothing::
+
+    <tools python> -I -B integrations/dispatch/dispatch_inputs.py resolve --request FILE --project DIR \
+        --backlog CMD
 """
 from __future__ import annotations
 
@@ -183,6 +189,15 @@ REFUSALS = {
     'CATALOG_PIN_REQUIRED': 'the request names no catalog pin; an attempt needs an approved agent/Skill pin',
     'CATALOG_PIN_UNKNOWN': 'the catalog pin is not in the manifest',
     'CATALOG_PIN_NOT_BOUND': 'the catalog pin is approved but not bound to this repository and stage',
+    # E-05.3: the agent assignment a catalog pin names, read at the pinned commit of its catalog repository
+    'CATALOG_SOURCE_UNAVAILABLE': 'no catalog source is available for the pin\'s repository, or it could not be read',
+    'CATALOG_MANIFEST_MISSING': 'the pinned commit, or the pin\'s agent assignment at it, is absent from the catalog '
+                                'repository',
+    'CATALOG_MANIFEST_DRIFTED': 'the agent assignment at the pinned commit does not have the pin\'s manifest_sha256',
+    'CATALOG_MANIFEST_INVALID': 'the agent assignment is not strict JSON of agent-assignment/v1 for this pin, or a file '
+                                'it names is not at the pinned commit with the sha256 it names',
+    'CATALOG_SKILL_NOT_QUALIFIED': 'the agent assignment names a Skill: no Skill is assigned before a qualified Skill '
+                                   'catalog exists (A-01.1)',
     'PROFILE_MISSING': 'the approved profile has no readable profile.json',
     'PROFILE_DRIFTED': 'the profile.json bytes no longer have the approved sha256',
     'PROFILE_INVALID': 'the profile.json is not this profile\'s profile/v1 declaration',
@@ -731,6 +746,159 @@ def read_profile_file(profile_id: str, *, profiles_root=REPO / 'profiles') -> by
     return (Path(profiles_root) / profile_id / 'profile.json').read_bytes()
 
 
+# The agent assignment a catalog pin names (E-05.3). Decision 0019 point 1 places the harness runtime's agent-assignment
+# manifests in this repository's catalog/ first, then in the protected Gitea catalog (A-01.1). A pin
+# (repository, commit, manifest_sha256) names the file catalog/assignments/<pin id>.json at that commit of that
+# catalog repository; the resolver reads it there, never from a work tree.
+ASSIGNMENT_FORMAT = 'ai-engineering-harness/catalog/agent-assignment/v1'
+ASSIGNMENT_DIR = 'catalog/assignments'
+ASSIGNMENT_KEYS = ('format', 'id', 'provider', 'create_template', 'skills')
+# The catalog repository the live resolver reads: this harness repository (decision 0019 point 1), by this id.
+CATALOG_REPOSITORY = 'ai-engineering-harness'
+CATALOG_PATH_RE = re.compile(r'[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*')
+
+
+class CatalogUnavailable(Exception):
+    """A catalog source could not be read (not: the commit or file is absent, which is None)."""
+
+
+class CatalogSource(Protocol):
+    """One catalog repository, read only, by commit."""
+
+    def read(self, commit: str, path: str) -> bytes | None:
+        """The bytes of the blob at PATH of COMMIT, or None when the repository has no such commit or no blob
+        there. Raises CatalogUnavailable when the repository cannot be read."""
+
+
+class GitCatalogSource:
+    """A catalog repository read through the planning adapter's ``Git`` (the shared repository-access module,
+    decision 0014): the committed blob at the pinned commit, never the work tree."""
+
+    def __init__(self, project):
+        self.project = Path(project)
+
+    def read(self, commit: str, path: str) -> bytes | None:
+        failure = None
+        try:
+            git = planning.Git(self.project)
+            with git.session():
+                if git.commit(commit) != commit or git.object_type(commit, path) != 'blob':
+                    return None
+                return git.blob(commit, path)
+        except (planning.PlanningError, planning.CannotRun, OSError) as exc:
+            failure = f'{type(exc).__name__}: {getattr(exc, "code", exc)}'
+        raise CatalogUnavailable(f'{self.project}: {failure}')
+
+
+def harness_catalog_sources(repository: str, *, repo_root=REPO) -> CatalogSource | None:
+    """The live catalog sources: CATALOG_REPOSITORY is this checkout's repository (REPO_ROOT), read at the pinned
+    commit; no other catalog repository exists yet (A-01.1 adds the Gitea catalog)."""
+    return GitCatalogSource(repo_root) if repository == CATALOG_REPOSITORY else None
+
+
+def assignment_path(pin_id: str) -> str:
+    """Where pin PIN_ID's agent assignment lies in its catalog repository: ``catalog/assignments/<pin id>.json``."""
+    if not _is_id(pin_id):
+        raise ValueError(f'not a catalog pin id: {pin_id!r}')
+    return f'{ASSIGNMENT_DIR}/{pin_id}.json'
+
+
+def _is_catalog_path(path) -> bool:
+    return isinstance(path, str) and CATALOG_PATH_RE.fullmatch(path) is not None \
+        and not any(_reserved_name(part) for part in path.split('/'))
+
+
+def read_assignment(pin_entry: dict, catalog_sources: Callable[[str], CatalogSource | None]) -> dict:
+    """The agent assignment PIN_ENTRY pins (E-05.3), checked, or a refusal. In this order:
+
+    * the pin's catalog repository has a source (CATALOG_SOURCE_UNAVAILABLE; also a source that fails to read);
+    * ``catalog/assignments/<pin id>.json`` is a blob at the pinned commit (CATALOG_MANIFEST_MISSING; also an absent
+      commit);
+    * its bytes have the pin's ``manifest_sha256`` (CATALOG_MANIFEST_DRIFTED);
+    * it is strict JSON of ``agent-assignment/v1`` with exactly its keys: ``format``, ``id`` (the pin's id),
+      ``provider`` (``{path, sha256, acp_server}``: the provider adapter's registry entry), ``create_template``
+      (``{path, sha256}``) and ``skills`` (a list) (CATALOG_MANIFEST_INVALID);
+    * ``skills`` is empty (CATALOG_SKILL_NOT_QUALIFIED): no Skill is assigned, and so none is materialized, before
+      A-01.1 qualifies one;
+    * each file it names is a blob at the same commit with the sha256 it names, and the registry entry's
+      ``acp_server`` is the one named (CATALOG_MANIFEST_INVALID).
+
+    Nothing is written. Whether the assigned template is the one the profile admits for the stage is the profile's
+    pin and admission's (E-05.2), not checked here: a binding may approve several profiles with one pin."""
+    pin, repository, commit, approved = (pin_entry['id'], pin_entry['repository'], pin_entry['commit'],
+                                         pin_entry['manifest_sha256'])
+    where = {'catalog_pin': pin, 'repository': repository, 'commit': commit}
+    source = catalog_sources(repository)
+    if source is None:
+        raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'no catalog source for {repository!r}', **where)
+
+    def read(path: str) -> bytes | None:
+        failure = None
+        try:
+            raw = source.read(commit, path)
+        except (CatalogUnavailable, OSError) as exc:
+            failure = f'{type(exc).__name__}: {exc}'
+        if failure is not None:
+            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{path}: {failure}', **where)
+        if raw is not None and not isinstance(raw, bytes):
+            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{path}: the catalog source '
+                                  'returned no bytes', **where)
+        return raw
+
+    path = assignment_path(pin)
+    raw = read(path)
+    if raw is None:
+        raise DispatchRefused('CATALOG_MANIFEST_MISSING', f'{repository}@{commit} has no {path}', path=path, **where)
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != approved:
+        raise DispatchRefused('CATALOG_MANIFEST_DRIFTED', f'{repository}@{commit}:{path} has sha256 {digest}, pinned '
+                              f'{approved}', path=path, actual=digest, approved=approved, **where)
+
+    def invalid(detail: str):
+        return DispatchRefused('CATALOG_MANIFEST_INVALID', f'{repository}@{commit}:{path}: {detail}', path=path,
+                               **where)
+
+    try:
+        assignment = _strict_loads(raw.decode('utf-8'))
+    except ValueError as exc:  # UnicodeDecodeError is a ValueError
+        raise invalid(f'not strict UTF-8 JSON ({type(exc).__name__})') from None
+    if not isinstance(assignment, dict) or set(assignment) != set(ASSIGNMENT_KEYS) \
+            or assignment['format'] != ASSIGNMENT_FORMAT:
+        raise invalid(f'not {ASSIGNMENT_FORMAT} with exactly the keys {list(ASSIGNMENT_KEYS)}')
+    if assignment['id'] != pin:
+        raise invalid(f'its id {assignment["id"]!r} is not the pin\'s {pin!r}')
+    provider, template, skills = assignment['provider'], assignment['create_template'], assignment['skills']
+    if not isinstance(provider, dict) or set(provider) != {'path', 'sha256', 'acp_server'} \
+            or not _is_id(provider['acp_server']):
+        raise invalid('provider is not {path, sha256, acp_server}')
+    if not isinstance(template, dict) or set(template) != {'path', 'sha256'}:
+        raise invalid('create_template is not {path, sha256}')
+    for name, named in (('provider', provider), ('create_template', template)):
+        if not _is_catalog_path(named['path']) or not isinstance(named['sha256'], str) \
+                or not SHA256_RE.fullmatch(named['sha256']):
+            raise invalid(f'{name} does not name a repository-relative path and a sha256')
+    if not isinstance(skills, list):
+        raise invalid('skills is not a list')
+    if skills:
+        raise DispatchRefused('CATALOG_SKILL_NOT_QUALIFIED', f'{repository}@{commit}:{path} names {len(skills)} '
+                              'Skill(s); none is assigned before A-01.1 qualifies a Skill catalog', path=path, **where)
+    named_bytes = {}
+    for name, named in (('provider', provider), ('create_template', template)):
+        found = read(named['path'])
+        if found is None:
+            raise invalid(f'{name} {named["path"]} is not at the pinned commit')
+        if hashlib.sha256(found).hexdigest() != named['sha256']:
+            raise invalid(f'{name} {named["path"]} at the pinned commit does not have the sha256 it names')
+        named_bytes[name] = found
+    try:
+        registry = _strict_loads(named_bytes['provider'].decode('utf-8'))
+    except ValueError:
+        registry = None
+    if not isinstance(registry, dict) or registry.get('acp_server') != provider['acp_server']:
+        raise invalid(f'the provider registry entry {provider["path"]} is not the {provider["acp_server"]!r} entry')
+    return assignment
+
+
 def store_next_ordinal(integration_store) -> Callable[[str, str, str], int]:
     """The next ordinal on (work, design revision, stage) from the store's typed claims (a read).
     ``reserve_attempt`` remains the arbiter: a live claim or a race is refused there."""
@@ -967,12 +1135,15 @@ def _outcome_ref(work_id: str, entry: dict) -> str:
 
 def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
             next_ordinal: Callable[[str, str, str], int],
-            read_profile: Callable[[str], bytes] = read_profile_file) -> ResolvedInputs:
+            read_profile: Callable[[str], bytes] = read_profile_file,
+            catalog_sources: Callable[[str], CatalogSource | None] = harness_catalog_sources) -> ResolvedInputs:
     """Resolve a dispatch request against the approved-input manifest, or raise DispatchRefused.
 
     ``work_sources(repository)`` gives the approved repository's Backlog.md and git source;
     ``next_ordinal(work_id, design_revision, stage)`` the next ordinal (``store_next_ordinal``);
-    ``read_profile(profile_id)`` the profile.json bytes. Nothing is written anywhere.
+    ``read_profile(profile_id)`` the profile.json bytes; ``catalog_sources(repository)`` the pinned catalog
+    repository, whose agent assignment ``read_assignment`` checks at the pinned commit (E-05.3). Nothing is written
+    anywhere.
     """
     if not isinstance(manifest, ApprovedInputs):
         raise TypeError('manifest must be ApprovedInputs (load_manifest or parse_manifest)')
@@ -1003,6 +1174,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
 
     profile_digest, declared = _check_profile(profile, profile_entry['sha256'], read_profile)
     admission = admission_policy(declared, profile, stage)
+    read_assignment(pin_entry, catalog_sources)  # E-05.3: the pinned agent assignment, at its pinned commit
 
     source = work_sources(repository)
     if source is None:
@@ -2769,7 +2941,8 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
              integration_store, workspaces, transport: Callable[[str, str, dict | None], object], actor: str,
              read_profile: Callable[[str], bytes] = read_profile_file,
              read_artifact: Callable[[str], bytes] = read_profile_artifact,
-             inference: InferenceAccess | None = None, native_credentials=None) -> DispatchResult:
+             inference: InferenceAccess | None = None, native_credentials=None,
+             catalog_sources: Callable[[str], CatalogSource | None] = harness_catalog_sources) -> DispatchResult:
     """One native Docker conversation create for a dispatch request, in the dispatcher's order:
 
     1. ``resolve`` (a refusal reserves nothing);
@@ -2810,7 +2983,8 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
     which is then the token read. Otherwise a stable refusal, and nothing is reserved.
     """
     resolved = resolve(request, manifest=manifest, work_sources=work_sources,
-                       next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile)
+                       next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile,
+                       catalog_sources=catalog_sources)
     admission = _attempt_end().admit_new_attempt(integration_store, resolved, transport=transport,
                                                  read_artifact=read_artifact)
     identity = resolved.attempt_identity()
@@ -2946,13 +3120,87 @@ def end_attempt(integration_store, operation_key: str, *, inference: InferenceAc
 # ---------------------------------------------------------------------------
 # Command line
 
+RESOLUTION_FORMAT = 'ai-engineering-harness/dispatch/resolution-report/v1'
+
+
+class LiveUnavailable(Exception):
+    """The live resolution could not run: no integration store at its managed location, or it could not be opened
+    as a current one."""
+
+
+def live_store_path(res) -> Path:
+    """The managed integration store, ``<state>/integration/integration.sqlite`` (the file the recorders use)."""
+    return Path(str(res.paths[MANIFEST_CATEGORY])) / 'integration' / 'integration.sqlite'
+
+
+def resolve_live(request, *, res, work_source: WorkSource,
+                 read_profile: Callable[[str], bytes] = read_profile_file,
+                 catalog_sources: Callable[[str], CatalogSource | None] = harness_catalog_sources):
+    """(ResolvedInputs, ApprovedInputs) of REQUEST resolved under the live manifest of RES (E-05.3), as the
+    dispatcher resolves it, with nothing reserved; or DispatchRefused. The manifest is ``manifest_path(res)``'s,
+    loaded only through ``load_manifest`` with the decision verifier over the managed integration store
+    (``live_store_path``), which must exist and be current: it is never created or migrated here
+    (LiveUnavailable). WORK_SOURCE serves the request's repository and no other; the profile, the catalog pin's
+    agent assignment and the ordinal come from READ_PROFILE, CATALOG_SOURCES and the store's claims."""
+    store_path = live_store_path(res)
+    if not store_path.is_file():
+        raise LiveUnavailable(f'no integration store at {store_path}: no promotion was recorded there')
+    decisions = _load('input_decisions', REPO / 'integrations' / 'owner' / 'input_decisions.py')
+    repository = request.get('repository') if isinstance(request, Mapping) else None
+    failure = None
+    try:
+        with store.open_store(store_path, apply_migrations=False) as integration_store:
+            manifest = load_manifest(manifest_path(res), decisions=decisions.verifier(integration_store))
+            resolved = resolve(request, manifest=manifest, next_ordinal=store_next_ordinal(integration_store),
+                               work_sources=lambda name: work_source if name == repository else None,
+                               read_profile=read_profile, catalog_sources=catalog_sources)
+    except store.StoreError as exc:
+        failure = f'the integration store at {store_path}: {type(exc).__name__}: {exc}'
+    if failure is not None:
+        raise LiveUnavailable(failure)
+    return resolved, manifest
+
+
+def _resolve_command(args, environ: Mapping[str, str] | None) -> int:
+    """``resolve``: the live resolution of one request file; exit 0 resolved, 1 refused, 2 could not run."""
+    def cannot(text: str) -> int:
+        print(f'ERROR {text}', file=sys.stderr)
+        return 2
+
+    try:
+        request = _strict_loads(Path(args.request).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        return cannot(f'could not read the request {args.request}: {type(exc).__name__}')
+    try:
+        res = paths.resolve(environ)
+        source = PlanningWorkSource(planning.Backlog(planning.tool_argv(args.backlog), args.project),
+                                    planning.Git(args.project))
+        resolved, manifest = resolve_live(request, res=res, work_source=source)
+    except DispatchRefused as refusal:
+        print(json.dumps(refusal.to_json(), indent=2))
+        print(f'REFUSED {refusal.code}: {refusal.detail}', file=sys.stderr)
+        return 1
+    except (paths.PathsError, planning.CannotRun, LiveUnavailable) as exc:
+        return cannot(str(exc))
+    print(json.dumps({'format': RESOLUTION_FORMAT, 'resolved': resolved.to_json(), 'approval': manifest.approval},
+                     indent=2))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     sub = parser.add_subparsers(dest='command', required=True)
     check = sub.add_parser('check-manifest', help='schema-check an approved-input manifest file; admits nothing')
     check.add_argument('--manifest', required=True)
     sub.add_parser('manifest-path', help='print where the live manifest is expected; creates nothing')
+    live = sub.add_parser('resolve', help='resolve one request under the live, promoted manifest; reserves nothing')
+    live.add_argument('--request', required=True, help='a dispatch request/v1 JSON file')
+    live.add_argument('--project', required=True, type=Path,
+                      help='the work tree of the request\'s repository (its Backlog.md and git)')
+    live.add_argument('--backlog', required=True, help='the Backlog.md command (as planning_readiness.py takes it)')
     args = parser.parse_args(argv)
+    if args.command == 'resolve':
+        return _resolve_command(args, environ)
     if args.command == 'manifest-path':
         try:
             print(manifest_path(paths.resolve(environ)))

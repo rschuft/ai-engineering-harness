@@ -242,7 +242,8 @@ class AdmitsTheApprovedBlock(CheckedInFixture):
         result = di.dispatch(self.real_request(), manifest=self.approve_real(), work_sources=self.d1_sources.get,
                              integration_store=self.store, workspaces=self.workspaces, transport=server,
                              actor='e-05.2-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
-                             inference=native_tests.NoBroker(), native_credentials=self.provider)
+                             inference=native_tests.NoBroker(), native_credentials=self.provider,
+                             catalog_sources=self.catalog.sources)
         [(_, _, body)] = server.creates
         self.assertEqual(body, self.sent_body(result.conversation_id))
         self.assertEqual(body['agent_settings'], d1.qualified_create()['agent_settings'])

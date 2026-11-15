@@ -520,7 +520,7 @@ class DispatchOverTheProbePairTests(adm.AdmissionFixture):
         result = di.dispatch(self.request(), manifest=self.write_manifest(self.manifest_data(), self.fresh('m')),
                              work_sources=self.sources.get, integration_store=self.store, workspaces=self.workspaces,
                              transport=live, actor='transport-test', read_profile=self.read_profile,
-                             read_artifact=self.read_artifact)
+                             read_artifact=self.read_artifact, catalog_sources=self.catalog.sources)
         self.assertEqual(self.store.get(result.operation_key).state, 'confirmed')
         self.assertEqual([(m, p, k == SYNTHETIC_KEY) for m, p, k, _ in server.seen],
                          [('GET', '/server_info', True), ('POST', '/api/conversations', True)])

@@ -193,7 +193,8 @@ class DeliveryFixture(adm.AdmissionFixture):
         manifest = manifest or self.write_manifest(self.manifest_data(), self.fresh('manifest'))
         result = di.dispatch(request, manifest=manifest, work_sources=sources.get, integration_store=self.store,
                              workspaces=self.workspaces, transport=server or cc.FakeAgentServer(),
-                             actor='token-test', read_profile=self.read_profile, read_artifact=self.read_artifact)
+                             actor='token-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
+                             catalog_sources=self.catalog.sources)
         return result.operation_key
 
     def deliver(self, key, provider=None, gitea=None):

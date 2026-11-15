@@ -146,7 +146,8 @@ class SecretsFixture(d1.D1Fixture):
                            manifest=manifest or self.approve_d1(), work_sources=self.d1_sources.get,
                            integration_store=self.store, workspaces=self.workspaces, transport=transport,
                            actor='e-05.6-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
-                           inference=None if control is None else self.access_for(control), **kwargs)
+                           inference=None if control is None else self.access_for(control),
+                           catalog_sources=self.catalog.sources, **kwargs)
 
     def typed(self, states=None):
         """The typed dispatch attempts (not the grant journal or revocation receipts beside them)."""

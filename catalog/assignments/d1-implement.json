@@ -1,0 +1,14 @@
+{
+  "format": "ai-engineering-harness/catalog/agent-assignment/v1",
+  "id": "d1-implement",
+  "provider": {
+    "path": "integrations/dispatch/qualification/acp-registry-claude-code-1.60.1.json",
+    "sha256": "aa402bbb418fed47a86a377207511be6a7a4f03dd4ea1d7a77b4514438345574",
+    "acp_server": "claude-code"
+  },
+  "create_template": {
+    "path": "profiles/strong-windows-qemu-whpx/agent-server/d1-create.json",
+    "sha256": "660001d24cc0b5c0fda1d0a5a49d94fb949a99ce7f0f83bcb3d19f7d5990fce6"
+  },
+  "skills": []
+}

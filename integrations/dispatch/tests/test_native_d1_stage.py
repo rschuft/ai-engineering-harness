@@ -113,6 +113,7 @@ class NativeFixture(d1.D1Fixture):
                            integration_store=self.store, workspaces=self.workspaces, transport=transport,
                            actor='e-05.9-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
                            inference=NoBroker(), native_credentials=self.provider if provider is None else provider,
+                           catalog_sources=self.catalog.sources,
                            **kwargs)
 
     def reserved_pre(self, manifest=None):
@@ -618,7 +619,8 @@ class ReadOrder(NativeFixture):
         with self.assertRaises(di.DispatchRefused) as caught:   # no provider given
             di.dispatch(self.d1_request(), manifest=self.approve_native(), work_sources=self.d1_sources.get,
                         integration_store=self.store, workspaces=self.workspaces, transport=cc.FakeAgentServer(),
-                        actor='e-05.9-test', read_profile=self.read_profile, read_artifact=self.read_artifact)
+                        actor='e-05.9-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
+                        catalog_sources=self.catalog.sources)
         self.assertEqual(caught.exception.code, 'NATIVE_TOKEN_UNAVAILABLE')
 
 

@@ -359,7 +359,8 @@ class DispatchTests(adm.AdmissionFixture):
         return di.dispatch(self.request() if request is None else request, manifest=manifest,
                            work_sources=(self.sources if sources is None else sources).get,
                            integration_store=self.store, workspaces=self.workspaces, transport=transport,
-                           actor='dispatch-test', read_profile=self.read_profile, read_artifact=self.read_artifact)
+                           actor='dispatch-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
+                           catalog_sources=self.catalog.sources)
 
     def only(self, states=None):
         attempts = self.store.attempts(states)

@@ -54,13 +54,18 @@ assert fx.adapter is planning, 'the fixture and the resolver must share one plan
 
 WAIT_CEILING_S = 60  # bounds a hung child; the CLI normally answers in well under a second
 CHANGE = fx.CHANGE
-PIN_COMMIT = 'c' * 40
-BUILDER_SHA = hashlib.sha256(b'synthetic builder agent/Skill manifest').hexdigest()
+# E-05.3: the resolver reads each pin's agent assignment at its pinned commit; the fixture's catalog
+# (catalog_support.standard) holds the builder's and the reviewer's, whose digests the pins carry.
+cs = _load('dispatch_catalog_support', HERE / 'catalog_support.py')
+PIN_COMMIT = cs.PIN_COMMIT
+BUILDER_SHA = cs.BUILDER_SHA
+# The builder pin's digest GOLDEN_POLICY_DIGEST was computed with (before E-05.3 the pins named no file).
+GOLDEN_BUILDER_SHA = hashlib.sha256(b'synthetic builder agent/Skill manifest').hexdigest()
 # The Work's outcome (decision 0008: a random UUID minted at acceptance): every task Backlog.md
 # reports here carries it as a reference (E-01.3.1: every reservation carries an outcomeRef).
 OUTCOME = '3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63'
 OUTCOME_REF = f'outcome:{OUTCOME}'
-REVIEWER_SHA = hashlib.sha256(b'synthetic reviewer agent/Skill manifest').hexdigest()
+REVIEWER_SHA = cs.REVIEWER_SHA
 
 
 REVISION = b'\nRevised after review.\n'
@@ -235,6 +240,7 @@ class Fixture(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.ordinal_calls = []
         self.sources = {'demo-app': CountingSource(di.PlanningWorkSource(SnapshotBacklog('unblocked'), self.git))}
+        self.catalog = cs.standard()
         # One git read session per test (plan leaf F-09.4): the test's dispatch reads share one
         # batch reader. The design repository never changes during a test, and the session (with
         # its memo) ends with the test, so nothing is kept for the next one.
@@ -284,7 +290,8 @@ class Fixture(unittest.TestCase):
         sources = self.sources if sources is None else sources
         return di.resolve(self.request() if request is None else request, manifest=manifest,
                           work_sources=sources.get, next_ordinal=self.next_ordinal,
-                          read_profile=lambda name: di.read_profile_file(name, profiles_root=self.profiles))
+                          read_profile=lambda name: di.read_profile_file(name, profiles_root=self.profiles),
+                          catalog_sources=self.catalog.sources)
 
     def assertRefused(self, code, request=None, manifest=None, sources=None):
         with self.assertRaises(di.DispatchRefused) as caught:
@@ -569,7 +576,8 @@ class SuccessTests(Fixture):
 
     def resolve_real(self, name, manifest):
         return di.resolve(self.request(profile=name), manifest=manifest,
-                          work_sources=self.sources.get, next_ordinal=self.next_ordinal)
+                          work_sources=self.sources.get, next_ordinal=self.next_ordinal,
+                          catalog_sources=self.catalog.sources)
 
     def test_the_real_incus_profile_with_approved_bytes_is_refused_as_not_operational(self):
         """strong-incus-vm declares operational false (C6): approving its exact bytes still does
@@ -627,7 +635,10 @@ class DeterminismTests(Fixture):
         self.assertEqual(record.policy_inputs_json, json.dumps(record.policy_inputs, sort_keys=True,
                                                                separators=(',', ':'), ensure_ascii=False))
         self.assertEqual(self.commit, '8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7')
-        self.assertEqual(record.policy_digest, GOLDEN_POLICY_DIGEST)
+        # The golden digest pins the canonical form over the same inputs with the pin digest it was computed with.
+        golden_inputs = copy.deepcopy(record.policy_inputs)
+        golden_inputs['catalog_pin']['manifest_sha256'] = GOLDEN_BUILDER_SHA
+        self.assertEqual(di._sha256(di._canonical(golden_inputs)), GOLDEN_POLICY_DIGEST)
 
     def test_each_policy_input_changes_the_digest(self):
         base = (dict(id='demo-app'), 'implement',

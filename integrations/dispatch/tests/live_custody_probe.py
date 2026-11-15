@@ -110,7 +110,7 @@ def deliver_attempts(transport, provider, port, http=None):
                 result = di.dispatch(request, manifest=manifest, work_sources=sources.get,
                                      integration_store=case.store, workspaces=case.workspaces, transport=transport,
                                      actor='e-01.3.3-custody-probe', read_profile=case.read_profile,
-                                     read_artifact=case.read_artifact)
+                                     read_artifact=case.read_artifact, catalog_sources=case.catalog.sources)
             except di.DispatchRefused as exc:
                 out['refused'].append({'stage': request['stage'], 'code': exc.code})
                 continue
