@@ -58,6 +58,15 @@ TOKEN_RULES = (
                          'session key sk-ant-sid..., a session token sk-ant-cc- or sk-ant-si-)'),
     ('length', f'the value is not {TOKEN_LENGTH[0]} to {TOKEN_LENGTH[1]} characters long'),
 )
+# The same shape as one regular expression (fullmatch), for a reader that cannot run token_rule: the job environment
+# probe inside a conversation container reports only whether a value has it (E-05.11; the profile's
+# network.inference_composition.native_token_environment states it, tools/check_profile.py holds it equal to this).
+TOKEN_SHAPE = re.compile(r'(?=[A-Za-z0-9_-]{40,512}\Z)sk-ant-(?!(?:api|admin|sid)[a-z0-9]*-|(?:cc|si)-)'
+                         r'[a-z0-9]+-[A-Za-z0-9_-]+')
+# The provider's other credentials (searched, not fullmatched): an API key, an admin key, a claude.ai session key, a
+# session token, or another provider's project key. A value with this shape where the native token is admitted is a
+# second credential, never the token.
+OTHER_CREDENTIAL_SHAPE = re.compile(r'sk-ant-(?:api|admin|sid)[a-z0-9]*-|sk-ant-(?:cc|si)-|sk-proj-')
 CODES = {
     'NATIVE_CONSOLE_REQUIRED': 'run the entry command in your own console window, at its prompt: standard input must '
                                'be an interactive console (not a pipe, a file or a redirection), read with echo off',

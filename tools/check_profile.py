@@ -498,6 +498,13 @@ INFERENCE_FORBIDDEN_PORTS = (22, 53, 5355, 8000, 8001)
 INFERENCE_TOKEN_NAMES = ['ANTHROPIC_API_KEY']
 INFERENCE_TOKEN_SHAPE = 'aieh-inf-[A-Za-z0-9_-]{43}'
 INFERENCE_REFUSED_SHAPES = 'sk-(?:ant|proj)-|sk-[A-Za-z0-9_-]{20,}'
+# E-05.11 (the engineering manager's ruling of 2026-11-15, declared as D-6 is): the native token's environment name in
+# a conversation whose create carries the native secret set; its shape and the provider's other credentials' shapes,
+# as integrations/dispatch/native_token.py holds them (TOKEN_SHAPE, OTHER_CREDENTIAL_SHAPE).
+NATIVE_TOKEN_NAMES = ['CLAUDE_CODE_OAUTH_TOKEN']
+NATIVE_TOKEN_SHAPE = (r'(?=[A-Za-z0-9_-]{40,512}\Z)sk-ant-(?!(?:api|admin|sid)[a-z0-9]*-|(?:cc|si)-)'
+                      r'[a-z0-9]+-[A-Za-z0-9_-]+')
+NATIVE_REFUSED_SHAPES = r'sk-ant-(?:api|admin|sid)[a-z0-9]*-|sk-ant-(?:cc|si)-|sk-proj-'
 # decision 0015 sections 4.1, 4.3 and 4.4 (S-03.2 slice 3): the forward session's record fields and
 # its ssh options. -N and -v are flags; each -o names one of the options below; ExitOnForwardFailure
 # must be yes and the two keepalives bounded integers.
@@ -685,6 +692,7 @@ def check_inference_composition(report, profile, root, comp, word, address, port
     if not isinstance(comp.get('inspection'), list) or not comp['inspection']:
         report.fail(f'{label}.inspection: the checks of decision 0015 section 4.5')
     check_attempt_token_environment(report, profile, comp)
+    check_native_token_environment(report, profile, comp)
     check_repo_file(report, root, f'{label}.seed_overlay', comp.get('seed_overlay') or {})
     check_inference_states(report, profile, root, sshd, want)
 
@@ -694,10 +702,29 @@ def check_attempt_token_environment(report, profile, comp):
     exactly the registry's API key name, still credential-like by the job contract's pattern and never one of
     jobs.environment.secret_names (so a guest without the composition keeps that contract exactly), with the
     broker's token shape and the refused provider-key shapes stated as the code holds them."""
-    label = 'network.inference_composition.attempt_token_environment'
-    block = comp.get('attempt_token_environment')
+    check_token_environment(report, profile, comp, 'attempt_token_environment', INFERENCE_TOKEN_NAMES,
+                            INFERENCE_TOKEN_SHAPE, INFERENCE_REFUSED_SHAPES,
+                            'D-6: the attempt token name in a qualification conversation', 'the broker token shape',
+                            'the provider-key shapes')
+
+
+def check_native_token_environment(report, profile, comp):
+    """E-05.11: the native token's environment name, declared as D-6's is: exactly CLAUDE_CODE_OAUTH_TOKEN, still
+    credential-like and never one of jobs.environment.secret_names, with the native token's shape and the provider's
+    other credentials' shapes stated as native_token holds them."""
+    check_token_environment(report, profile, comp, 'native_token_environment', NATIVE_TOKEN_NAMES,
+                            NATIVE_TOKEN_SHAPE, NATIVE_REFUSED_SHAPES,
+                            'E-05.11: the native token name in a native conversation', 'the native token shape',
+                            'the provider\'s other credentials\' shapes')
+
+
+def check_token_environment(report, profile, comp, key, want_names, want_shape, want_refused, why, shape_name,
+                            refused_name):
+    """One admitted token name of the job contract under the opt-in composition (D-6's form)."""
+    label = f'network.inference_composition.{key}'
+    block = comp.get(key)
     if not isinstance(block, dict):
-        report.fail(f'{label}: required (D-6: the attempt token name in a qualification conversation)')
+        report.fail(f'{label}: required ({why})')
         return
     env = ((((profile.get('provisioning') or {}).get('agent_server') or {}).get('jobs') or {})
            .get('environment') or {})
@@ -706,14 +733,14 @@ def check_attempt_token_environment(report, profile, comp):
     except re.error:
         pattern = None
     names = block.get('names')
-    if names != INFERENCE_TOKEN_NAMES or pattern is None or not all(pattern.search(n) for n in names) or \
+    if names != want_names or pattern is None or not all(pattern.search(n) for n in names) or \
             set(names) & set(env.get('secret_names') or []):
-        report.fail(f'{label}.names: exactly {INFERENCE_TOKEN_NAMES}, matched by jobs.environment.'
+        report.fail(f'{label}.names: exactly {want_names}, matched by jobs.environment.'
                     'credential_name_pattern and not in jobs.environment.secret_names')
-    if block.get('value_shape') != INFERENCE_TOKEN_SHAPE:
-        report.fail(f'{label}.value_shape: must be the broker token shape {INFERENCE_TOKEN_SHAPE!r}')
-    if block.get('refused_shapes') != INFERENCE_REFUSED_SHAPES:
-        report.fail(f'{label}.refused_shapes: must be the provider-key shapes {INFERENCE_REFUSED_SHAPES!r}')
+    if block.get('value_shape') != want_shape:
+        report.fail(f'{label}.value_shape: must be {shape_name} {want_shape!r}')
+    if block.get('refused_shapes') != want_refused:
+        report.fail(f'{label}.refused_shapes: must be {refused_name} {want_refused!r}')
     for key in ('admitted_when', 'rule'):
         if not isinstance(block.get(key), str) or not block[key].strip():
             report.fail(f'{label}.{key}: required')

@@ -9059,7 +9059,9 @@ print(json.dumps(dict({'responses': out, 'session_key_occurrences': hits},
 '''
 # A secret's shape the sealed form accepts: one word of URL-safe characters (an attempt token), so
 # that its repr in the script text is a plain quoted literal.
-SEALED_SECRET = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
+# One URL-safe word: a broker attempt token, or the native token (E-05.11; native_token's grammar admits up to 512
+# characters, so a seal of 128 would refuse a long native token before anything is sent).
+SEALED_SECRET = re.compile(r'^[A-Za-z0-9_-]{16,512}$')
 
 
 def sealed_api_probe(spec, secret):
@@ -11557,6 +11559,29 @@ def attempt_token_admission(data, names):
             else:
                 out['not_token'].setdefault(pid, []).append(name)
     return out
+
+
+def native_token_environment(profile, record):
+    """E-05.11 (declared as D-6 is): the admitted names of the native token in a job's process environments
+    (network.inference_composition.native_token_environment.names), for an instance created with the inference
+    composition only; () otherwise, so a guest without it keeps the job contract exactly."""
+    if not inference_opted(record):
+        return ()
+    block = inference_config(profile).get('native_token_environment')
+    names = block.get('names') if isinstance(block, dict) else None
+    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+        return ()
+    return tuple(names)
+
+
+def native_token_spec(profile, names):
+    """The job environment probe's attempt_token entry for the native token: the admitted names, the native token's
+    shape and the provider's other credentials' shapes, as the profile declares them (check_profile holds them equal
+    to native_token's TOKEN_SHAPE and OTHER_CREDENTIAL_SHAPE). attempt_token_admission reads the answer as for D-6:
+    'provider_key' is then another credential's shape."""
+    block = inference_config(profile).get('native_token_environment') or {}
+    return {'names': list(names), 'token_shape': block.get('value_shape'),
+            'provider_key_shape': block.get('refused_shapes')}
 
 
 def job_env_verdict(profile, server_user, data, attempt_token_names=()):
@@ -16807,6 +16832,1085 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
     return out
 
 
+# ---------------------------------------------------------------- native qualification driver (E-05.11)
+#
+# The live qualification of the pinned Claude Code on the native execution profile (decision 0023), PREPARED, NOT
+# RUN (plan leaf E-05.11). On one disposable guest created with create --provision --inference, the forward session
+# held to the provider tunnel (inference-forward --execution-profile native) and the tunnel serving, it reads the
+# Owner's native token from its one entry by the dispatcher's read (integrations/dispatch/native_token.py, E-05.9),
+# admits and sends the pinned native qualification create (integrations/dispatch/native_qualification.py) through
+# the dispatcher's transport sealed with the token, observes the provider's start (an empty per-conversation
+# configuration directory, the environment's names, no --bare), sends one fixed prompt, observes the conversation
+# container while the turn runs and after it (S-03.3 slice 1's views), reads the tunnel's census before the create
+# and after the turn and its log of this run, reads the conversation's events, searches the configuration directory
+# and the container's changed files for the token in memory inside the container (S-03.2's search, sent as its
+# own text), checks the model identifiers and the masking from the CLI's unmasked transcript, looks for the
+# Owner's credentials by name (and, only under an Owner-run act, by value on the host), tears down, and runs E-05.9's
+# outbound search over everything the run keeps. One record, under NATIVE_QUALIFICATION_RULE, fixed before any run.
+
+NATIVE_QUALIFICATION_SCHEMA = 'ai-engineering-harness/profiles/native-qualification-record/v1'
+# reserved for the native qualification create (distinct from S-03.3's)
+NATIVE_QUALIFICATION_CONVERSATION_ID = 'a0333c00-0000-4000-8000-0000000e0511'
+# The fixed prompts, no repository content: S-03.3's two (the second asks for one sub-agent step; the leaf's notes).
+NATIVE_QUALIFICATION_PROMPTS = ACP_QUALIFICATION_PROMPTS
+NATIVE_OWNER_CREDENTIALS = ('cred-owner-github', 'cred-owner-provider-login')
+NATIVE_ACT = ACP_REAL_KEY_ACT                         # an Owner act's label (grammar only, as S-03.3's real-key act)
+# The engineering manager's model record (evidence/D1-native-model-record.md, approved with OA-31 (c1)): the main
+# loop, the background model, the sub-agent choices and the refusal fallbacks. Any other identifier is a stop.
+NATIVE_MODEL_MAIN = 'claude-sonnet-5'
+NATIVE_MODEL_BACKGROUND = 'claude-haiku-4-5-20251001'
+NATIVE_MODELS_RECORDED = ('claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-fable-5',
+                          'claude-opus-4-8')
+NATIVE_MASK_MARKER = '<secret-hidden>'                 # the pinned SDK's mask (conversation/secret_registry.py)
+# The tunnel's refusals of a ClientHello to the admitted origin (provider_tunnel.py REFUSALS): the pinned CLI's TLS
+# stack tripping the tunnel's strictness, a stop the engineering manager decides on (E-05.10's carried item).
+NATIVE_HELLO_REFUSALS = ('TUNNEL_HELLO_FRAGMENTED', 'TUNNEL_HELLO_MALFORMED', 'TUNNEL_ECH_REFUSED',
+                         'TUNNEL_SNI_ABSENT', 'TUNNEL_SNI_MISMATCH')
+# The CLI flags the native run shape never passes (bare mode ignores CLAUDE_CODE_OAUTH_TOKEN; MCP, plugins, agents).
+NATIVE_FORBIDDEN_FLAGS = ('--bare', '--mcp-config', '--plugin-dir', '--plugin-dir-no-mcp', '--agent')
+NATIVE_FORBIDDEN_ENV = ('ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_SIMPLE')
+NATIVE_CONFIG_SUFFIX = '/acp/claude-code'               # the SDK's <persistence>/acp/<provider> (_isolate_acp_data_dir)
+# The names of an Owner credential file or a host Claude configuration, looked for in the whole container.
+# The environment names an Owner credential travels under (the job probe reports credential-like names only).
+NATIVE_OWNER_ENV_NAMES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PAT', 'GIT_ASKPASS', 'GIT_PASSWORD', 'ANTHROPIC_API_KEY',
+                          'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_SESSION_ACCESS_TOKEN')
+NATIVE_OWNER_VALUES_OFF = (
+    'not run: reading the Owner\'s own credentials is credential access the Owner has not granted, and the host '
+    '.claude is protected; it runs only under the Owner-run act that supplies their values on standard input '
+    '(--owner-credential-stdin with --owner-credential-act; the engineering manager\'s ruling 1 of 2026-11-15)')
+NATIVE_OWNER_FILE_NAMES = ('.git-credentials', '.netrc', '.credentials.json', '.claude.json', '.claude', 'hosts.yml')
+NATIVE_FILE_LIMIT = 64 << 20          # a changed file larger than this is not searched (the search is incomplete)
+NATIVE_TOTAL_LIMIT = 512 << 20        # the changed files' bytes searched in all
+NATIVE_CAPTURE_LIMIT = 48 << 20       # the Owner-value capture's bytes (only under the Owner's act)
+NATIVE_DELEGATION_SOURCE = (
+    'identified from the pinned sources (evidence/S-03.3-D-1-image-source-read.md section 4; claude-agent-acp '
+    '0.63.0 dist/acp-agent.js; the CLI 2.1.220): a Claude Code sub-agent (the Agent tool) runs inside the CLI process '
+    'and reports through its stream by parent_tool_use_id (its transcript records carry isSidechain); an ACP session '
+    'fork is a new CLI process under the adapter (--fork-session), never asked by this driver; OpenHands\' '
+    'start_child_conversation is a tool of OpenHands\' own agent, which an ACP agent does not receive, and the inner '
+    'server\'s children route is OpenHands\' own child conversation. Neither is assumed to be the other.')
+NATIVE_PERMISSION_NOTE = (
+    'ACP permission modes are not a boundary (requirement R2): the image\'s managed settings allow Edit, Read and Bash '
+    'and the SDK\'s bridge answers permission requests itself; every boundary is shown independently by the container '
+    'view, the guest-root view, the network view and the job contract.')
+NATIVE_ENCRYPTED_STATE_NOTE = (
+    'disclosed: the pinned SDK persists the conversation\'s secrets encrypted under OH_SECRET_KEY in the conversation '
+    'state (conversation/state.py with a cipher); the persisted-token search covers the token raw and in its encoded '
+    'forms only, never an encrypted copy.')
+NATIVE_QUALIFICATION_RULE = (
+    'PASS iff every step passes: (1) the opted-in guest holds the forward to the provider tunnel, the native token is '
+    'read from its one entry by the dispatcher\'s read (native_token.read; the fingerprint recorded), and the outer '
+    'server holds no conversation and no conversation container; (1a) before the create, and so before any model '
+    'call, the tunnel\'s census (provider_tunnel.py census) passes and its log is marked; (2) the pinned native '
+    'qualification create is admitted (native_qualification.check_create, E-05.9\'s shared check) and created through '
+    'the dispatcher\'s transport sealed with the token: 2xx, exactly one new container of the declared shape, the '
+    'outer server listing exactly that conversation, the answer\'s acp_server claude-code and acp_model ' +
+    NATIVE_MODEL_MAIN + ' when it names them; (3) before the turn the sets are read and the provider started from an '
+    'empty per-conversation configuration directory (CLAUDE_CONFIG_DIR <persistence>' + NATIVE_CONFIG_SUFFIX + ' in '
+    'every provider process, nothing in it older than the provider), with the four native names in its environment, '
+    'no second authentication method and no CLAUDE_CODE_SIMPLE, HTTPS_PROXY the tunnel endpoint, the switches their '
+    'declared spelling, and no ' + ', '.join(NATIVE_FORBIDDEN_FLAGS) + ' on any provider command line; (4) the fixed '
+    'prompt accepted (2xx); (5) while the turn runs the container view, its connections (none but to the tunnel '
+    'endpoint, loopback or inbound to the inner server) and the guest-root view pass, as S-03.3\'s step (5); (6) the '
+    'job contract: every process environment carries no credential-like name but the conversation keys and '
+    'CLAUDE_CODE_OAUTH_TOKEN with a value of the native token\'s shape (the profile\'s native_token_environment), no '
+    'root, and that name observed; (7) the turn ends finished within the ceiling, with no confirmation asked (no '
+    'interactive step); (8) after the turn the views pass and the sets show no new container, no new outer '
+    'conversation and every new inner conversation a child of this one; (9) the events are read in full and classify '
+    'the delegation mechanisms (a) to (d) as S-03.3\'s step (9) (the native start_child_conversation tool absent), '
+    'and the mask markers ' + NATIVE_MASK_MARKER + ' in them are counted; (10) the tunnel\'s log of this run shows '
+    'every target, at least one admitted connection to the origin with its upstream peer, no ClientHello of the '
+    'origin refused and no line suppressed, and the container guard\'s counters are read before and after; (10a) the '
+    'tunnel\'s census passes after the turn; (11) inside the container, the token (read there from the provider\'s '
+    'environment, its fingerprint the held one) is searched in memory, raw and encoded, in the configuration '
+    'directory and every file changed since the container started, with valid positive controls, and found nowhere; '
+    'no Owner credential file or host Claude configuration (' + ', '.join(NATIVE_OWNER_FILE_NAMES) + ') outside '
+    'the configuration directory; (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
+    'model outside the record (' + ', '.join(NATIVE_MODELS_RECORDED) + '); (11b) the masking: no marker in the '
+    'events, or every marker attributed, from the unmasked transcript, to a token occurrence only (a marker the '
+    'transcript cannot attribute is UNKNOWN; one attributed to the tunnel endpoint or a switch value is FAIL); (11c) '
+    'the Owner\'s credentials (' + ', '.join(NATIVE_OWNER_CREDENTIALS) + ') absent by name (no credential-like '
+    'environment name of ' + ', '.join(NATIVE_OWNER_ENV_NAMES) + ', and the files of step 11); (11d) only under the '
+    'Owner-run act that supplies their values on standard input, absent by an in-memory value search on the host over '
+    'the container\'s environments and changed files and every answer of this run, with positive controls (without '
+    'the act: UNKNOWN, the reason recorded); (12) the '
+    'conversation deleted, its container gone and no outer conversation left; (13) E-05.9\'s outbound search over the '
+    'record and every Agent Server answer and container output of this run finds the token nowhere, with its '
+    'positive controls. FAIL when a step observes a violation; otherwise UNKNOWN when a step is UNKNOWN. STOP (FAIL; '
+    'the later steps are skipped, the persisted-token search, the Owner-credential step, the teardown and the '
+    'outbound search still run): a process outside the container\'s lineage; an unexpected outer-server conversation; '
+    'an npx or npm process; a credential found in a recorded surface (the token echoed in an Agent Server answer, '
+    'another credential\'s shape in a process environment, the token persisted, an Owner credential found); a '
+    'connection to any destination but the tunnel endpoint; a turn waiting for a confirmation; the tunnel\'s census not '
+    'passing before the create or after the turn; the tunnel refusing the origin\'s ClientHello; a model identifier '
+    'outside the record. ' + NATIVE_PERMISSION_NOTE + ' ' + NATIVE_ENCRYPTED_STATE_NOTE)
+NATIVE_STOPS = {
+    'census-before': 'the tunnel\'s census did not pass before the create (no model call is made)',
+    'census-after': 'the tunnel\'s census did not pass after the turn',
+    'hello': 'the tunnel refused the pinned CLI\'s ClientHello to the origin (the engineering manager decides the fix)',
+    'model': 'a model identifier outside the engineering manager\'s model record',
+    'persisted': 'a credential found in a recorded surface (the native token persisted in the container\'s files)',
+    'owner': 'a credential found in a recorded surface (an Owner credential, by name or by value)',
+    'other-credential': 'a credential found in a recorded surface (another credential\'s shape in a process '
+                        'environment)',
+}
+
+# Run inside the qualification conversation's container (python3; spec: base64 zlib JSON). Mode start: the provider's
+# processes (argv, environment names, CLAUDE_CONFIG_DIR, start times) and the configuration directory's listing.
+# Mode after: also the token, read from a provider process's environment and never printed, searched in memory by
+# S-03.2's search (its source in the spec, executed as a module object) in the configuration directory and every
+# file changed since the container started; the Owner credential file names; the transcript's model ids, sidechain
+# records and the occurrences of each native value. Mode capture (only under the Owner's act): every process
+# environment and command line, the configuration directory and the changed files, as a gzip tar in base64 (bounded).
+NATIVE_ATTEMPT_PROBE = r'''import base64, gzip, hashlib, io, json, os, re, stat, sys, tarfile, time, types, zlib
+spec = json.loads(zlib.decompress(base64.b64decode(sys.argv[1])).decode('utf-8'))
+mode, out = spec['mode'], {'mode': spec['mode']}
+PROC, ROOT = spec.get('proc', '/proc'), spec.get('root', '/')     # the test points them at a tree
+SKIP = tuple(os.path.join(ROOT, d) for d in ('proc', 'sys', 'dev'))
+def read(path, limit=1 << 20):
+    with open(path, 'rb') as f:
+        return f.read(limit)
+def environ(pid):
+    env = {}
+    for e in read(PROC + '/%s/environ' % pid, 1 << 22).split(bytes([0])):
+        name, sep, value = e.partition(b'=')
+        if sep:
+            env[name.decode('latin-1')] = value.decode('latin-1')
+    return env
+try:
+    btime = int(next(l.split()[1] for l in read(PROC + '/stat').decode().splitlines() if l.startswith('btime ')))
+    tick = os.sysconf('SC_CLK_TCK')
+except (OSError, StopIteration, ValueError, AttributeError):
+    btime, tick = None, None
+def started(pid):
+    try:
+        fields = read(PROC + '/%s/stat' % pid).decode('latin-1').rsplit(')', 1)[1].split()
+        return None if btime is None else btime + int(fields[19]) / tick
+    except (OSError, IndexError, ValueError, TypeError):
+        return None
+procs, token, proxy = [], None, None
+for d in sorted(os.listdir(PROC), key=lambda x: int(x) if x.isdigit() else 0):
+    if not d.isdigit():
+        continue
+    try:
+        argv = [a.decode('latin-1') for a in read(PROC + '/%s/cmdline' % d).split(bytes([0])) if a]
+        env = environ(d)
+    except OSError:
+        continue
+    try:
+        exe = os.readlink(PROC + '/%s/exe' % d)
+    except OSError:
+        exe = None
+    if spec['token_name'] not in env and not any('claude-agent-acp' in a for a in argv[:3]):
+        continue
+    role = 'adapter' if any('claude-agent-acp' in a for a in argv[:3]) else \
+        'cli' if (exe or '').endswith('/claude') or (argv[:1] and argv[0].endswith('/claude')) else 'descendant'
+    if token is None and env.get(spec['token_name']):
+        token = env[spec['token_name']]
+        proxy = env.get(spec['proxy_name'])
+    t = env.get(spec['token_name'])
+    procs.append({'pid': int(d), 'role': role, 'exe': exe, 'started': started(d),
+                  'argv': [('<token>' if t and t in a else a[:200]) for a in argv[:60]],
+                  'names': sorted(env), 'config_dir': env.get('CLAUDE_CONFIG_DIR'),
+                  'proxy_is_endpoint': env.get(spec['proxy_name']) == spec['endpoint'],
+                  'switches_declared': all(env.get(n) == spec['switch'] for n in spec['switches'])})
+out['container_started'] = started(1)
+out['processes'] = procs
+dirs = sorted({p['config_dir'] for p in procs if p['config_dir']})
+out['config_dirs'] = dirs
+cfg = dirs[0] if len(dirs) == 1 else None
+listing = []
+if cfg and os.path.isdir(cfg):
+    for root, ds, fs in os.walk(cfg):
+        for name in fs + ds:
+            p = os.path.join(root, name)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if len(listing) < 500:
+                listing.append({'path': os.path.relpath(p, cfg), 'dir': stat.S_ISDIR(st.st_mode),
+                                'size': st.st_size, 'mtime': st.st_mtime, 'ctime': st.st_ctime})
+out['config_listing'] = listing
+out['config_exists'] = bool(cfg and os.path.isdir(cfg))
+def changed():
+    since = (out['container_started'] or 0) - 2
+    found, owner = [], []
+    for root, ds, fs in os.walk(ROOT, onerror=lambda e: None):
+        if root in SKIP:
+            ds[:] = []
+            continue
+        for name in ds + fs:
+            p = os.path.join(root, name)
+            if name in spec['owner_files'] and (name != 'hosts.yml' or '/gh/' in p + '/'):
+                owner.append(p)
+        for name in fs:
+            p = os.path.join(root, name)
+            if p == '/tmp/aieh-job.py' or (cfg and (p + '/').startswith(cfg.rstrip('/') + '/')):
+                continue
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and max(st.st_mtime, st.st_ctime) >= since:
+                found.append((p, st.st_size))
+    return found, owner
+if mode in ('after', 'capture'):
+    files, owner = changed()
+    out['owner_files_found'] = owner[:200]
+    out['changed_files'] = len(files)
+if mode == 'after':
+    out['token_found_in_environment'] = token is not None
+    if token is not None:
+        out['token_fingerprint'] = 'sha256:' + hashlib.sha256(token.encode('utf-8')).hexdigest()[:16]
+        ks = types.ModuleType('aieh_key_search_in_container')
+        exec(compile(spec['search_source'], 'inference_key_search.py', 'exec'), ks.__dict__)
+        prefix = (re.match(r'sk-ant-[a-z0-9]+-', token) or [''])[0]
+        search = ks.Search(token, prefix=prefix)
+        if cfg and os.path.isdir(cfg):
+            search.tree('configuration directory', cfg)
+        else:
+            search.objects('configuration directory', 'tree', [], incomplete=['no configuration directory'])
+        incomplete, total = [], 0
+        def items():
+            global total
+            for p, size in files:
+                if size > spec['file_limit'] or total + size > spec['total_limit']:
+                    continue
+                try:
+                    data = read(p, size + 1)
+                except OSError as exc:
+                    incomplete.append('unreadable: ' + type(exc).__name__)
+                    continue
+                total += len(data)
+                yield p, data
+        skipped = [p for p, size in files if size > spec['file_limit']]
+        listed = list(items())
+        incomplete += ['larger than the per-file limit'] * len(skipped)
+        if sum(size for _, size in files) > spec['total_limit']:
+            incomplete.append('beyond the total limit')
+        search.objects('changed files', 'files', listed, incomplete=incomplete)
+        search.controls()
+        report = search.report()
+        text = json.dumps(report, sort_keys=True)
+        out['search'] = {'withheld': True} if search.holds(text) else {
+            'verdict': report.get('verdict'), 'bytes_searched': report.get('bytes_searched'),
+            'controls': {k: (report.get('controls') or {}).get(k) for k in ('valid', 'cases')},
+            'surfaces': [{k: s.get(k) for k in ('label', 'bytes_total', 'items', 'complete', 'found', 'incomplete',
+                                                'unreadable')} for s in report.get('surfaces') or []]}
+    transcript = {'files': 0, 'records': 0, 'models': {}, 'sidechain_records': 0, 'subagent_files': 0,
+                  'occurrences': {'token': 0, 'endpoint': 0, 'switch': 0, 'marker': 0}}
+    for root, ds, fs in os.walk(os.path.join(cfg, 'projects') if cfg else '/nonexistent'):
+        for name in fs:
+            if not name.endswith('.jsonl'):
+                continue
+            transcript['files'] += 1
+            if '/subagents' in root:
+                transcript['subagent_files'] += 1
+            try:
+                text = read(os.path.join(root, name), 1 << 26).decode('utf-8', 'replace')
+            except OSError:
+                continue
+            occ = transcript['occurrences']
+            occ['token'] += text.count(token) if token else 0
+            occ['endpoint'] += text.count(proxy) if proxy else 0
+            occ['switch'] += text.count(spec['switch'])
+            occ['marker'] += text.count(spec['marker'])
+            for line in text.splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                transcript['records'] += 1
+                if rec.get('isSidechain') is True:
+                    transcript['sidechain_records'] += 1
+                msg = rec.get('message') if isinstance(rec.get('message'), dict) else {}
+                model = msg.get('model')
+                if rec.get('type') == 'assistant' and isinstance(model, str):
+                    transcript['models'][model[:80]] = transcript['models'].get(model[:80], 0) + 1
+    out['transcript'] = transcript
+if mode == 'capture':
+    buf, total, truncated = io.BytesIO(), 0, False
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        def add(name, data):
+            global total, truncated
+            if total + len(data) > spec['capture_limit']:
+                truncated = True
+                return
+            total += len(data)
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        for d in os.listdir(PROC):
+            if d.isdigit():
+                for part in ('environ', 'cmdline'):
+                    try:
+                        add('proc/%s/%s' % (d, part), read(PROC + '/%s/%s' % (d, part), 1 << 22))
+                    except OSError:
+                        pass
+        roots = [p for p, _ in files]
+        if cfg and os.path.isdir(cfg):
+            for root, ds, fs in os.walk(cfg):
+                roots += [os.path.join(root, n) for n in fs]
+        for p in roots:
+            try:
+                add('files' + p, read(p, spec['capture_limit'] + 1))
+            except OSError:
+                truncated = True
+    data = buf.getvalue()
+    out['capture'] = {'b64': base64.b64encode(data).decode('ascii'), 'sha256': hashlib.sha256(data).hexdigest(),
+                      'bytes': len(data), 'truncated': truncated}
+token = proxy = None
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+
+def native_qualification():
+    """integrations/dispatch/native_qualification.py, the E-05.11 native qualification create and its admission (it
+    loads create_secrets under its one name), loaded once."""
+    return _inference_module('aieh_dispatch_native_qualification', 'native_qualification.py', 'dispatch')
+
+
+def native_token_module():
+    """integrations/dispatch/native_token.py, the native token's grammar and the dispatcher's read (E-05.9)."""
+    return _inference_module('aieh_dispatch_native_token', 'native_token.py', 'dispatch')
+
+
+def native_token_search_module():
+    """integrations/dispatch/native_token_search.py, E-05.9's outbound search for the native token."""
+    return _inference_module('aieh_dispatch_native_token_search', 'native_token_search.py', 'dispatch')
+
+
+def native_credential_provider():
+    """The host credential provider the dispatcher reads the native entry from (F-06.3)."""
+    return _inference_module('aieh_credential_provider', 'credential_provider.py', 'credentials').select_provider()
+
+
+class NativeTunnelView:
+    """The running provider tunnel as the driver reads it, through provider_tunnel.py's own functions and its managed
+    context (never a listing of the managed root): its census, and its current log file's lines."""
+
+    def census(self):
+        pt = provider_tunnel()
+        return pt.census(pt.managed_context())
+
+    def log_lines(self):
+        """(log file name, lines); Refused('TUNNEL') when the tunnel is not running or its record cannot be read
+        (the step is then UNKNOWN, never PASS)."""
+        pt = provider_tunnel()
+        try:
+            ctx = pt.managed_context()
+            record = pt.running_record(Path(ctx.run_dir()))
+        except pt.TunnelError as exc:
+            raise Refused('TUNNEL', f'the tunnel\'s run record: {exc.code}') from None
+        name = record.get('log')
+        if not isinstance(name, str) or not pt.LOG_NAME.fullmatch(name):
+            raise Refused('TUNNEL', 'the tunnel\'s run record names no log file')
+        return name, (Path(ctx.logs()) / name).read_text(encoding='utf-8').splitlines()
+
+
+def native_tunnel_verdict(lines, origin):
+    """(verdict, detail, hello_refused) of the tunnel's log lines of this run: every connection's target, decision and
+    reason; PASS needs at least one admitted connection to ORIGIN with an upstream peer, no refused ClientHello of the
+    origin (NATIVE_HELLO_REFUSALS: FAIL and the stop) and no suppressed or dropped line (UNKNOWN)."""
+    connections, peers, suppressed, malformed = [], [], [], 0
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            malformed += 1
+            continue
+        if not isinstance(entry, dict):
+            malformed += 1
+            continue
+        event = entry.get('event')
+        if event == 'connection':
+            connections.append({k: entry.get(k) for k in ('conn', 'target', 'decision', 'reason', 'end',
+                                                          'bytes_up', 'bytes_down')})
+        elif event == 'upstream-connect':
+            peers.append({'conn': entry.get('conn'), 'peer': (entry.get('peer') or {}).get('address')})
+        elif event in ('refusals-suppressed', 'log-ceiling-reached'):
+            suppressed.append(event)
+    hello = [c for c in connections if c['decision'] != 'admitted' and c['reason'] in NATIVE_HELLO_REFUSALS]
+    admitted = [c for c in connections if c['decision'] == 'admitted' and c['target'] == origin]
+    refused = [{'target': c['target'], 'reason': c['reason']} for c in connections if c['decision'] != 'admitted']
+    detail = {'lines': len(lines), 'connections': len(connections), 'admitted_to_origin': len(admitted),
+              'upstream_peers': sorted({p['peer'] for p in peers if p['peer']}), 'upstream_connects': len(peers),
+              'refused': refused[:50], 'hello_refused': hello, 'suppressed': suppressed, 'malformed': malformed}
+    if hello:
+        return 'FAIL', detail, True
+    if suppressed or malformed:
+        return 'UNKNOWN', detail, False
+    return ('PASS' if peers else 'FAIL'), detail, False
+
+
+def native_start_verdict(data, names):
+    """(verdict, checks) of the provider's start (step 3), from NATIVE_ATTEMPT_PROBE's start mode: the configuration
+    directory per conversation and empty when the provider started, the environment's names, no --bare."""
+    procs = data.get('processes') if isinstance(data.get('processes'), list) else []
+    if not procs or not any(p.get('role') == 'adapter' for p in procs):
+        return 'UNKNOWN', {'the provider is running': False}
+    starts = [p.get('started') for p in procs if isinstance(p.get('started'), (int, float))]
+    first = min(starts) if starts else None
+    listing = data.get('config_listing') if isinstance(data.get('config_listing'), list) else []
+    older = [e.get('path') for e in listing if first is None or
+             not isinstance(e.get('mtime'), (int, float)) or e['mtime'] < first - 1.0]
+    dirs = data.get('config_dirs') or []
+    # the adapter's and the CLI's own command lines (a tool's process may carry any argument, git's --bare included)
+    flags = sorted({a.split('=', 1)[0] for p in procs if p.get('role') in ('adapter', 'cli')
+                    for a in p.get('argv') or [] if a.split('=', 1)[0] in NATIVE_FORBIDDEN_FLAGS})
+    forbidden = sorted({n for p in procs for n in p.get('names') or [] if n in NATIVE_FORBIDDEN_ENV})
+    adapter = [p for p in procs if p.get('role') == 'adapter']
+    checks = {
+        'the provider is running': True,
+        'one per-conversation configuration directory in every provider process':
+            len(dirs) == 1 and all(p.get('config_dir') == dirs[0] for p in procs) and
+            str(dirs[0]).rstrip('/').endswith(NATIVE_CONFIG_SUFFIX),
+        'nothing in it older than the provider (an empty start)': first is not None and not older,
+        'the four native names in the adapter\'s environment':
+            all(set(names) <= set(p.get('names') or []) for p in adapter),
+        'no second authentication method and no CLAUDE_CODE_SIMPLE': not forbidden,
+        'HTTPS_PROXY is the tunnel endpoint and the switches their spelling':
+            all(p.get('proxy_is_endpoint') and p.get('switches_declared') for p in adapter),
+        'no ' + ', '.join(NATIVE_FORBIDDEN_FLAGS) + ' on a provider command line': not flags,
+    }
+    detail = {'checks': checks, 'config_dir': dirs, 'entries': len(listing), 'older_than_the_provider': older[:20],
+              'forbidden_names': forbidden, 'forbidden_flags': flags,
+              'processes': [{k: p.get(k) for k in ('pid', 'role', 'exe', 'argv', 'names')} for p in procs]}
+    return ('PASS' if all(checks.values()) else 'FAIL'), detail
+
+
+def native_model_verdict(transcript):
+    """(verdict, detail, outside) of the models the CLI's transcript names (the model record's check on the first
+    turn): the main model named, none outside NATIVE_MODELS_RECORDED (a stop); no transcript or no model UNKNOWN."""
+    models = (transcript or {}).get('models') if isinstance(transcript, dict) else None
+    if not isinstance(models, dict) or not models:
+        return 'UNKNOWN', {'models': models, 'reason': 'the transcript names no model'}, []
+    outside = sorted(m for m in models if m not in NATIVE_MODELS_RECORDED)
+    detail = {'models': models, 'recorded': list(NATIVE_MODELS_RECORDED), 'main': NATIVE_MODEL_MAIN,
+              'background_expected': NATIVE_MODEL_BACKGROUND, 'outside_the_record': outside,
+              'note': 'the background model\'s calls (titles, summaries) need not appear in the transcript'}
+    if outside:
+        return 'FAIL', detail, outside
+    return ('PASS' if NATIVE_MODEL_MAIN in models else 'FAIL'), detail, []
+
+
+def native_mask_verdict(markers, transcript):
+    """(verdict, detail) of the masking check (the engineering manager's ruling 3 of 2026-11-15): no marker in the
+    events PASS; markers attributed, from the unmasked transcript, to token occurrences only PASS; to the tunnel
+    endpoint or a switch value FAIL (the SDK's masking altered the agent's events); otherwise UNKNOWN."""
+    occ = ((transcript or {}).get('occurrences') if isinstance(transcript, dict) else None) or {}
+    detail = {'markers_in_events': markers, 'transcript_occurrences': occ}
+    if not isinstance(markers, int):
+        return 'UNKNOWN', dict(detail, reason='the events were not read')
+    if markers == 0:
+        return 'PASS', detail
+    if not occ:
+        return 'UNKNOWN', dict(detail, reason='markers in the events and no transcript to attribute them')
+    if occ.get('endpoint') or occ.get('switch'):
+        return 'FAIL', dict(detail, reason='a marker stands for the tunnel endpoint or a switch value')
+    if occ.get('token'):
+        return 'PASS', dict(detail, reason='every marker attributable to a token occurrence only')
+    return 'UNKNOWN', dict(detail, reason='no value of the four in the transcript accounts for the markers')
+
+
+def read_owner_values(stream, act):
+    """{credential id: value} of the Owner's own credentials for the in-memory value search, from STREAM (standard
+    input; never argv, the environment or a file), one line '<credential id>=<value>' each of NATIVE_OWNER_CREDENTIALS,
+    only under the Owner-run act ACT. Nothing read is repeated in a refusal."""
+    if not NATIVE_ACT.match(str(act or '')):
+        raise Refused('REFUSED', '--owner-credential-act: the label of the Owner\'s act that supplies the values')
+    if stream is None or stream.isatty():
+        raise Refused('REFUSED', '--owner-credential-stdin: pipe the values; a terminal would show them')
+    ks = key_search()
+    values = {}
+    for _ in NATIVE_OWNER_CREDENTIALS:
+        label, sep, value = stream.readline(4096).rstrip('\r\n').partition('=')
+        if not sep or label not in NATIVE_OWNER_CREDENTIALS or label in values:
+            raise Refused('REFUSED', 'standard input is not one line <credential id>=<value> for each of '
+                          f'{list(NATIVE_OWNER_CREDENTIALS)} (what was read is not shown)')
+        try:
+            ks.Search(value, prefix='')
+        except ks.SearchError:
+            raise Refused('REFUSED', f'the value of {label} is not one printable word of 16 to 1024 characters '
+                          '(it is not shown)') from None
+        values[label] = value
+    return values
+
+
+def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_values=None, owner_value_act=None,
+                             channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
+                             turn_ceiling_s=ACP_TURN_CEILING_S):
+    """native-qualification (plan leaf E-05.11; PREPARED, NOT RUN) under NATIVE_QUALIFICATION_RULE, fixed before any
+    run. ``owner_act`` names the Owner's act that covers reading and delivering the native token (OA-31 (b), (f));
+    the token is read by the dispatcher's read of its one entry, held in memory, sealed into every API call and never
+    recorded (its fingerprint only). ``owner_values`` ({credential id: value}, from standard input only, under
+    ``owner_value_act``) turn on the Owner credentials' value search; without them that part is UNKNOWN.
+    ``channels(record) -> (api, facts)``, ``provider`` (the credential provider), ``forward``, ``tunnel``
+    (``NativeTunnelView``), ``host_vantage(record, state_pid)`` and ``wait(fetch, done, ceiling)`` stand in for the
+    guest, the host's stores and the clock in tests."""
+    if prompt not in NATIVE_QUALIFICATION_PROMPTS:
+        raise Refused('REFUSED', f'--prompt: one of {sorted(NATIVE_QUALIFICATION_PROMPTS)}')
+    if not NATIVE_ACT.match(str(owner_act or '')):
+        raise Refused('REFUSED', '--owner-act: the label of the Owner\'s act that covers reading and delivering the '
+                      'native token (OA-31)')
+    if (owner_values is None) != (owner_value_act is None):
+        raise Refused('REFUSED', 'the Owner credentials\' values and --owner-credential-act go together')
+    if owner_values is not None and (sorted(owner_values) != sorted(NATIVE_OWNER_CREDENTIALS) or
+                                     not NATIVE_ACT.match(str(owner_value_act))):
+        raise Refused('REFUSED', f'the Owner credentials\' values: exactly {list(NATIVE_OWNER_CREDENTIALS)}')
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    if not inference_opted(record):
+        raise Refused('REFUSED', f'{name} was not created with create --provision --inference: the provider has '
+                      'no endpoint to reach')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    profile = ctx.profile
+    gt, cc, nt, nq = dispatch_transport(), containment(), native_token_module(), native_qualification()
+    cs = nq.secrets_check
+    endpoint_url = cs.tunnel_endpoint(profile, refused=lambda code, detail: Refused('REFUSED', f'{code}: {detail}'))
+    tunnel_entry = next(e for e in profile['network']['endpoints'] if e.get('class') == cs.TUNNEL_CLASS)
+    endpoint = (tunnel_entry['guest_address'], tunnel_entry['guest_port'])
+    origin = provider_tunnel().ORIGIN
+    forward = forward or ForwardControl(ctx, name, None)
+    tunnel = tunnel or NativeTunnelView()
+    wait = wait or wait_until
+    cid, hex_id = NATIVE_QUALIFICATION_CONVERSATION_ID, NATIVE_QUALIFICATION_CONVERSATION_ID.replace('-', '')
+    collector = (Path(ctx.repo) / 'integrations' / 'dispatch' / 'conversation_containment.py').read_text(
+        encoding='utf-8')
+    search_source = (Path(ctx.repo) / 'integrations' / 'inference' / 'inference_key_search.py').read_text(
+        encoding='utf-8')
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    api, facts = (channels or default_channels)(record)
+    facts = limited_facts(facts, profile, idir)      # one limiter for every facts request of this run (E-05.10)
+    host_vantage = host_vantage or facts_host_vantage(facts)
+    steps, stop_conditions = [], []
+    memo = {'created': False, 'echoes': [], 'surfaces': []}
+    held = None
+    t0, started = time.time(), utc_now()
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,
+              gt.TransportError, cc.ContainmentError)
+
+    def token():
+        return held.token()
+
+    def sealed(requests, timeout=900, secret=None):
+        # every call is sealed with the native token: its occurrences are counted and removed in the guest
+        data = api(requests, timeout=timeout, secret=token())
+        if isinstance(data, dict):
+            count = data.get('sealed_occurrences')
+            if count:
+                memo['echoes'].append({'requests': [f"{r.get('method')} {r.get('path')}" for r in requests],
+                                       'occurrences': count})
+            memo['surfaces'].append(('agent server answer: ' + ' '.join(
+                f"{r.get('method')} {str(r.get('path')).split('?')[0]}" for r in requests),
+                json.dumps(data, sort_keys=True, default=str).encode('utf-8')))
+        return data
+    transport = gt.GuestTransport(sealed, profile, api_login=GUEST_API_LOGIN)
+
+    def stop(what, **detail):
+        stop_conditions.append(dict({'stop': what}, **detail))
+
+    def call(method, path, body=None):
+        before = len(memo['echoes'])
+        try:
+            answer = transport(method, path, body)
+        except gt.TransportError as exc:
+            if exc.code == 'SECRET_IN_ANSWER':
+                stop('a credential found in a recorded surface (the management key in an Agent Server answer)',
+                     route=f'{method} {path}')
+            raise
+        if len(memo['echoes']) > before:
+            stop('a credential found in a recorded surface (the native token echoed in an Agent Server answer)',
+                 route=f'{method} {path}', occurrences=memo['echoes'][-1]['occurrences'])
+        return answer
+
+    def body_of(answer):
+        return answer.get('body') if isinstance(answer.get('body'), dict) else {}
+
+    def ok_status(answer):
+        return isinstance(answer.get('status'), int) and 200 <= answer['status'] < 300
+
+    def in_container(command, timeout=300):
+        answer = call('POST', f'/api/conversations/{cid}/bash/execute_bash_command',
+                      {'command': command, 'cwd': '/workspace', 'timeout': timeout})
+        body = body_of(answer)
+        if not ok_status(answer) or body.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run in {cid} (HTTP {answer.get("status")})')
+        stdout = body.get('stdout') or ''
+        memo['surfaces'].append(('container output', stdout.encode('utf-8', 'surrogatepass')))
+        return stdout
+
+    def attempt_probe(mode, timeout=540):
+        # under the transport's per-request ceiling (guest_transport.CALL_TIMEOUT_S, 600 s)
+        spec = {'mode': mode, 'token_name': cs.NATIVE_TOKEN_NAME, 'proxy_name': cs.NATIVE_PROXY_NAME,
+                'endpoint': endpoint_url, 'switch': cs.SWITCH_SPELLING, 'switches': sorted(cs.NATIVE_SWITCHES),
+                'owner_files': list(NATIVE_OWNER_FILE_NAMES), 'marker': NATIVE_MASK_MARKER,
+                'file_limit': NATIVE_FILE_LIMIT, 'total_limit': NATIVE_TOTAL_LIMIT,
+                'capture_limit': NATIVE_CAPTURE_LIMIT}
+        if mode == 'after':
+            spec['search_source'] = search_source
+        return _job_json(in_container(container_python_z(NATIVE_ATTEMPT_PROBE, spec), timeout))
+
+    def ours(report):
+        return [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
+
+    def outer_ids():
+        answer = call('GET', '/api/conversations/search?limit=100')
+        body = body_of(answer)
+        if not ok_status(answer) or not isinstance(body.get('items'), list) or body.get('next_page_id'):
+            raise Refused('SETS', f'the outer server\'s conversation list was not read in one page '
+                          f'(HTTP {answer.get("status")})')
+        return sorted(_hex_id((i or {}).get('id')) for i in body['items'])
+
+    def inner_rows():
+        data = _job_json(in_container(container_python(ACP_INNER_CONVERSATIONS, str(cc.INNER_PORT)), 120))
+        if not isinstance(data.get('items'), list):
+            raise Refused('SETS', 'the inner server\'s conversations were not read')
+        return [{'id': _hex_id(i.get('id')), 'parent_conversation_id':
+                 None if i.get('parent_conversation_id') is None else _hex_id(i['parent_conversation_id'])}
+                for i in data['items']]
+
+    def sets_now(report):
+        return {'containers': sorted(str(c.get('Id')) for c in report.get('containers') or []),
+                'outer': outer_ids(), 'inner': inner_rows()}
+
+    def observe(report, phase, provider_name):
+        """slice 1's two vantages and the connections at one moment (the tunnel endpoint the one destination)."""
+        mine = ours(report)
+        if len(mine) != 1:
+            raise Refused('CONTAINER', f'{len(mine)} containers for the qualification conversation')
+        expected = acp_expected(profile, report.get('server_user') or {}, provider_name)
+        snap = cc.parse_output(in_container(container_python(collector, 'collect container'), 300))
+        view = cc.container_verdict(snap, expected=expected)
+        tree = cc.container_verdict(snap, expected=dict(expected, provider=ACP_QUALIFICATION_PROVIDER))
+        net = cc.network_verdict(snap, endpoint=endpoint)
+        state_pid = ((mine[0].get('State') or {}).get('Pid'))
+        try:
+            host = cc.host_verdict(host_vantage(record, state_pid), inspect=mine[0], container=snap,
+                                   expected=expected)
+            host_gap = None
+        except Refused as exc:
+            host, host_gap = None, str(exc)
+        memo[f'provider_{phase}'] = [p.get('argv0') for p in tree.get('provider_tree') or []]
+        detail = {'container': {k: view.get(k) for k in ('checks', 'inner_server', 'adapters', 'provider_tree',
+                                                          'outside_inner_server', 'process_count', 'listeners')},
+                  'network': {k: net.get(k) for k in ('checks', 'connections', 'attempted', 'other_reached')},
+                  'host': None if host is None else {k: host.get(k) for k in (
+                      'checks', 'member_count', 'provider_seen', 'provider_vanished', 'appeared')},
+                  'host_vantage': 'guest root' if host is not None else host_gap,
+                  'container_guard_rejects': container_guard_rejects(report)}
+        stops = acp_containment_stops(view, host, net)
+        for s in stops:
+            stop(s['stop'].replace('the broker\'s inference endpoint', 'the tunnel endpoint'), phase=phase,
+                 observed=s['observed'])
+        return view, host, net, detail, stops
+
+    def run(step, func, always=False, needs=()):
+        if not always and stop_conditions:
+            steps.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': 'a stop condition'})
+            return
+        missing = [n for n in needs if not memo.get(n)]
+        if missing:
+            steps.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': f'not reached ({", ".join(missing)})'})
+            return
+        s = time.time()
+        try:
+            verdict, detail = func()
+        except caught as exc:  # a lost answer is UNKNOWN, never PASS
+            verdict, detail = 'UNKNOWN', {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}
+        steps.append({'step': step, 'verdict': verdict, 'seconds': round(time.time() - s, 1), 'detail': detail})
+        log(f'native-qualification: {step}: {verdict}')
+
+    def preconditions():
+        nonlocal held
+        state = forward.status()
+        session = state.get('session') if isinstance(state, dict) else None
+        try:
+            held = nt.read(provider or native_credential_provider())
+            read = {'entry': nt.ENTRY, 'fingerprint': held.fingerprint}
+        except nt.NativeTokenError as exc:
+            read = {'refused': exc.code}
+        count = call('GET', '/api/conversations/count') if held is not None else {}
+        report = facts()
+        checks = {
+            'the forward session is held': state.get('held') is True,
+            'the forward targets the provider tunnel': forward_target(session) == TUNNEL_TARGET,
+            'the native token is read from its one entry (the dispatcher\'s read)': held is not None,
+            'the outer server holds no conversation': ok_status(count) and count.get('body') == 0,
+            'no conversation container': report.get('containers') == [],
+        }
+        memo['ready'] = all(checks.values())
+        return ('PASS' if memo['ready'] else 'FAIL'), {'checks': checks, 'token': read, 'owner_act': owner_act}
+
+    def census_step(phase):
+        def step():
+            try:
+                record_ = tunnel.census()
+            except Exception as exc:  # noqa: BLE001 - a census that cannot run is not a pass: a stop, never PASS
+                stop(NATIVE_STOPS[f'census-{phase}'], verdict='UNKNOWN', error=str(exc)[:300])
+                return 'UNKNOWN', {'census': None, 'error': getattr(exc, 'code', type(exc).__name__)}
+            verdict = record_.get('verdict') if isinstance(record_, dict) else None
+            verdict = verdict if verdict in ('PASS', 'FAIL', 'UNKNOWN') else 'UNKNOWN'
+            if verdict != 'PASS':
+                stop(NATIVE_STOPS[f'census-{phase}'], verdict=verdict,
+                     violations=record_.get('violations') if isinstance(record_, dict) else None)
+            if phase == 'before' and verdict == 'PASS':
+                memo['log_name'], lines = tunnel.log_lines()
+                memo['log_mark'] = len(lines)
+                memo['census_ok'] = True
+            return verdict, {'census': record_, 'log': {'file': memo.get('log_name'), 'mark': memo.get('log_mark')}}
+        return step
+
+    def create_step():
+        try:
+            body = nq.build_create(conversation_id=cid, native_token=token(), profile=profile,
+                                   held=held.fingerprint)
+        except nq.QualificationRefused as exc:
+            return 'FAIL', {'admission': exc.to_json()}
+        answer = call('POST', '/api/conversations', body)
+        detail = {'admission': 'admitted (native_qualification.check_create)', 'status': answer.get('status'),
+                  'sent_body_sha256': transport.calls[-1].get('body_sha256')}
+        del body
+        if not ok_status(answer):
+            return 'FAIL', detail
+        memo['created'] = True
+        agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
+        detail['agent'] = {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')}
+        report = facts()
+        mine = ours(report)
+        problems = container_problems(profile, record, report, mine[0])[0] if len(mine) == 1 else \
+            [{'check': 'one container for the qualification conversation', 'observed': len(mine)}]
+        outer = outer_ids()
+        detail.update(containers=len(report.get('containers') or []), container_problems=problems, outer=outer)
+        if outer != [hex_id]:
+            stop('an outer-server conversation that was not expected', observed=outer)
+        ok = len(report.get('containers') or []) == 1 and not problems and outer == [hex_id] and \
+            agent.get('acp_server') in (None, ACP_QUALIFICATION_PROVIDER) and \
+            agent.get('acp_model') in (None, nq.MODEL)
+        return ('PASS' if ok else 'FAIL'), detail
+
+    def before_step():
+        report = facts()
+        memo['before'] = sets_now(report)
+        memo['rejects_before'] = container_guard_rejects(report)
+        verdict, detail = native_start_verdict(attempt_probe('start'), cs.NATIVE_NAMES)
+        detail.update(sets=memo['before'], container_guard_rejects=memo['rejects_before'])
+        return verdict, detail
+
+    def prompt_step():
+        answer = call('POST', f'/api/conversations/{cid}/events',
+                      {'role': 'user', 'content': [{'type': 'text', 'text': NATIVE_QUALIFICATION_PROMPTS[prompt]}],
+                       'run': True})
+        memo['sent'] = ok_status(answer)
+        return ('PASS' if memo['sent'] else 'FAIL'), {'prompt': prompt, 'status': answer.get('status')}
+
+    def execution_status():
+        answer = call('GET', f'/api/conversations/{cid}')
+        return answer, body_of(answer).get('execution_status')
+
+    def during_step():
+        report = facts()
+        view, host, net, detail, stops = observe(report, 'during', ACP_QUALIFICATION_PROVIDER)
+        _, status = execution_status()
+        detail['execution_status_after_the_snapshot'] = status
+        failed = _failed_checks(view) + _failed_checks(host) + _failed_checks(net)
+        adapter_only = failed and all(c.startswith(('adapter', 'cross-view')) for c in failed)
+        if stops or (failed and not (adapter_only and status in ACP_TURN_END)):
+            return 'FAIL', detail
+        if failed or host is None:
+            return 'UNKNOWN', detail
+        return 'PASS', detail
+
+    def job_contract_step():
+        names = native_token_environment(profile, record)
+        report = facts()
+        user = report.get('server_user') or {}
+        jobs = jobs_config(profile)
+        spec = {'pattern': (jobs.get('environment') or {}).get('credential_name_pattern'),
+                'sockets': [str(p).replace('{uid}', str(user.get('uid'))) for p in jobs.get('engine_sockets') or []],
+                'timeout': JOB_CONNECT_S}
+        if names:
+            spec['attempt_token'] = native_token_spec(profile, names)
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        data = _job_json(in_container(container_python(JOB_ENV_PROBE, arg), 300))
+        ok, problems, root = job_env_verdict(profile, user, data, attempt_token_names=names)
+        admission = attempt_token_admission(data, names)
+        if admission['provider_key']:
+            stop(NATIVE_STOPS['other-credential'], pids=sorted(admission['provider_key']))
+        memo['env_names'] = sorted({n for e in (data.get('process_environments') or {}).values()
+                                    for n in e.get('names') or []})
+        detail = {'admitted_names': list(names), 'admission': admission, 'problems': problems,
+                  'root_obtainable': root,
+                  'process_environments': {pid: e.get('names') for pid, e in
+                                           (data.get('process_environments') or {}).items() if e.get('names')},
+                  'terminal_names': data.get('terminal_names')}
+        if not ok or root or admission['provider_key'] or not names:
+            return 'FAIL', detail
+        return ('PASS' if admission['admitted'] else 'UNKNOWN'), detail
+
+    def turn_step():
+        last, met = wait(lambda: execution_status()[1], acp_turn_over, turn_ceiling_s)
+        answer, status = execution_status()
+        agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
+        verdict, outcome = acp_turn_outcome(status) if met else ('UNKNOWN', 'not ended within the ceiling')
+        if met and status == 'waiting_for_confirmation':
+            stop(ACP_CONFIRMATION_STOP, execution_status=status)
+        return verdict, {'execution_status': status, 'outcome': outcome, 'within_ceiling': met,
+                         'ceiling_s': turn_ceiling_s,
+                         'agent': {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')}}
+
+    def after_step():
+        report = facts()
+        view, host, net, detail, stops = observe(report, 'after', None)
+        after = sets_now(report)
+        sets = cc.sets_verdict(memo['before'], after, conversation_id=hex_id)
+        memo['children'] = sets['delegation']['children_route']
+        memo['rejects_after'] = container_guard_rejects(report)
+        if sets['delegation']['outer_new']:
+            stop('an outer-server conversation that was not expected', observed=sets['delegation']['outer_new'])
+        detail.update(sets={'after': after, 'checks': sets['checks'], 'delegation': sets['delegation']},
+                      container_guard_rejects={'before': memo.get('rejects_before'), 'after': memo['rejects_after']})
+        if stops or _failed_checks(view) or _failed_checks(host) or _failed_checks(net) or not sets['ok']:
+            return 'FAIL', detail
+        return ('UNKNOWN' if host is None else 'PASS'), detail
+
+    def events_step():
+        items, page, pages = [], None, 0
+        while True:
+            path = f'/api/conversations/{cid}/events/search?limit=100' + \
+                (f'&page_id={urllib.parse.quote(str(page))}' if page else '')
+            answer = call('GET', path)
+            body = body_of(answer)
+            if not ok_status(answer) or not isinstance(body.get('items'), list):
+                return 'UNKNOWN', {'reason': f'an events page was not read (HTTP {answer.get("status")})',
+                                   'pages': pages}
+            items += [e for e in body['items'] if isinstance(e, dict)]
+            pages += 1
+            page = body.get('next_page_id')
+            if not page:
+                break
+            if pages >= ACP_EVENT_PAGES:
+                return 'UNKNOWN', {'reason': f'more than {ACP_EVENT_PAGES} pages of events', 'events': len(items)}
+        memo['markers'] = json.dumps(items, sort_keys=True, default=str).count(NATIVE_MASK_MARKER)
+        kinds = {}
+        for e in items:
+            kinds[str(e.get('kind'))] = kinds.get(str(e.get('kind')), 0) + 1
+        mechanisms = acp_delegation(items, memo.get('provider_during'), memo.get('provider_after'),
+                                    memo.get('children') or [], transport.calls)
+        detail = {'events': len(items), 'pages': pages, 'kinds': kinds, 'mechanisms': mechanisms,
+                  'mask_markers': memo['markers'], 'delegation_source': NATIVE_DELEGATION_SOURCE}
+        if mechanisms['(d) OpenHands\' start_child_conversation tool']['observed'] or \
+                mechanisms['(b) an ACP session fork (ask_agent)']['driver_called']:
+            return 'FAIL', detail
+        return ('PASS' if items else 'UNKNOWN'), detail
+
+    def tunnel_log_step():
+        name_, lines = tunnel.log_lines()
+        if name_ != memo.get('log_name'):
+            return 'UNKNOWN', {'reason': 'the tunnel\'s log file changed during the run (a restart)',
+                               'before': memo.get('log_name'), 'after': name_}
+        verdict, detail, hello = native_tunnel_verdict(lines[memo['log_mark']:], origin)
+        if hello:
+            stop(NATIVE_STOPS['hello'], refused=detail['hello_refused'])
+        rejects = {'before': memo.get('rejects_before'), 'after': memo.get('rejects_after')}
+        detail['container_guard_rejects'] = rejects
+        detail['log'] = {'file': name_, 'from_line': memo['log_mark']}
+        if verdict == 'PASS' and None in rejects.values():
+            verdict = 'UNKNOWN'
+        return verdict, detail
+
+    def persisted_step():
+        data = attempt_probe('after')
+        memo['transcript'] = data.get('transcript')
+        memo['owner_files'] = data.get('owner_files_found') or []
+        search = data.get('search') or {}
+        cfg = (data.get('config_dirs') or [None])[0] or ''
+        outside = [p for p in memo['owner_files'] if not cfg or not (p + '/').startswith(cfg.rstrip('/') + '/')]
+        detail = {'token_found_in_environment': data.get('token_found_in_environment'),
+                  'token_fingerprint': data.get('token_fingerprint'), 'held_fingerprint': held.fingerprint,
+                  'search': search, 'changed_files': data.get('changed_files'), 'config_dir': cfg,
+                  'owner_files_found': memo['owner_files'], 'owner_files_outside_the_config_dir': outside,
+                  'encrypted_state': NATIVE_ENCRYPTED_STATE_NOTE}
+        if search.get('verdict') == 'found' or search.get('withheld'):
+            stop(NATIVE_STOPS['persisted'])
+            return 'FAIL', detail
+        if outside:
+            stop(NATIVE_STOPS['owner'], files=outside)
+            return 'FAIL', detail
+        if data.get('token_fingerprint') not in (None, held.fingerprint):
+            return 'FAIL', dict(detail, reason='the container holds another token than the one delivered')
+        if search.get('verdict') == 'not-found' and (search.get('controls') or {}).get('valid') is True and \
+                data.get('token_fingerprint') == held.fingerprint:
+            return 'PASS', detail
+        return 'UNKNOWN', detail
+
+    def model_step():
+        verdict, detail, outside = native_model_verdict(memo.get('transcript'))
+        if outside:
+            stop(NATIVE_STOPS['model'], models=outside)
+        return verdict, detail
+
+    def mask_step():
+        return native_mask_verdict(memo.get('markers'), memo.get('transcript'))
+
+    def owner_name_step():
+        names, files = memo.get('env_names'), memo.get('owner_files')
+        found = sorted(n for n in names or [] if n in NATIVE_OWNER_ENV_NAMES)
+        detail = {'credentials': list(NATIVE_OWNER_CREDENTIALS), 'credential_like_names_seen': names,
+                  'owner_names_found': found, 'owner_files_found': files,
+                  'structural': 'the create carries exactly the four native names (step 2\'s admission), the '
+                                'container exactly its declared binds (step 2\'s container problems), and the image '
+                                'no host Claude configuration (the live plan\'s image-inspect pre-flight)'}
+        if found:
+            stop(NATIVE_STOPS['owner'], names=found)
+            return 'FAIL', detail
+        if names is None or files is None:
+            return 'UNKNOWN', detail      # a file outside the configuration directory is step (11)'s stop
+        return 'PASS', detail
+
+    def owner_value_step():
+        detail = {'credentials': list(NATIVE_OWNER_CREDENTIALS)}
+        if owner_values is None:
+            detail['by_value'] = {'verdict': 'UNKNOWN', 'reason': NATIVE_OWNER_VALUES_OFF}
+            return 'UNKNOWN', detail
+        mark = len(memo['surfaces'])
+        capture = attempt_probe('capture').get('capture') or {}
+        del memo['surfaces'][mark:]       # the capture is searched as itself below, never kept as a run surface
+        try:
+            data = base64.b64decode(capture.get('b64') or '', validate=True)
+        except (ValueError, TypeError):
+            data = b''
+        intact = bool(data) and hashlib.sha256(data).hexdigest() == capture.get('sha256') and \
+            not capture.get('truncated')
+        ks = key_search()
+        results, found = {}, []
+        for label, value in sorted(owner_values.items()):
+            search = ks.Search(value, prefix='')
+            if data:
+                search.tar('the container\'s environments and files', data)
+            for i, (where, blob) in enumerate(memo['surfaces']):
+                search.capture(f'run surface {i}', blob)
+            search.controls()
+            report = search.report()
+            results[label] = key_search_summary(report)
+            if report['verdict'] == 'found':
+                found.append(label)
+        detail['by_value'] = {'act': owner_value_act, 'capture': {k: capture.get(k) for k in ('sha256', 'bytes',
+                                                                                              'truncated')},
+                              'capture_intact': intact, 'results': results}
+        if found:
+            stop(NATIVE_STOPS['owner'], credentials=found)
+            return 'FAIL', detail
+        valid = intact and all(r['verdict'] == 'not-found' for r in results.values())
+        return ('PASS' if valid else 'UNKNOWN'), detail
+
+    def teardown_step():
+        answer = call('DELETE', f'/api/conversations/{cid}')
+        report = facts()
+        left = ours(report)
+        count = call('GET', '/api/conversations/count')
+        ok = ok_status(answer) and not left and ok_status(count) and count.get('body') == 0
+        return ('PASS' if ok else 'FAIL'), {'delete': answer.get('status'), 'containers_left': len(left),
+                                            'outer_count_after': count.get('body')}
+
+    try:
+        run('(1) preconditions: the opted-in guest, the forward to the tunnel, the native token read, nothing created',
+            preconditions)
+        run('(1a) the tunnel\'s census before the create, and so before any model call; its log marked',
+            census_step('before'), needs=('ready',))
+        run('(2) the native qualification create, admitted and sent through the dispatcher\'s transport', create_step,
+            needs=('ready', 'census_ok'))
+        run('(3) before the turn: the sets, and the provider\'s start from an empty configuration directory',
+            before_step, needs=('created',))
+        run('(4) the fixed prompt sent', prompt_step, needs=('created', 'before'))
+        run('(5) containment while the turn runs: the container view, its connections, the guest-root view',
+            during_step, needs=('sent',))
+        run('(6) the job contract in the qualification conversation (the native token\'s name by shape)',
+            job_contract_step, needs=('sent',))
+        run('(7) the turn ends, with no interactive step', turn_step, needs=('sent',))
+        run('(8) containment after the turn, the network and the sets', after_step, needs=('sent', 'before'))
+        run('(9) the conversation\'s events: the delegation mechanisms (a) to (d), the mask markers', events_step,
+            needs=('sent',))
+        run('(10) the tunnel\'s log of this run: every target; the guard\'s counters', tunnel_log_step,
+            needs=('sent', 'log_name'))
+        run('(10a) the tunnel\'s census after the turn', census_step('after'), needs=('sent',))
+        run('(11) the native token searched for in the configuration directory and the container\'s files',
+            persisted_step, always=True, needs=('created',))
+        run('(11a) the model identifiers against the model record', model_step, needs=('sent',))
+        run('(11b) the masking check', mask_step, needs=('sent',))
+        run('(11c) the Owner\'s own credentials by name: the environments\' names and the files', owner_name_step,
+            always=True, needs=('created',))
+        run('(11d) the Owner\'s own credentials by value, in memory on the host, under the Owner\'s act',
+            owner_value_step, always=True, needs=('created',))
+    finally:
+        run('(12) teardown: the conversation deleted, its container gone, no outer conversation left',
+            teardown_step, always=True, needs=('created',))
+    out = {'schema': NATIVE_QUALIFICATION_SCHEMA, 'operation': 'native-qualification', 'plan_leaf': 'E-05.11',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name, 'conversation': cid,
+           'rule': NATIVE_QUALIFICATION_RULE, 'prompt': {'name': prompt, 'text': NATIVE_QUALIFICATION_PROMPTS[prompt]},
+           'acp_model': nq.MODEL, 'owner_act': owner_act, 'owner_value_act': owner_value_act,
+           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'transport_calls': transport.calls, 'token_echoes': memo['echoes'], 'steps': steps,
+           'stop_conditions': stop_conditions}
+    try:
+        if held is not None and held.open:
+            label = f'<native token {held.fingerprint} redacted>'
+            out = redact_secret(out, token(), label)
+            out['native_token'] = {'fingerprint': held.fingerprint, 'redacted_from_record': out.pop('redactions')}
+            ns = native_token_search_module()
+            search = ns.new_search(token())
+            search.capture('the record', json.dumps(out, sort_keys=True, default=str).encode('utf-8'))
+            for i, (where, blob) in enumerate(memo['surfaces']):
+                search.capture(f'run surface {i}', blob)
+            try:
+                report = ns.report(search, token())
+                verdict = 'PASS' if report['verdict'] == 'not-found' else \
+                    'FAIL' if report['verdict'] == 'found' else 'UNKNOWN'
+                outbound = {'verdict': report['verdict'], 'search': key_search_summary(report),
+                            'bundle_control': (report.get('bundle_control') or {}).get('valid'),
+                            'not_covered': 'no result bundle: the qualification has no repository content'}
+            except ns.SearchRefused as exc:
+                verdict, outbound = 'FAIL', {'refused': exc.code}
+            if verdict == 'FAIL':
+                stop_conditions.append({'stop': 'a credential found in a recorded surface (the outbound search)'})
+            steps.append({'step': '(13) E-05.9\'s outbound search over the record and every answer of this run',
+                          'verdict': verdict, 'detail': outbound})
+        else:
+            steps.append({'step': '(13) E-05.9\'s outbound search over the record and every answer of this run',
+                          'verdict': 'UNKNOWN', 'skipped': 'no token was read'})
+        out['steps'], out['stop_conditions'] = steps, stop_conditions
+        out['result'] = custody_verdict(steps, stop_conditions)
+        if held is not None and held.open and native_token_search_module().new_search(token()).holds(
+                json.dumps(out, sort_keys=True, default=str)):
+            raise Refused('SECRET', 'the native-qualification record would hold the native token: not written')
+        for value in (owner_values or {}).values():
+            if key_search().Search(value, prefix='').holds(json.dumps(out, sort_keys=True, default=str)):
+                raise Refused('SECRET', 'the native-qualification record would hold an Owner credential: not written')
+    finally:
+        if held is not None:
+            held.drop()          # the token released at the end of the run; the entry is unchanged
+        memo['surfaces'].clear()
+    out['record'] = write_record(idir, 'native-qualification', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 def defective_catalogue(catalogue, control_ids):
     """A copy of the catalogue whose named positive controls attempt a read that cannot succeed
     (proof item 1: an injected defective control), with the record of each replacement."""
@@ -16968,7 +18072,7 @@ def main(argv=None):
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
                'job-access-probe', 'containment-probe', 'drill', 'image-inspect',
-               'inference-forward', 'acp-qualification'):
+               'inference-forward', 'acp-qualification', 'native-qualification'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -17080,6 +18184,20 @@ def main(argv=None):
                            help="synthetic: sha256:<16 hex digits>, the broker start receipt's provider key")
             p.add_argument('--real-key-act',
                            help="real: the Owner's act that authorizes reading the provider key for the search")
+            p.add_argument('--out', help='also write the record to this new file')
+        if op == 'native-qualification':
+            p.add_argument('--prompt', required=True, choices=sorted(NATIVE_QUALIFICATION_PROMPTS),
+                           help='E-05.11: the fixed prompt (single, or delegated: one sub-agent step); no repository '
+                                'content')
+            p.add_argument('--owner-act', required=True,
+                           help="the Owner's act that covers reading the native token from its entry and delivering "
+                                'it to this disposable guest (OA-31 (b), (f)): a label, recorded')
+            p.add_argument('--owner-credential-stdin', action='store_true',
+                           help="off by default: read the Owner's own credentials' values (one line "
+                                '<credential id>=<value> each of ' + ', '.join(NATIVE_OWNER_CREDENTIALS) + ') from '
+                                'standard input for the in-memory value search; only with --owner-credential-act')
+            p.add_argument('--owner-credential-act',
+                           help="the Owner-run act that supplies those values (a label, recorded)")
             p.add_argument('--out', help='also write the record to this new file')
         if op == 'inference-forward':
             p.add_argument('--action', required=True, choices=FORWARD_ACTIONS,
@@ -17222,6 +18340,12 @@ def main(argv=None):
             result = acp_qualification_run(ctx, args.name, token, args.prompt, args.acp_model, args.key_search,
                                            provider_key=key, provider_key_fingerprint=args.provider_key_fingerprint,
                                            real_key_act=args.real_key_act, out_path=args.out)
+        elif op == 'native-qualification':
+            if args.owner_credential_stdin != (args.owner_credential_act is not None):
+                raise Refused('REFUSED', '--owner-credential-stdin and --owner-credential-act go together')
+            values = read_owner_values(sys.stdin, args.owner_credential_act) if args.owner_credential_stdin else None
+            result = native_qualification_run(ctx, args.name, args.prompt, args.owner_act, out_path=args.out,
+                                              owner_values=values, owner_value_act=args.owner_credential_act)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
                                        args.sensitivity,
@@ -17241,7 +18365,7 @@ def main(argv=None):
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
                                    'admission-probe', 'job-access-probe', 'containment-probe',
-                                   'drill', 'acp-qualification'):
+                                   'drill', 'acp-qualification', 'native-qualification'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \

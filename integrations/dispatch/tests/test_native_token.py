@@ -68,6 +68,22 @@ class Shape(unittest.TestCase):
         for rule, _ in NT.TOKEN_RULES:   # a rule's detail names the rule, never a value
             self.assertIn(rule, NT.rule_detail(rule))
 
+    def test_the_one_expression_is_the_rules(self):
+        """E-05.11: TOKEN_SHAPE (the shape for a reader that cannot run token_rule, the in-container probe) admits
+        exactly what the rules admit; OTHER_CREDENTIAL_SHAPE finds the provider's other credentials, never a token."""
+        body = TOKEN[len(NS.PREFIX):]
+        others = ['sk-ant-' + label + '-' + body for label in ('api03', 'admin01', 'sid01', 'cc', 'si')]
+        values = [TOKEN, NS.token('a', 40), NS.token('b', 512), NS.token('c', 39), NS.token('d', 513),
+                  'sk-ant-' + 'x9' + '-' + 'A_b-9' * 10, 'sk-ant-' + 'sixx' + '-' + body, TOKEN + '\n', TOKEN + '=',
+                  'sk-proj-' + body, 'sk-ant-X' + body, 'sk-ant-OAT01-' + body, NS.PREFIX, 'x' + TOKEN, *others]
+        for value in values:
+            with self.subTest(length=len(value)):
+                self.assertEqual(NT.TOKEN_SHAPE.fullmatch(value) is not None, NT.is_token(value))
+        for value in others + ['sk-proj-' + body]:
+            self.assertIsNotNone(NT.OTHER_CREDENTIAL_SHAPE.search(value))
+        for value in (TOKEN, NS.token('a', 40), NS.token('b', 512)):
+            self.assertIsNone(NT.OTHER_CREDENTIAL_SHAPE.search(value))
+
     def test_the_fingerprint_is_the_credential_provider_s(self):
         credentials = _load('aieh_credential_provider', REPO / 'integrations' / 'credentials' / 'credential_provider.py')
         self.assertEqual(NT.fingerprint(TOKEN), credentials.fingerprint(TOKEN))

@@ -1,0 +1,37 @@
+{
+  "format": "ai-engineering-harness/dispatch/native-qualification-create/v1",
+  "use": "E-05.11 only: the disposable create of the native Claude Code qualification run (decision 0023), one fixed prompt, no repository content. Never read by the dispatcher's admission: a real dispatch stage admits only its profile's pinned create template (profiles/<id>/...), which this file is not, and its tag ends -disposable (STAGE_TEMPLATE_DISPOSABLE). native_qualification.py pins it by sha256 and fills the three placeholders, each checked; acp_model is the engineering manager's model record's primary (evidence/D1-native-model-record.md), pinned here.",
+  "placeholders": ["{conversation_id}", "{native_token}", "{tunnel_endpoint}"],
+  "body": {
+    "conversation_id": "{conversation_id}",
+    "conversation_runtime": "docker",
+    "workspace": {
+      "kind": "LocalWorkspace",
+      "working_dir": "/workspace"
+    },
+    "agent_settings": {
+      "agent_kind": "acp",
+      "acp_server": "claude-code",
+      "acp_command": ["claude-agent-acp"],
+      "acp_args": [],
+      "acp_model": "claude-sonnet-5",
+      "acp_session_mode": null,
+      "acp_isolate_data_dir": true,
+      "mcp_config": {}
+    },
+    "secrets": {
+      "CLAUDE_CODE_OAUTH_TOKEN": {"kind": "StaticSecret", "value": "{native_token}"},
+      "HTTPS_PROXY": {"kind": "StaticSecret", "value": "{tunnel_endpoint}"},
+      "CLAUDE_CODE_PROXY_RESOLVES_HOSTS": {"kind": "StaticSecret", "value": "tRuE"},
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": {"kind": "StaticSecret", "value": "tRuE"}
+    },
+    "secrets_encrypted": false,
+    "autotitle": false,
+    "container": {
+      "browser": false
+    },
+    "tags": {
+      "aieh": "e-05.11-disposable"
+    }
+  }
+}

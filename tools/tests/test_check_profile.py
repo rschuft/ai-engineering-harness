@@ -634,6 +634,45 @@ class Negative(unittest.TestCase):
         comp['attempt_token_environment'] = ['ANTHROPIC_API_KEY']
         self.assertFails(self.qemu, label + ': required')
 
+    def test_native_token_environment(self):
+        """E-05.11 (declared as D-6 is): the native token's name under the opt-in composition."""
+        _, comp = self.inference()
+        block = comp['native_token_environment']
+        self.assertEqual(self.errors(self.qemu), [])
+        label = 'network.inference_composition.native_token_environment'
+        for key, value, fragment in (
+                ('names', ['ANTHROPIC_API_KEY'], '.names'),
+                ('names', ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'], '.names'),
+                ('value_shape', 'sk-ant-.*', '.value_shape'),
+                ('refused_shapes', 'sk-ant-api', '.refused_shapes'),
+                ('admitted_when', '', '.admitted_when: required'),
+                ('rule', None, '.rule: required')):
+            with self.subTest(key=key, value=value):
+                saved = copy.deepcopy(block[key])
+                block[key] = value
+                self.assertFails(self.qemu, label + fragment)
+                block[key] = saved
+        env = self.qemu['provisioning']['agent_server']['jobs']['environment']
+        env['secret_names'] = ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0', 'CLAUDE_CODE_OAUTH_TOKEN']
+        self.assertFails(self.qemu, label + '.names')
+        env['secret_names'] = ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0']
+        del comp['native_token_environment']
+        self.assertFails(self.qemu, label + ': required')
+
+    def test_native_token_constants_equal_their_sources(self):
+        """The checker's native constants are the native secret's name and native_token's two shapes."""
+        spec = importlib.util.spec_from_file_location(
+            'aieh_dispatch_native_token_cp', REPO / 'integrations' / 'dispatch' / 'native_token.py')
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+        spec = importlib.util.spec_from_file_location(
+            'aieh_dispatch_create_secrets_cp', REPO / 'integrations' / 'dispatch' / 'create_secrets.py')
+        secrets = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(secrets)
+        self.assertEqual(check_profile.NATIVE_TOKEN_NAMES, [secrets.NATIVE_TOKEN_NAME])
+        self.assertEqual(check_profile.NATIVE_TOKEN_SHAPE, native.TOKEN_SHAPE.pattern)
+        self.assertEqual(check_profile.NATIVE_REFUSED_SHAPES, native.OTHER_CREDENTIAL_SHAPE.pattern)
+
     def test_attempt_token_constants_equal_their_sources(self):
         """The checker's D-6 constants are the registry extract's API key name, the broker's token shape and the
         provider-key shapes the qualification create refuses."""

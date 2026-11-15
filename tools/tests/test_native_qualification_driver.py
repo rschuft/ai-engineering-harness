@@ -1,0 +1,673 @@
+"""Tests for the prepared native qualification driver of plan leaf E-05.11 (tools/guest.py native-qualification;
+NOT RUN live).
+
+Run from the repository root:  python -I -B -m unittest discover -s tools/tests -v
+
+stdlib unittest; no QEMU, no guest, no ssh, no tunnel, no network, no credential. The guest is replaced by fakes:
+the dispatcher's sealed API channel (the outer server, the inner server's conversations, the event stream, the
+containment collector's, the job environment probe's and the native attempt probe's output), the root facts, the
+forward session, the tunnel's census and log, the guest-root vantage and the credential provider (an in-memory one
+holding a synthetic native token built at run time). Shown: the decision rule's PASS (with the Owner's values) and
+UNKNOWN (without them, the reason recorded); each judgement's FAIL or UNKNOWN on its own fact; each stop with the
+run going on to the persisted-token search, the Owner-credential steps, the teardown and the outbound search; the
+record never holds the token or an Owner value; the native attempt probe itself, run in this process over a
+synthetic /proc and file tree, reports counts and never the token; the command line's refusals.
+"""
+from pathlib import Path
+import base64
+import contextlib
+import copy
+import gzip
+import hashlib
+import io
+import json
+import re
+import sys
+import tarfile
+import tempfile
+import types
+import unittest
+import zlib
+from unittest import mock
+
+CATEGORY = 'unit'
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+guest = module_code.load('guest', REPO / 'tools' / 'guest.py')
+aq = module_code.load('test_acp_qualification_driver_fixtures', REPO / 'tools' / 'tests' / 'test_acp_qualification_driver.py')
+NS = module_code.load('native_support_fixtures', REPO / 'integrations' / 'dispatch' / 'tests' / 'native_support.py')
+tg, tcc = aq.tg, aq.tcc
+CC = guest.containment()
+NT = guest.native_token_module()
+PROFILE = aq.PROFILE
+RECORD = aq.RECORD
+CID = guest.NATIVE_QUALIFICATION_CONVERSATION_ID
+HEX = CID.replace('-', '')
+TOKEN = NS.token('E-05.11 driver synthetic native token')
+FP = NT.fingerprint(TOKEN)
+OTHER = NS.token('another native token')
+GITHUB = 'ghp_' + 'G' * 36                       # synthetic Owner values (never real)
+LOGIN = 'sk-ant-' + 'oat01-' + 'L' * 60
+CFG = '/workspace/conversations/' + HEX + '/acp/claude-code'
+ORIGIN = 'api.anthropic.com:443'
+NAMES = sorted(['CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'CLAUDE_CODE_PROXY_RESOLVES_HOSTS',
+                'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'OH_SECRET_KEY', 'PATH'])
+NATIVE_SHAPED = {'CLAUDE_CODE_OAUTH_TOKEN': {'token': True, 'provider_key': False}}
+
+
+def process(pid, role, argv, started=1005.0, names=NAMES, **kw):
+    return dict({'pid': pid, 'role': role, 'exe': '/x/' + role, 'started': started, 'argv': argv, 'names': names,
+                 'config_dir': CFG, 'proxy_is_endpoint': True, 'switches_declared': True}, **kw)
+
+
+def start_data():
+    return {'mode': 'start', 'container_started': 1000.0, 'config_dirs': [CFG], 'config_exists': True,
+            'processes': [process(20, 'adapter', ['node', '/acp-node/bin/claude-agent-acp']),
+                          process(21, 'cli', ['/x/claude', '--output-format', 'stream-json', '--model', 'sonnet'],
+                                  started=1006.0)],
+            'config_listing': [{'path': '.claude.json', 'dir': False, 'size': 10, 'mtime': 1007.0, 'ctime': 1007.0}]}
+
+
+def after_data():
+    return dict(start_data(), mode='after', owner_files_found=[CFG + '/.claude.json'], changed_files=12,
+                token_found_in_environment=True, token_fingerprint=FP,
+                search={'verdict': 'not-found', 'bytes_searched': 1000, 'controls': {'valid': True, 'cases': 40},
+                        'surfaces': [{'label': 'configuration directory', 'complete': True, 'found': 0}]},
+                transcript={'files': 1, 'records': 6, 'models': {'claude-sonnet-5': 2}, 'sidechain_records': 0,
+                            'subagent_files': 0, 'occurrences': {'token': 0, 'endpoint': 0, 'switch': 0, 'marker': 0}})
+
+
+def capture(members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    data = buf.getvalue()
+    return {'b64': base64.b64encode(data).decode('ascii'), 'sha256': hashlib.sha256(data).hexdigest(),
+            'bytes': len(data), 'truncated': False}
+
+
+def log_line(**entry):
+    return json.dumps(entry)
+
+
+class FakeGuest:
+    """The outer server, the conversation's inner server and its container, as the sealed channel and the facts see
+    them; each attribute one fact a test changes."""
+
+    def __init__(self, test):
+        self.test = test
+        self.created = self.sent = False
+        self.calls, self.bodies = [], {}
+        self.statuses = ['running', 'finished']
+        self.during = aq.snapshot(rows=[aq.TO_ENDPOINT])
+        self.after = aq.snapshot(rows=[aq.TO_ENDPOINT])
+        self.env = aq.job_env(NATIVE_SHAPED, names=('CLAUDE_CODE_OAUTH_TOKEN',))
+        self.env_specs = []
+        self.events = [[{'id': 'e1', 'kind': 'MessageEvent', 'source': 'user'},
+                        {'id': 'e2', 'kind': guest.ACP_TOOL_CALL_KIND, 'title': 'Task'}],
+                       [{'id': 'e3', 'kind': 'MessageEvent', 'source': 'agent'}]]
+        self.inner = [{'id': CID, 'parent_conversation_id': None}]
+        self.create_status = 201
+        self.agent = {'kind': 'ACPAgent', 'acp_server': 'claude-code', 'acp_model': 'claude-sonnet-5'}
+        self.echo_token = False
+        self.probe = {'start': start_data(), 'after': after_data(),
+                      'capture': {'mode': 'capture', 'capture': capture({'proc/20/environ': b'PATH=/usr/bin\0'})}}
+        self.probe_specs = []
+        self.rejects = 3
+
+    def facts(self):
+        container = tg.conversation_container(hex_id=HEX)
+        container['State']['Pid'] = tcc.HOST_BASE + 1
+        return {'containers': [container] if self.created else [], 'server_user': dict(aq.SERVER_USER),
+                'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
+
+    def answer(self, method, path, body):
+        self.calls.append((method, path))
+        self.bodies[(method, path)] = body
+        base = f'/api/conversations/{CID}'
+        if method == 'GET' and path == '/api/conversations/count':
+            return 200, 1 if self.created else 0
+        if method == 'POST' and path == '/api/conversations':
+            self.test.assertEqual(body['secrets']['CLAUDE_CODE_OAUTH_TOKEN']['value'], TOKEN)
+            self.test.assertEqual(sorted(body['secrets']), sorted(guest.native_qualification().secrets_check.NATIVE_NAMES))
+            self.created = 200 <= self.create_status < 300
+            out = {'id': CID, 'agent': self.agent}
+            if self.echo_token:
+                out['echo'] = TOKEN
+            return self.create_status, out
+        if method == 'GET' and path == '/api/conversations/search?limit=100':
+            return 200, {'items': [{'id': CID}] if self.created else [], 'next_page_id': None}
+        if method == 'POST' and path == base + '/events':
+            self.test.assertIn(body['content'][0]['text'], guest.NATIVE_QUALIFICATION_PROMPTS.values())
+            self.sent = True
+            return 200, {'success': True}
+        if method == 'GET' and path == base:
+            status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            return 200, {'id': CID, 'execution_status': status, 'agent': self.agent}
+        if method == 'GET' and path.startswith(base + '/events/search?limit=100'):
+            index = int(path.split('page_id=p')[1]) if 'page_id=' in path else 0
+            nxt = f'p{index + 1}' if index + 1 < len(self.events) else None
+            return 200, {'items': self.events[index], 'next_page_id': nxt}
+        if method == 'POST' and path == base + '/bash/execute_bash_command':
+            return 200, {'exit_code': 0, 'stdout': self.run_script(body['command'])}
+        if method == 'DELETE' and path == base:
+            self.created = False
+            return 200, {'success': True}
+        raise AssertionError(f'unexpected request {method} {path}')
+
+    def run_script(self, command):
+        z = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d \| python3 -c .*? > /tmp/aieh-job.py && '
+                     r'python3 /tmp/aieh-job.py ([A-Za-z0-9+/=]+);', command)
+        if z:
+            script = zlib.decompress(base64.b64decode(z.group(1))).decode('utf-8')
+            spec = json.loads(zlib.decompress(base64.b64decode(z.group(2))))
+            self.test.assertEqual(script, guest.NATIVE_ATTEMPT_PROBE)
+            self.probe_specs.append(spec)
+            self.test.assertEqual('search_source' in spec, spec['mode'] == 'after')
+            return guest.JOB_MARKER + json.dumps(self.probe[spec['mode']]) + '\n'
+        match = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d > /tmp/aieh-job.py && python3 /tmp/aieh-job.py '
+                         r'([^\s;]+)', command)
+        script = base64.b64decode(match.group(1)).decode('utf-8')
+        if script.startswith('"""The containment observation'):
+            snap = self.after if self.test.turn_done else self.during
+            return CC.MARKER + json.dumps(snap) + '\n'
+        if script == guest.ACP_INNER_CONVERSATIONS:
+            return guest.JOB_MARKER + json.dumps({'key_present': True, 'status': 200, 'pages': 1,
+                                                  'key_occurrences': 0, 'items': self.inner}) + '\n'
+        if script == guest.JOB_ENV_PROBE:
+            self.env_specs.append(json.loads(base64.b64decode(match.group(2))))
+            return guest.JOB_MARKER + json.dumps(self.env) + '\n'
+        raise AssertionError('an unexpected script')
+
+    def api(self, requests, timeout=900, secret=None):
+        self.test.assertEqual(secret, TOKEN)            # every call is sealed with the native token
+        (request,) = requests
+        status, body = self.answer(request['method'], request['path'], request.get('json'))
+        text = json.dumps(body)
+        sealed = text.count(secret)
+        body = json.loads(text.replace(secret, '<sealed secret redacted>'))
+        return {'responses': [{'status': status, 'body': body}], 'session_key_occurrences': 0,
+                'sealed_occurrences': sealed}
+
+
+class FakeTunnel:
+    def __init__(self, guest_):
+        self.guest = guest_
+        self.census_verdicts = ['PASS', 'PASS']
+        self.name, self.name_after = 'tunnel-20261115T000000Z-0123abcd.jsonl', None
+        self.base = [log_line(event='tunnel-start')]
+        self.run_lines = [log_line(event='upstream-connect', conn=7, target=ORIGIN, peer={'address': '160.79.104.10',
+                                                                                           'port': 443}),
+                          log_line(event='connection', conn=7, target=ORIGIN, decision='admitted', reason=None,
+                                   end='client-closed', bytes_up=5000, bytes_down=9000)]
+        self.census_calls = []
+
+    def census(self):
+        verdict = self.census_verdicts.pop(0)
+        self.census_calls.append((list(self.guest.calls), verdict))
+        return {'format': 'aieh-provider-tunnel-census/1', 'verdict': verdict, 'violations': []}
+
+    def log_lines(self):
+        lines = self.base + (self.run_lines if self.guest.sent else [])
+        return (self.name_after or self.name) if self.guest.sent else self.name, lines
+
+
+class DriverRun(unittest.TestCase):
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp(prefix='aieh-nq-'))
+        self.addCleanup(tg.remove_tree, self.state)
+        self.guest = FakeGuest(self)
+        self.tunnel = FakeTunnel(self.guest)
+        self.provider = NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, TOKEN)})
+        self.session = {'ports': {'tunnel': '127.0.0.1:18433'}}
+        self.turn_done = False
+
+    def wait(self, fetch, done, ceiling):
+        value = fetch()
+        for _ in range(20):
+            if done(value):
+                break
+            value = fetch()
+        self.turn_done = done(value)
+        return value, done(value)
+
+    def run_driver(self, owner=True, profile=PROFILE, **kw):
+        written = {}
+        ctx = types.SimpleNamespace(profile=profile, repo=REPO, instance_dir=lambda n: self.state / n)
+        args = dict(channels=lambda rec: (self.guest.api, self.guest.facts), provider=self.provider,
+                    forward=types.SimpleNamespace(status=lambda: {'held': True, 'session': self.session}),
+                    tunnel=self.tunnel, host_vantage=lambda rec, pid: aq.host_snapshot(), wait=self.wait)
+        if owner:
+            args.update(owner_values={'cred-owner-github': GITHUB, 'cred-owner-provider-login': LOGIN},
+                        owner_value_act='OA-test owner values')
+        args.update(kw)
+
+        def no_wait(seconds):
+            raise AssertionError('the facts limiter waited')
+        with mock.patch.object(guest, 'running_instance', side_effect=lambda c, n: (None, RECORD)), \
+                mock.patch.object(guest, 'write_record', side_effect=lambda i, op, out: written.update({op: out})), \
+                mock.patch.object(guest, 'FACTS_WAIT', no_wait), mock.patch.object(guest, 'log'):
+            out = guest.native_qualification_run(ctx, 'g1', 'single', 'OA-31 (b) (f)', **args)
+        text = json.dumps(written, default=str)
+        for secret in (TOKEN, TOKEN[len(NS.PREFIX):], GITHUB, LOGIN):
+            self.assertNotIn(secret, text)
+        if written:
+            self.assertEqual(written['native-qualification']['result'], out['result'])
+        return out
+
+    def step(self, out, number):
+        found = [s for s in out['steps'] if s['step'].startswith(f'({number})')]
+        self.assertEqual(len(found), 1, number)
+        return found[0]
+
+    def verdicts(self, out):
+        return {s['step'].split(' ', 1)[0]: s['verdict'] for s in out['steps']}
+
+    def stops(self, out):
+        return [s['stop'] for s in out['stop_conditions']]
+
+    def test_the_rule_passes_on_a_guest_that_holds_it(self):
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
+        self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)', '(8)',
+                                                    '(9)', '(10)', '(10a)', '(11)', '(11a)', '(11b)', '(11c)', '(11d)',
+                                                    '(12)', '(13)'])
+        (before, _), (after, _) = self.tunnel.census_calls
+        self.assertNotIn(('POST', '/api/conversations'), before)            # before the create: no model call
+        self.assertIn(('POST', f'/api/conversations/{CID}/events'), after)
+        self.assertEqual(self.provider.reads, [NT.ENTRY])                     # the dispatcher's read, once
+        self.assertEqual(out['native_token']['fingerprint'], FP)
+        self.assertEqual(self.step(out, 10)['detail']['admitted_to_origin'], 1)
+        self.assertEqual(self.step(out, 13)['detail']['verdict'], 'not-found')
+        self.assertEqual(self.guest.env_specs[0]['attempt_token']['names'], ['CLAUDE_CODE_OAUTH_TOKEN'])
+        self.assertEqual([s['mode'] for s in self.guest.probe_specs], ['start', 'after', 'capture'])
+
+    def test_without_the_owners_values_that_part_is_unknown_with_its_reason(self):
+        out = self.run_driver(owner=False)
+        self.assertEqual(out['result'], 'UNKNOWN')
+        unknown = [k for k, v in self.verdicts(out).items() if v != 'PASS']
+        self.assertEqual(unknown, ['(11d)'])
+        self.assertIn('credential access the Owner has not granted', self.step(out, '11d')['detail']['by_value']['reason'])
+        self.assertNotIn('capture', [s['mode'] for s in self.guest.probe_specs])
+
+    def test_preconditions(self):
+        for change, check in (
+                (lambda: self.session.update(ports={'broker': '127.0.0.1:18432'}), 'the forward targets the provider tunnel'),
+                (lambda: setattr(self, 'provider', NS.ObservedProvider({})),
+                 'the native token is read from its one entry (the dispatcher\'s read)'),
+                (lambda: setattr(self, 'provider', NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, 'sk-ant-api03-' + 'k' * 50)})),
+                 'the native token is read from its one entry (the dispatcher\'s read)')):
+            with self.subTest(check=check):
+                self.setUp()
+                change()
+                out = self.run_driver(owner=False)
+                self.assertEqual(self.step(out, 1)['verdict'], 'FAIL')
+                self.assertFalse(self.step(out, 1)['detail']['checks'][check])
+                self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+                self.assertEqual(self.tunnel.census_calls, [])
+
+    def test_the_census_before_the_create_is_a_stop_and_no_model_call(self):
+        self.tunnel.census_verdicts = ['UNKNOWN']
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['census-before'], self.stops(out))
+        self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+        self.assertEqual(self.step(out, 13)['verdict'], 'PASS')            # the outbound search still runs
+
+    def test_an_unreadable_tunnel_log_before_the_create_creates_nothing(self):
+        def unreadable():
+            raise OSError('the log is not readable')
+        self.tunnel.log_lines = unreadable
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '1a')['verdict'], 'UNKNOWN')
+        self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+
+    def test_an_admission_refusal_sends_nothing(self):
+        with mock.patch.object(guest.native_qualification(), 'FIXTURE_SHA256', '0' * 64):
+            out = self.run_driver()
+        self.assertEqual(self.step(out, 2)['verdict'], 'FAIL')
+        self.assertEqual(self.step(out, 2)['detail']['admission']['code'], 'FIXTURE_DRIFTED')
+        self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+
+    def test_the_answers_model_and_server(self):
+        self.guest.agent = dict(self.guest.agent, acp_model='claude-opus-5')
+        self.assertEqual(self.step(self.run_driver(), 2)['verdict'], 'FAIL')
+
+    def test_the_providers_start(self):
+        cases = {
+            'an entry older than the provider': lambda d: d['config_listing'].append(
+                {'path': 'settings.json', 'dir': False, 'size': 5, 'mtime': 990.0, 'ctime': 990.0}),
+            'bare mode': lambda d: d['processes'][1]['argv'].append('--bare'),
+            'an MCP configuration': lambda d: d['processes'][1]['argv'].append('--mcp-config={}'),
+            'a second authentication method': lambda d: d['processes'][0].update(
+                names=NAMES + ['ANTHROPIC_API_KEY']),
+            'CLAUDE_CODE_SIMPLE': lambda d: d['processes'][1].update(names=NAMES + ['CLAUDE_CODE_SIMPLE']),
+            'two configuration directories': lambda d: (d['processes'][1].update(config_dir='/tmp/x'),
+                                                        d.update(config_dirs=[CFG, '/tmp/x'])),
+            'another directory': lambda d: (d['processes'][0].update(config_dir='/var/lib/other/.claude'),
+                                            d['processes'][1].update(config_dir='/var/lib/other/.claude'),
+                                            d.update(config_dirs=['/var/lib/other/.claude'])),
+            'the proxy': lambda d: d['processes'][0].update(proxy_is_endpoint=False),
+            'a switch': lambda d: d['processes'][0].update(switches_declared=False),
+            'a missing name': lambda d: d['processes'][0].update(names=[n for n in NAMES if n != 'HTTPS_PROXY']),
+        }
+        for name, change in cases.items():
+            with self.subTest(case=name):
+                data = start_data()
+                change(data)
+                self.assertEqual(guest.native_start_verdict(data, guest.native_qualification().secrets_check.NATIVE_NAMES)[0],
+                                 'FAIL')
+        self.assertEqual(guest.native_start_verdict(start_data(), guest.native_qualification().secrets_check.NATIVE_NAMES)[0],
+                         'PASS')
+        tool = start_data()      # a tool's process (git --bare) is not the provider's command line
+        tool['processes'].append(process(40, 'descendant', ['git', 'init', '--bare'], started=1009.0))
+        self.assertEqual(guest.native_start_verdict(tool, guest.native_qualification().secrets_check.NATIVE_NAMES)[0],
+                         'PASS')
+        no_adapter = start_data()
+        no_adapter['processes'] = no_adapter['processes'][1:]
+        self.assertEqual(guest.native_start_verdict(no_adapter, ())[0], 'UNKNOWN')
+        self.guest.probe['start']['processes'][1]['argv'].append('--bare')
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 3)['verdict'], 'FAIL')
+        self.assertEqual(self.step(out, 3)['detail']['forbidden_flags'], ['--bare'])
+
+    def test_another_credential_in_an_environment_is_a_stop(self):
+        self.guest.env = aq.job_env({'CLAUDE_CODE_OAUTH_TOKEN': {'token': False, 'provider_key': True}},
+                                    names=('CLAUDE_CODE_OAUTH_TOKEN',))
+        out = self.run_driver()
+        self.assertIn(guest.NATIVE_STOPS['other-credential'], self.stops(out))
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')            # teardown still runs
+
+    def test_an_owner_credential_name_is_a_stop(self):
+        self.guest.env = aq.job_env(NATIVE_SHAPED, names=('CLAUDE_CODE_OAUTH_TOKEN', 'GITHUB_TOKEN'))
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '11c')['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['owner'], self.stops(out))
+
+    def test_a_connection_elsewhere_is_a_stop(self):
+        self.guest.during = aq.snapshot(rows=[aq.TO_ENDPOINT, aq.TO_ELSEWHERE])
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertTrue(any('the tunnel endpoint' in s for s in self.stops(out)))
+        self.assertEqual(self.step(out, 11)['verdict'], 'PASS')            # the persisted-token search still runs
+
+    def test_the_tunnels_log(self):
+        def verdict(*extra, run=None):
+            return guest.native_tunnel_verdict((self.tunnel.run_lines if run is None else run) + list(extra), ORIGIN)
+        self.assertEqual(verdict()[0], 'PASS')
+        refused = log_line(event='connection', conn=8, target='statsig.anthropic.com:443', decision='refused',
+                           reason='TUNNEL_TARGET_REFUSED', end=None, bytes_up=0, bytes_down=0)
+        v, detail, hello = verdict(refused)
+        self.assertEqual((v, hello, detail['refused']), ('PASS', False, [{'target': 'statsig.anthropic.com:443',
+                                                                          'reason': 'TUNNEL_TARGET_REFUSED'}]))
+        for reason in guest.NATIVE_HELLO_REFUSALS:
+            ech = log_line(event='connection', conn=9, target=ORIGIN, decision='refused', reason=reason)
+            self.assertEqual(verdict(ech)[0::2], ('FAIL', True))
+        self.assertEqual(verdict(run=[])[0], 'FAIL')                        # never through the tunnel
+        self.assertEqual(verdict(log_line(event='refusals-suppressed', reason='x', count=4))[0], 'UNKNOWN')
+        self.assertEqual(verdict('not json')[0], 'UNKNOWN')
+        self.tunnel.run_lines.append(log_line(event='connection', conn=9, target=ORIGIN, decision='refused',
+                                              reason='TUNNEL_ECH_REFUSED'))
+        out = self.run_driver()
+        self.assertIn(guest.NATIVE_STOPS['hello'], self.stops(out))
+
+    def test_a_tunnel_restart_or_unread_counters_are_unknown(self):
+        self.tunnel.name_after = 'tunnel-20261115T010000Z-89abcdef.jsonl'
+        self.assertEqual(self.step(self.run_driver(), 10)['verdict'], 'UNKNOWN')
+        self.setUp()
+        self.guest.facts_orig = self.guest.facts
+        self.guest.facts = lambda: dict(self.guest.facts_orig(), admission={})
+        self.assertEqual(self.step(self.run_driver(), 10)['verdict'], 'UNKNOWN')
+
+    def test_the_census_after_the_turn(self):
+        self.tunnel.census_verdicts = ['PASS', 'FAIL']
+        out = self.run_driver()
+        self.assertIn(guest.NATIVE_STOPS['census-after'], self.stops(out))
+
+    def test_the_persisted_token_search(self):
+        self.guest.probe['after']['search'] = dict(self.guest.probe['after']['search'], verdict='found')
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 11)['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['persisted'], self.stops(out))
+        for change, want in ((lambda d: d.update(token_fingerprint=NT.fingerprint(OTHER)), 'FAIL'),
+                             (lambda d: d['search'].update(controls={'valid': False}), 'UNKNOWN'),
+                             (lambda d: d['search'].update(verdict='incomplete'), 'UNKNOWN'),
+                             (lambda d: d.update(search={'withheld': True}), 'FAIL'),
+                             (lambda d: d.update(owner_files_found=['/var/lib/other/.claude']), 'FAIL')):
+            with self.subTest(want=want):
+                self.setUp()
+                change(self.guest.probe['after'])
+                self.assertEqual(self.step(self.run_driver(), 11)['verdict'], want)
+
+    def test_the_models(self):
+        self.assertEqual(guest.native_model_verdict({'models': {'claude-sonnet-5': 3,
+                                                                'claude-haiku-4-5-20251001': 1}})[0], 'PASS')
+        self.assertEqual(guest.native_model_verdict({'models': {'claude-opus-5': 1}})[0], 'FAIL')     # no main loop
+        self.assertEqual(guest.native_model_verdict({'models': {}})[0], 'UNKNOWN')
+        self.assertEqual(guest.native_model_verdict(None)[0], 'UNKNOWN')
+        self.guest.probe['after']['transcript']['models'] = {'claude-sonnet-5': 1, 'claude-sonnet-5-5': 1}
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '11a')['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['model'], self.stops(out))
+        record = (REPO / 'evidence' / 'D1-native-model-record.md').read_text(encoding='utf-8')
+        for model in guest.NATIVE_MODELS_RECORDED:
+            self.assertIn(f'`{model}`', record)
+
+    def test_the_masking_check(self):
+        occ = lambda **o: {'occurrences': dict({'token': 0, 'endpoint': 0, 'switch': 0, 'marker': 0}, **o)}
+        self.assertEqual(guest.native_mask_verdict(0, occ())[0], 'PASS')
+        self.assertEqual(guest.native_mask_verdict(2, occ(token=2))[0], 'PASS')
+        self.assertEqual(guest.native_mask_verdict(1, occ(endpoint=1))[0], 'FAIL')
+        self.assertEqual(guest.native_mask_verdict(1, occ(switch=1, token=1))[0], 'FAIL')
+        self.assertEqual(guest.native_mask_verdict(1, occ())[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(1, None)[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(None, occ())[0], 'UNKNOWN')
+        self.guest.events[1].append({'id': 'e4', 'kind': 'MessageEvent', 'text': 'proxy ' + guest.NATIVE_MASK_MARKER})
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 9)['detail']['mask_markers'], self.step(out, '11b')['verdict']), (1, 'UNKNOWN'))
+
+    def test_the_delegation_mechanisms(self):
+        self.guest.events[1].append({'id': 'e5', 'kind': 'ActionEvent', 'tool_name': 'start_child_conversation'})
+        self.assertEqual(self.step(self.run_driver(), 9)['verdict'], 'FAIL')
+        self.assertIn('isSidechain', guest.NATIVE_DELEGATION_SOURCE)
+
+    def test_the_owner_value_search(self):
+        self.guest.probe['capture']['capture'] = capture({'proc/20/environ': b'GITHUB_TOKEN=' + GITHUB.encode() + b'\0'})
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '11d')['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['owner'], self.stops(out))
+        self.setUp()
+        broken = capture({'proc/20/environ': b'PATH=/usr/bin\0'})
+        broken['sha256'] = '0' * 64
+        self.guest.probe['capture']['capture'] = broken
+        self.assertEqual(self.step(self.run_driver(), '11d')['verdict'], 'UNKNOWN')
+
+    def test_a_token_echoed_by_the_server_is_a_stop_and_never_recorded(self):
+        self.guest.echo_token = True
+        out = self.run_driver()
+        self.assertTrue(any('echoed' in s for s in self.stops(out)))
+        self.assertEqual(out['token_echoes'][0]['occurrences'], 1)
+
+    def test_refusals_before_anything_runs(self):
+        for kw, message in (({'prompt': 'free text'}, '--prompt'), ({'owner_act': ''}, '--owner-act'),
+                            ({'owner_values': {'cred-owner-github': GITHUB}}, 'go together')):
+            with self.subTest(message=message):
+                args = dict(prompt='single', owner_act='OA-31 (b) (f)')
+                args.update(kw)
+                ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
+                with self.assertRaises(guest.Refused) as caught:
+                    guest.native_qualification_run(ctx, 'g1', args.pop('prompt'), args.pop('owner_act'), **args)
+                self.assertIn(message, str(caught.exception))
+        self.assertEqual(self.provider.reads, [])
+
+
+class NativeTokenContract(unittest.TestCase):
+    """The native token's name in the job contract (the profile's native_token_environment, declared as D-6 is)."""
+
+    def test_the_name_only_for_an_opted_in_guest(self):
+        self.assertEqual(guest.native_token_environment(PROFILE, RECORD), ('CLAUDE_CODE_OAUTH_TOKEN',))
+        self.assertEqual(guest.native_token_environment(PROFILE, {'provisioning': {}}), ())
+        bare = copy.deepcopy(PROFILE)
+        del bare['network']['inference_composition']['native_token_environment']
+        self.assertEqual(guest.native_token_environment(bare, RECORD), ())
+
+    def test_the_spec_is_the_profiles_and_the_codes(self):
+        spec = guest.native_token_spec(PROFILE, ('CLAUDE_CODE_OAUTH_TOKEN',))
+        self.assertEqual((spec['token_shape'], spec['provider_key_shape']),
+                         (NT.TOKEN_SHAPE.pattern, NT.OTHER_CREDENTIAL_SHAPE.pattern))
+
+    def test_the_probe_and_the_verdict(self):
+        d6 = aq.d6
+        names = ('CLAUDE_CODE_OAUTH_TOKEN',)
+        out = d6.run_env_probe({'1': b'OH_SECRET_KEY=x\0PATH=/bin\0',
+                                '20': b'CLAUDE_CODE_OAUTH_TOKEN=' + TOKEN.encode() + b'\0',
+                                '21': b'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-api03-' + b'k' * 60 + b'\0',
+                                '22': b'CLAUDE_CODE_OAUTH_TOKEN=short\0'},
+                               guest.native_token_spec(PROFILE, names))
+        envs = out['process_environments']
+        self.assertEqual(envs['20']['shapes'], {'CLAUDE_CODE_OAUTH_TOKEN': {'token': True, 'provider_key': False}})
+        self.assertEqual(envs['21']['shapes'], {'CLAUDE_CODE_OAUTH_TOKEN': {'token': False, 'provider_key': True}})
+        self.assertEqual(envs['22']['shapes'], {'CLAUDE_CODE_OAUTH_TOKEN': {'token': False, 'provider_key': False}})
+        self.assertNotIn(TOKEN, json.dumps(out))
+        admission = guest.attempt_token_admission(out, names)
+        self.assertEqual((sorted(admission['admitted']), sorted(admission['provider_key']),
+                          sorted(admission['not_token'])), (['20'], ['21'], ['22']))
+        ok, problems, _ = guest.job_env_verdict(PROFILE, aq.SERVER_USER, aq.job_env(NATIVE_SHAPED, names=names), names)
+        self.assertEqual((ok, problems), (True, []))
+        ok, _, _ = guest.job_env_verdict(PROFILE, aq.SERVER_USER, aq.job_env(NATIVE_SHAPED, names=names), ())
+        self.assertFalse(ok)                                                  # never admitted without the names
+
+
+class TunnelView(unittest.TestCase):
+    def test_a_tunnel_that_is_not_running_is_a_refusal_never_an_escape(self):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-nqt-'))
+        self.addCleanup(tg.remove_tree, tmp)
+        pt = guest.provider_tunnel()
+        ctx = pt.Context(run_dir=lambda: tmp, logs=lambda: tmp, out=io.StringIO(), err=io.StringIO())
+        with mock.patch.object(pt, 'managed_context', return_value=ctx):
+            with self.assertRaises(guest.Refused) as caught:
+                guest.NativeTunnelView().log_lines()
+        self.assertEqual(caught.exception.code, 'TUNNEL')
+
+
+class OwnerValues(unittest.TestCase):
+    def stream(self, text):
+        s = io.StringIO(text)
+        s.isatty = lambda: False
+        return s
+
+    def test_read_from_standard_input_only_under_the_act(self):
+        values = guest.read_owner_values(self.stream(f'cred-owner-github={GITHUB}\ncred-owner-provider-login={LOGIN}\n'),
+                                         'OA-test act')
+        self.assertEqual(values, {'cred-owner-github': GITHUB, 'cred-owner-provider-login': LOGIN})
+        for text, act in ((f'cred-owner-github={GITHUB}\n', 'OA-test act'),
+                          (f'cred-owner-github={GITHUB}\ncred-owner-github={GITHUB}\n', 'OA-test act'),
+                          (f'other={GITHUB}\ncred-owner-provider-login={LOGIN}\n', 'OA-test act'),
+                          (f'cred-owner-github=short\ncred-owner-provider-login={LOGIN}\n', 'OA-test act'),
+                          (f'cred-owner-github={GITHUB}\ncred-owner-provider-login={LOGIN}\n', '')):
+            with self.subTest(act=act):
+                with self.assertRaises(guest.Refused) as caught:
+                    guest.read_owner_values(self.stream(text), act)
+                self.assertNotIn(GITHUB, str(caught.exception))
+                self.assertNotIn(LOGIN, str(caught.exception))
+        tty = self.stream('x')
+        tty.isatty = lambda: True
+        with self.assertRaises(guest.Refused):
+            guest.read_owner_values(tty, 'OA-test act')
+
+    def test_the_command_line_needs_both_or_neither(self):
+        with mock.patch.object(guest, 'Context'), mock.patch.object(guest, 'native_qualification_run') as run:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = guest.main(['native-qualification', '--profile', 'p', '--state-dir', 's', '--name', 'n',
+                                 '--prompt', 'single', '--owner-act', 'OA-31', '--owner-credential-stdin'])
+        self.assertEqual(rc, 1)
+        run.assert_not_called()
+
+
+class AttemptProbe(unittest.TestCase):
+    """NATIVE_ATTEMPT_PROBE itself, run in this process over a synthetic /proc and file tree."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-nqp-'))
+        self.addCleanup(tg.remove_tree, self.tmp)
+        proc, self.root, self.cfg = self.tmp / 'proc', self.tmp / 'root', self.tmp / 'cfg'
+        for d in (proc / '1', proc / '20', proc / '21', proc / '30', self.root / 'workspace', self.cfg / 'projects' / 'p'):
+            d.mkdir(parents=True)
+        (proc / 'stat').write_text('cpu 1 2 3\nbtime 1000\n')
+        env = {'PATH': '/usr/bin', 'CLAUDE_CODE_OAUTH_TOKEN': TOKEN, 'HTTPS_PROXY': 'http://172.17.0.1:8090',
+               'CLAUDE_CODE_PROXY_RESOLVES_HOSTS': 'tRuE', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': 'tRuE',
+               'CLAUDE_CONFIG_DIR': str(self.cfg)}
+        environ = b''.join(f'{k}={v}'.encode() + b'\0' for k, v in env.items())
+        for pid, argv in (('1', ['tini', '--', 'openhands-agent-server']), ('20', ['node', '/acp-node/bin/claude-agent-acp']),
+                          ('21', ['/x/claude', '--model', 'sonnet', TOKEN]), ('30', ['bash'])):
+            (proc / pid / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in argv) + b'\0')
+            (proc / pid / 'environ').write_bytes(environ if pid in ('20', '21') else b'PATH=/usr/bin\0')
+            (proc / pid / 'stat').write_text(f'{pid} (x) S ' + ' '.join(['0'] * 30))
+        (self.cfg / '.claude.json').write_text('{}')
+        records = [{'type': 'assistant', 'message': {'model': 'claude-sonnet-5'}},
+                   {'type': 'assistant', 'isSidechain': True, 'message': {'model': 'claude-haiku-4-5-20251001'}},
+                   {'type': 'user', 'message': {'content': 'http://172.17.0.1:8090'}}]
+        (self.cfg / 'projects' / 'p' / 's.jsonl').write_text('\n'.join(json.dumps(r) for r in records) + '\n')
+        (self.root / 'workspace' / 'notes.txt').write_text('nothing here')
+        self.proc = proc
+
+    def run_probe(self, mode):
+        spec = {'mode': mode, 'token_name': 'CLAUDE_CODE_OAUTH_TOKEN', 'proxy_name': 'HTTPS_PROXY',
+                'endpoint': 'http://172.17.0.1:8090', 'switch': 'tRuE',
+                'switches': ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_PROXY_RESOLVES_HOSTS'],
+                'owner_files': list(guest.NATIVE_OWNER_FILE_NAMES), 'marker': guest.NATIVE_MASK_MARKER,
+                'file_limit': guest.NATIVE_FILE_LIMIT, 'total_limit': guest.NATIVE_TOTAL_LIMIT,
+                'capture_limit': guest.NATIVE_CAPTURE_LIMIT, 'proc': str(self.proc), 'root': str(self.root)}
+        if mode == 'after':
+            spec['search_source'] = (REPO / 'integrations' / 'inference' / 'inference_key_search.py').read_text('utf-8')
+        arg = base64.b64encode(zlib.compress(json.dumps(spec).encode('utf-8'))).decode('ascii')
+        out = io.StringIO()
+        with mock.patch.object(sys, 'argv', ['aieh-job.py', arg]), contextlib.redirect_stdout(out):
+            exec(compile(guest.NATIVE_ATTEMPT_PROBE, 'aieh-job.py', 'exec'), {'__name__': '__main__'})
+        text = out.getvalue()
+        for secret in (TOKEN, TOKEN[len(NS.PREFIX):]):
+            self.assertNotIn(secret, text)
+        return guest._job_json(text)
+
+    def test_start(self):
+        data = self.run_probe('start')
+        roles = {p['pid']: p['role'] for p in data['processes']}
+        self.assertEqual(roles, {20: 'adapter', 21: 'cli'})
+        self.assertEqual(data['config_dirs'], [str(self.cfg)])
+        self.assertIn('<token>', data['processes'][1]['argv'])
+        self.assertTrue(all(p['proxy_is_endpoint'] and p['switches_declared'] for p in data['processes']))
+        self.assertIn('.claude.json', [e['path'] for e in data['config_listing']])
+        self.assertTrue(data['config_exists'])
+
+    def test_after_not_found_and_found(self):
+        data = self.run_probe('after')
+        self.assertEqual(data['token_fingerprint'], FP)
+        self.assertEqual(data['search']['verdict'], 'not-found', data['search'])
+        self.assertTrue(data['search']['controls']['valid'])
+        self.assertEqual(data['transcript']['models'], {'claude-sonnet-5': 1, 'claude-haiku-4-5-20251001': 1})
+        self.assertEqual(data['transcript']['sidechain_records'], 1)
+        self.assertEqual(data['transcript']['occurrences'], {'token': 0, 'endpoint': 1, 'switch': 0, 'marker': 0})
+        (self.root / 'workspace' / 'leak.txt').write_text('x' + base64.b64encode(TOKEN.encode()).decode())
+        (self.cfg / 'projects' / 'p' / 's.jsonl').write_text(json.dumps({'text': TOKEN}) + '\n')
+        (self.root / 'workspace' / '.git-credentials').write_text('none')
+        data = self.run_probe('after')
+        self.assertEqual(data['search']['verdict'], 'found')
+        self.assertEqual(data['transcript']['occurrences']['token'], 1)
+        self.assertTrue(any(p.endswith('.git-credentials') for p in data['owner_files_found']))
+
+    def test_capture(self):
+        data = self.run_probe('capture')
+        raw = base64.b64decode(data['capture']['b64'])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), data['capture']['sha256'])
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
+            names = tar.getnames()
+        self.assertIn('proc/20/environ', names)
+
+
+if __name__ == '__main__':
+    unittest.main()

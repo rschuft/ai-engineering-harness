@@ -944,6 +944,41 @@ present), `ACPAgentSettings` has no `acp_env`, and a blank `StaticSecret` valida
 exposure class is the one S-01.3.1 recorded through `/proc/1/environ`
 ([slice 2 record](../../evidence/S-03.3-slice2-qualification-create.md)).
 
+## The native qualification create (E-05.11)
+
+Plan leaf E-05.11 qualifies the pinned Claude Code on the native execution profile (decision 0023), as D1 runs it,
+with "a disposable pinned qualification create refused for a real stage". That create carries the native secret
+set, which the dispatcher admits for the D1 stage on the native profile only, and its tag ends `-disposable`, which
+that stage refuses as its template (`STAGE_TEMPLATE_DISPOSABLE`); every other stage refuses its `secrets`
+(`BODY_FIELD_UNKNOWN`). So it lives here, as S-03.3's does. [`native_qualification.py`](native_qualification.py)
+builds and checks it; `tools/guest.py native-qualification` (prepared, not run) sends it. **Not yet verified** against
+a live Agent Server.
+
+| File | What it is |
+|---|---|
+| [`qualification/native-claude-code-create.json`](qualification/native-claude-code-create.json) | The fixture (`ai-engineering-harness/dispatch/native-qualification-create/v1`), pinned by `FIXTURE_SHA256`: the D1 run shape (the Docker runtime, `/workspace`, the agent block of the D1 template with `acp_model` `claude-sonnet-5`, the model record's primary, pinned in the file), the four native `StaticSecret`s (`CLAUDE_CODE_OAUTH_TOKEN`, `HTTPS_PROXY`, the two switches spelled `tRuE`), `secrets_encrypted` false, no browser, the tag `e-05.11-disposable`; three placeholders: the reserved conversation id, the native token and the profile's tunnel endpoint |
+
+`build_create(conversation_id=, native_token=, profile=, held=None)` fills the fixture and checks it;
+`check_create(body, conversation_id=, profile=, held=None)` admits exactly the fixture with its three values. The
+secrets and agent blocks are checked first by the check shared with the D1 stage on the native profile
+(`create_secrets.check_native_secrets`, one function of one module: its `NATIVE_*` codes, above), with this module's
+`QualificationRefused` (`ai-engineering-harness/dispatch/native-qualification-refusal/v1`); then its own:
+
+| Code | Refused |
+|---|---|
+| `FIXTURE_DRIFTED`, `FIXTURE_INVALID` | the fixture is not its pinned bytes, or not its strict JSON shape (format, placeholders, the native names and slots, the recorded model) |
+| `CONVERSATION_ID_MISMATCH`, `BODY_MALFORMED` | not the reserved conversation id; not an object, or a nested member that is not one |
+| `RUNTIME_NOT_DOCKER` | `conversation_runtime` other than `docker` |
+| `MODEL_NOT_RECORDED` | `acp_model` other than the model record's primary (`claude-sonnet-5`) |
+| `WORKSPACE_NOT_FIXTURE`, `CAPS_OVERRIDE_FORBIDDEN`, `CONTAINER_NOT_FIXTURE`, `TAGS_NOT_FIXTURE` | the nested objects closed, as `check_create_body` closes them for D1 (E-05.9's review NIT-a): `workspace` exactly the fixture's; in `container` a resource cap, another member or another value; `tags` exactly the fixture's |
+| `BODY_NOT_FIXTURE` | a fixture field missing, or any field not the filled fixture's |
+
+[`tests/test_native_qualification.py`](tests/test_native_qualification.py) (E-05.11, unit), with a synthetic token
+built at run time and the checked-in profile: the positive control (the model the record's primary; the run shape
+the D1 template's but for the tag and the model); a real stage refuses it (the D1 template check, the stage body
+check also with the native secrets admitted, the artifact reader); the one shared check with this module's type and
+codes; each own refusal on its own fact, no detail repeating the token; the pin.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json

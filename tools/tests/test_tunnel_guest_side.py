@@ -67,7 +67,11 @@ def declared_rules(profile):
     network = profile['network']
     endpoint = [e for e in network['endpoints'] if e.get('class') == 'inference']
     admission = guest.admission_config(profile).get('network')
-    return {'inference_endpoint': endpoint, 'inference_composition': network['inference_composition'],
+    # E-05.11's native_token_environment is a declaration of the job contract the host-side drivers judge by (as
+    # D-6's attempt_token_environment, which the pinned digest includes); nothing of it reaches the guest's seed
+    # (test_the_seed_is_s032s) or a rule the guest enforces, so it is left out of S-03.2's declared rules.
+    composition = {k: v for k, v in network['inference_composition'].items() if k != 'native_token_environment'}
+    return {'inference_endpoint': endpoint, 'inference_composition': composition,
             'admission_network': admission,
             'guard_rules': {tool: guest.guard_rules_for(profile, OPTED, tool) for tool in ('iptables', 'ip6tables')},
             'daemon_json': guest.declared_daemon_json(profile, True)}
