@@ -94,7 +94,7 @@ shown (`RECORDED_FIELDS`). Only `accept-objective` may (`RECORDED_KINDS`); there
 | `entry` | the log entry the decision rests on, `evidence/bootstrap-log.md#<anchor>`; the statement's `reference` is `harness:<entry>` |
 | `date` | the entry's date, `YYYY-MM-DD`, from its title |
 | `revision` | the full commit of the harness repository at which the log was read, its `HEAD` on `refs/heads/main` |
-| `origin` | the harness's `origin` URL with any userinfo left out (`https://user@host/...` is `https://host/...`, `user@host:path` is `host:path`); absent when the harness has no `origin` |
+| `origin` | the harness's `origin` URL with any userinfo left out (`https://user@host/...` is `https://host/...`, `user@host:path` is `host:path`), only when it is a network URL (`https`, `http`, `ssh` or `git`, with a host) or the scp-like `user@host:path`; absent when the harness has no `origin`, and when its `origin` is a local filesystem path or a `file://` URL, which would name a machine path |
 | `digest` | `sha256:` of the log's blob at that commit |
 | `about` | `{name, as}`: the name the statement names, `as` `change` (the subject's change) or `repository` (the project repository's name) |
 | `challengeShown` | `false` |
@@ -210,11 +210,13 @@ first as any statement is (it must be the Owner's, above). Then:
    `source`, and the statement's words are not equal to, or contained in, any Original Quote's text
    (split into words the same way).
 7. The statement is about the change: its words, joined by single spaces, are at least 12 characters
-   (`delegated_decision.QUOTE_MIN`) and contain the change's name or the project repository's name. The
-   repository's name is the basename of the project's `origin` URL without `.git`, or, without an
-   `origin`, the basename of its work tree. The record's `about` keeps the name that matched (the
-   change's first). A short repository name (a work tree named `p`) matches almost any text: name the
-   project by its `origin`.
+   (`delegated_decision.QUOTE_MIN`) and name the change or the project repository **as a whole token**
+   (`names`): the name occurs bounded on each side by the text's start or end or a character outside
+   `[A-Za-z0-9_.-]`. So `aieh-d1-demo:` and `(aieh-d1-demo),` name `aieh-d1-demo`, and `aieh-d1-demo-2`,
+   `xaieh-d1-demo`, `aieh-d1-demo.` (a period is a name character) and the prefix `aieh-d1` do not. A
+   name shorter than 3 characters never qualifies. The repository's name is the basename of the
+   project's `origin` URL without `.git`, or, without an `origin`, the basename of its work tree. The
+   record's `about` keeps the name that matched (the change's first).
 
 That the Owner wrote the block is not checked (decision 0018 point 7: a log quote is checked for
 presence, not authorship); the statement's `attributedTo` must still be `owner`.
@@ -801,6 +803,10 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
 
 - Any real acceptance: the recorder has run on throwaway fixture repositories only, with synthetic
   statements. No Owner acceptance has been recorded with it.
+- The recorded-statement path reads the project's and the harness's `origin` through the repository-access
+  module's private configuration accessor (`Repository._config()`, the repository's own configuration under
+  the policy it was opened with): the module has no public reader of `remote.origin.url`. A change to that
+  accessor would need this reader changed with it.
 - The recorded-statement path (E-05.12) on a real project: it has run on throwaway project repositories
   and a throwaway harness log only (one test reads this checkout's log at `HEAD`, read only, and records
   nothing). It has not run on the demo repository `aieh-d1-demo` or recorded any Owner acceptance.

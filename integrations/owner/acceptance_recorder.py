@@ -43,9 +43,9 @@ statement's text wholly, by this rule (``verbatim_admits``): the statement's wor
 read without a leading ``>`` quote marker and the text split on any whitespace (line breaks included),
 are a contiguous run of the block's words, compared exactly (case and punctuation kept). The statement
 must also be at least 12 characters and name the change or the project repository (its ``origin``
-basename, else its directory's), and must not be the request itself, by reference or by text. The
-commit is the one ``record`` makes; the decision record has ``recorded`` (the entry, its date, the
-harness revision and ``origin``, the log's digest, the name the statement names and ``challengeShown:
+basename, else its directory's) as a whole token of at least 3 characters (``names``), and must not be
+the request itself, by reference or by text. The commit is the one ``record`` makes; the decision record
+has ``recorded`` (the entry, its date, the harness revision and its network ``origin``, the log's digest, the name the statement names and ``challengeShown:
 false``) in place of ``shown`` (``owner_decision.py``) and its commit message says that no challenge was
 shown.
 
@@ -108,6 +108,9 @@ OWNER_TITLE = 'Owner '  # an Owner entry's dated title begins so, after '<date>:
 HARNESS_BRANCH = 'refs/heads/main'  # the harness's HEAD must be this symbolic reference
 OPENS_FENCE = re.compile(r'^\s*(?:```|~~~)')
 SCP_LIKE = re.compile(r'^[^/@:]+@(?P<rest>[^/:]+:.*)$')
+ORIGIN_SCHEMES = ('https', 'http', 'ssh', 'git')  # an origin the record keeps (recordable_origin)
+NAME_CHAR = '[A-Za-z0-9_.-]'  # a name's characters: a whole-token match is bounded by anything else
+NAME_MIN = 3  # a shorter change or repository name never names the statement's subject
 
 REMEDIES = {
     'PROJECT_UNAVAILABLE': 'name the work tree of the project repository, with a commit on a branch, and run '
@@ -574,6 +577,20 @@ def without_userinfo(url):
     return scp.group('rest') if scp else url
 
 
+def recordable_origin(url):
+    """The harness's origin URL as the record keeps it, or None: only a URL with a network scheme
+    (``ORIGIN_SCHEMES``: https, http, ssh, git) and a host, or the scp-like ``user@host:path``, each without its
+    userinfo. A local filesystem path or a ``file://`` URL is never recorded: it would name a machine path."""
+    if not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() in ORIGIN_SCHEMES and parts.netloc.rpartition('@')[2]:
+        return without_userinfo(url)
+    if '://' not in url and SCP_LIKE.match(url):
+        return without_userinfo(url)
+    return None
+
+
 def repository_name(url, root):
     """The project repository's name: the basename of its ``origin`` URL (URL), without ``.git``, or, when it
     has none (or an empty basename), the basename of its work tree ROOT."""
@@ -630,8 +647,16 @@ def read_log_entry(harness, anchor):
     if not entry.title.startswith(OWNER_TITLE):
         raise RecorderError('STATEMENT_ENTRY_NOT_OWNER', f'the entry {anchor!r} is {entry.title[:80]!r}: its title, '
                             f'after its date, does not begin with {OWNER_TITLE!r}')
-    return RecordedEntry(entry, commit, 'sha256:' + hashlib.sha256(blob).hexdigest(),
-                         without_userinfo(origin) if origin else None)
+    return RecordedEntry(entry, commit, 'sha256:' + hashlib.sha256(blob).hexdigest(), recordable_origin(origin))
+
+
+def names(text, name):
+    """Whether TEXT names NAME as a whole token: NAME, at least ``NAME_MIN`` characters, bounded on each side by
+    the text's start or end or a character outside ``[A-Za-z0-9_.-]`` (so ``aieh-d1-demo:`` names
+    ``aieh-d1-demo``, and ``aieh-d1-demo-2`` or ``xaieh-d1-demo`` do not)."""
+    if not isinstance(name, str) or len(name) < NAME_MIN:
+        return False
+    return re.search(rf'(?<!{NAME_CHAR}){re.escape(name)}(?!{NAME_CHAR})', text) is not None
 
 
 def _about(words, change, name):
@@ -641,10 +666,10 @@ def _about(words, change, name):
         raise RecorderError('STATEMENT_NOT_ABOUT_CHANGE', f'the statement is {len(text)} characters, fewer than '
                             f'{G.QUOTE_MIN}')
     for value, kind in ((change, 'change'), (name, 'repository')):
-        if value and value in text:
+        if names(text, value):
             return {'name': value, 'as': kind}
     raise RecorderError('STATEMENT_NOT_ABOUT_CHANGE', f'the statement names neither the change {change!r} nor the '
-                        f'project repository {name!r}')
+                        f'project repository {name!r} as a whole token (a name of at least {NAME_MIN} characters)')
 
 
 def record_from_log(project, change, item, statement, *, recorded_by, identity, harness=REPO, amend=False, now=None,

@@ -36,9 +36,9 @@ may rest on the Owner's statement already recorded verbatim in the harness log's
 this order (``RECORDED_BLOCK_FIELDS``): ``restsOn`` (``recorded-statement``), ``entry`` (the entry,
 ``evidence/bootstrap-log.md#<anchor>``), ``date`` (the entry's date, ``YYYY-MM-DD``), ``revision``
 (the full commit of the harness repository at which the log was read, on its ``main``), ``origin``
-(the harness's ``origin`` URL without userinfo; absent when it has none), ``digest`` (``sha256:`` of the
-log's blob there), ``about`` (``{name, as}``: the name the statement names, ``as`` ``change`` (then the
-subject's change) or ``repository``) and ``challengeShown`` (``false``). The statement's ``reference``
+(the harness's ``origin`` URL without userinfo, when it is a network URL; absent otherwise),
+``digest`` (``sha256:`` of the log's blob there), ``about`` (``{name, as}``: the name the statement
+names, ``as`` ``change`` (then the subject's change) or ``repository``) and ``challengeShown`` (``false``). The statement's ``reference``
 is then ``harness:<entry>``. Only the kinds in ``RECORDED_KINDS`` may rest on a recorded statement.
 
 Attribution and reference values use the intent-record/v1 grammar
@@ -65,6 +65,10 @@ RECORDED_OPTIONAL = ('origin',)  # absent when the harness has no origin remote
 ABOUT_FIELDS = ('name', 'as')
 ABOUT_KINDS = ('change', 'repository')
 USERINFO = re.compile(r'^[a-z][a-z0-9+.-]*://[^/]*@', re.IGNORECASE)
+# A recorded origin: a network URL (https, http, ssh, git) with a host, or the scp-like host:path (its user left
+# out); never a local path or file:// URL.
+RECORDED_ORIGIN = re.compile(r'^(?:(?:https?|ssh|git)://[^/\s]+(?:/\S*)?|[A-Za-z0-9][A-Za-z0-9.-]+:(?!//)[^\s\\]+)$',
+                             re.IGNORECASE)
 RECORDED_KINDS = ('accept-objective',)
 RESTS_ON = 'recorded-statement'
 LOG_ENTRY = re.compile(r'^evidence/bootstrap-log\.md#[a-z0-9][a-z0-9-]{0,127}$')
@@ -247,9 +251,9 @@ def recorded_problems(recorded, statement, subject=None):
         problems.append('recorded.digest must be sha256:<64 hex digits>, the log\'s blob at that revision')
     if 'origin' in recorded:
         origin = recorded['origin']
-        if not isinstance(origin, str) or not origin.strip() or origin.split() != [origin] \
-                or USERINFO.match(origin):
-            problems.append('recorded.origin must be the harness\'s origin URL, one word, without userinfo')
+        if not isinstance(origin, str) or not RECORDED_ORIGIN.match(origin) or USERINFO.match(origin):
+            problems.append('recorded.origin must be the harness\'s origin URL (https, http, ssh or git, or '
+                            'host:path), without userinfo; a local path is never recorded')
     about = recorded['about']
     if not isinstance(about, dict) or list(about) != list(ABOUT_FIELDS) or about['as'] not in ABOUT_KINDS \
             or not isinstance(about['name'], str) or not about['name'].strip():

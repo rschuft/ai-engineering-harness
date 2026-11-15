@@ -346,6 +346,31 @@ class RecordingFromTheLog(Fixture):
         self.assertEqual(D.check_record(result['decision']), [])
         self.assertTrue(self.resolve(result['reference'], repo=project).resolved)
 
+    def test_a_crlf_log_with_a_byte_order_mark_is_read(self):
+        # The reviewer's P7, a positive control, with a realistic project origin (the project's name is
+        # aieh-d1-demo): a committed log with CRLF line endings and a UTF-8 byte order mark.
+        harness = self.root / 'crlf-harness'
+        build_harness(harness, log=b'\xef\xbb\xbf' + LOG_FIXTURE.read_bytes().replace(b'\n', b'\r\n'),
+                      origin=HARNESS_ORIGIN)
+        result = self.record(harness=harness)
+        self.assertEqual(result['decision']['recorded']['about'], {'name': 'aieh-d1-demo', 'as': 'repository'})
+        self.assertTrue(self.resolve(result['reference']).resolved)
+
+    def test_a_local_origin_is_not_recorded(self):
+        # Finding 4: a harness whose origin is a local path or a file:// URL; the record leaves it out (it would
+        # name a machine path).
+        upstream = self.root / 'upstream'
+        for name, origin in (('path', str(upstream)), ('file-url', upstream.as_uri())):
+            with self.subTest(origin=name):
+                harness = self.root / f'harness-{name}'
+                build_harness(harness, origin=origin)
+                project = self.root / f'aieh-d1-demo-{name}'
+                build_project(project)
+                result = self.record(project=project, harness=harness)
+                self.assertNotIn('origin', result['decision']['recorded'])
+                self.assertNotIn(str(upstream), D.dumps(result['decision']))
+                self.assertEqual(D.check_record(result['decision']), [])
+
     def test_the_command_line(self):
         said = self.root / 'statement.json'
         said.write_text(json.dumps(statement()), encoding='utf-8')
@@ -381,6 +406,8 @@ class RecordedStatementRefusals(Fixture):
         add_d1_change(root / 'p')
         design = fx.loose_head(root / 'p')
         build_project(root / 'other', origin='https://example.invalid/demo/another-project.git')
+        build_project(root / 'prefix', origin='https://example.invalid/demo/aieh-d1.git')  # a prefix of the name
+        build_project(root / 'as', origin=None)  # no origin: its name is its directory's, too short to count
         build_harness(root / 'untracked', commit=False)  # unborn HEAD, the log in the work tree only
         uncommitted = root / 'uncommitted'  # a commit without the log; the log in the work tree only
         uncommitted.mkdir()
@@ -523,6 +550,21 @@ class RecordedStatementRefusals(Fixture):
         self.assertEqual(caught.exception.code, 'STATEMENT_NOT_ABOUT_CHANGE')
         self.assertIn("'another-project'", caught.exception.detail)
 
+    def test_a_name_counts_only_as_a_whole_token_of_at_least_three_characters(self):
+        # Dispatch E-05.12-3, finding 1, on E-05.1's statement: a repository named aieh-d1 is not named by
+        # "aieh-d1-demo:" (a prefix of a token); a work tree named "as" (no origin) is a whole token of the
+        # statement ("as a small Python function") but shorter than three characters.
+        joined = ' '.join(A.statement_words(TEXT))
+        self.assertIn(' as a small ', joined)
+        self.assertFalse(A.names(joined, 'as'))
+        for name in ('prefix', 'as'):
+            project = self.root / name
+            with self.subTest(project=name), self.unchanged(project), \
+                    self.assertRaises(A.RecorderError) as caught:
+                self.record(project=project)
+            self.assertEqual(caught.exception.code, 'STATEMENT_NOT_ABOUT_CHANGE')
+            self.assertIn("'aieh-d1'" if name == 'prefix' else "'as'", caught.exception.detail)
+
     def test_the_request_itself_is_refused(self):
         said = statement(text=REQUEST_TEXT, reference=REQUEST)
         error = self.refused('ACCEPTANCE_IS_REQUEST', self.record, D1_CHANGE, said=said)
@@ -636,6 +678,48 @@ class TheTextMatchingRule(unittest.TestCase):
                 ('/srv/git/x.git', '/srv/git/x.git')):
             with self.subTest(url=url):
                 self.assertEqual(A.without_userinfo(url), expected)
+
+    def test_only_a_network_origin_is_recorded(self):
+        for url, expected in (
+                ('https://fixture-user@example.invalid/h/x.git', 'https://example.invalid/h/x.git'),
+                ('http://example.invalid/h/x.git', 'http://example.invalid/h/x.git'),
+                ('ssh://git@example.invalid/h/x.git', 'ssh://example.invalid/h/x.git'),
+                ('git://example.invalid/h/x.git', 'git://example.invalid/h/x.git'),
+                ('git@example.invalid:h/x.git', 'example.invalid:h/x.git'),
+                ('/srv/git/x.git', None),
+                ('file:///srv/git/x.git', None),
+                (r'D:\repos\x', None),
+                ('D:/repos/x', None),
+                ('../x', None),
+                ('ftp://example.invalid/x.git', None),
+                ('https:///x.git', None),
+                (None, None)):
+            with self.subTest(url=url):
+                self.assertEqual(A.recordable_origin(url), expected)
+                if expected is not None:
+                    self.assertTrue(D.RECORDED_ORIGIN.match(expected), expected)
+        for local in ('/srv/git/x.git', 'file:///srv/git/x.git', r'D:\repos\x', 'D:/repos/x'):
+            with self.subTest(recorded=local):
+                self.assertIsNone(D.RECORDED_ORIGIN.match(local))
+
+    def test_a_name_is_a_whole_token_of_at_least_three_characters(self):
+        for text, name, expected in (
+                ('Finalize the change for aieh-d1-demo: now', 'aieh-d1-demo', True),
+                ('aieh-d1-demo', 'aieh-d1-demo', True),
+                ('accept (aieh-d1-demo), please', 'aieh-d1-demo', True),
+                ('accept aieh-d1-demo, please', 'aieh-d1-demo', True),
+                ('accept aieh-d1-demo-2 now', 'aieh-d1-demo', False),
+                ('accept xaieh-d1-demo now', 'aieh-d1-demo', False),
+                ('accept aieh-d1-demo_v2 now', 'aieh-d1-demo', False),
+                ('accept aieh-d1-demo. Now', 'aieh-d1-demo', False),  # '.' is a name character
+                ('for aieh-d1-demo: now', 'aieh-d1', False),
+                ('as a small Python function', 'as', False),
+                ('as a small Python function', 'a', False),
+                ('the abc repository', 'abc', True),
+                ('the abc repository', '', False),
+                ('the abc repository', None, False)):
+            with self.subTest(text=text, name=name):
+                self.assertIs(A.names(text, name), expected)
 
     def test_the_repository_name(self):
         for url, root, expected in (
