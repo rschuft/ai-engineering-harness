@@ -17,7 +17,12 @@ exercise's phase plumbing (test_live_phases.py) it also takes a bot's proposal: 
 and ``GET /pulls?state=...`` (the pull requests in that state). Every request authenticated with the
 protection auditor's token goes to ``audit``, the fake of the protection check's reads
 (integrations/gitea/tests/protection_fake.py: its scope rule refuses that token every write);
-``after_merge`` (a callable) runs after a merge, before its answer.
+``after_merge`` (a callable) runs after a merge, before its answer. For E-05.4's result path (extensions only):
+a pull request's view also carries its body, ``html_url`` and ``draft`` (a title beginning with one of Gitea
+28.3.0's default WORK_IN_PROGRESS_PREFIXES, ``WIP:`` and ``[WIP]``, ASCII case-insensitive, which also makes it
+not mergeable); ``GET /pulls/{base}/{head}`` (GetPullRequestByBaseHead, any state); ``GET /pulls`` paged; ``POST
+/pulls`` answers 409 for a second open pull request of the same head and base; and ``drop_after`` drops the answer
+of a request it handled (a write that landed, its answer lost).
 
 It is callable in memory (``fake(port, path, method=..., body=..., headers=..., timeout=...)``, the
 signature of gitea_host.http_get) and served over host loopback by ``Server`` (one in-process
@@ -59,6 +64,7 @@ BOTS = ('aieh-bot-planner', 'aieh-bot-builder', 'aieh-bot-reviewer', 'aieh-bot-v
 PASSWORD = 'synthetic-owner-password-not-a-real-credential'
 BOT_TOKENS = {bot: hashlib.sha1(f'synthetic token {bot}'.encode()).hexdigest() for bot in BOTS}
 DROP = object()  # the server closes the connection without an answer
+WIP_PREFIXES = ('WIP:', '[WIP]')  # Gitea 28.3.0's default [repository.pull-request] WORK_IN_PROGRESS_PREFIXES
 
 
 def sha(*parts) -> str:
@@ -86,6 +92,9 @@ class FakeGitea:
         self.on_merge = None
         self.after_merge = None       # a callable run after a merge, before its answer
         self.fail_routes = {}         # {substring of the path: HTTP status} answered instead
+        # E-05.4: {(method, substring of the path)}: the request is handled, then its answer is dropped (a write that
+        # landed and whose answer was lost)
+        self.drop_after = set()
         self.audit = protection_fake.ProtectionGitea(_roles, repository)  # the protection auditor's reads
         # GET /token of each bot but the auditor (whose token the audit fake answers): a view, or a status
         self.token_views = {spec['user']: {'id': n + 1, 'name': f'aieh-{role}-x', 'scopes': list(spec['scopes']),
@@ -186,8 +195,12 @@ class FakeGitea:
                                     'user': {'id': 9, 'login': view['login']}})
         if method == 'GET' and route == f'{repo}/pulls':
             state = query.get('state', 'open')
-            return self.reply(200, [self.pull_view(n) for n, pr in sorted(self.pulls.items())
-                                    if state == 'all' or pr['state'] == state])
+            listed = [self.pull_view(n) for n, pr in sorted(self.pulls.items())
+                      if state == 'all' or pr['state'] == state]
+            if 'page' in query:  # Gitea's paging: limit a page, pages from 1
+                limit = int(query.get('limit', 30))
+                listed = listed[(int(query['page']) - 1) * limit:int(query['page']) * limit]
+            return self.reply(200, listed)
         if method == 'GET' and route == '/user':
             return self.reply(200, {'login': doer, 'is_admin': self.users[doer]['is_admin']})
         if method == 'GET' and route.startswith('/users/') and route.endswith('/tokens'):
@@ -216,9 +229,19 @@ class FakeGitea:
         if method == 'POST' and route.startswith(f'{repo}/contents/'):
             return self.create_file(route[len(f'{repo}/contents/'):], doer, json.loads(body) if body else {})
         if method == 'POST' and route == f'{repo}/pulls':
-            return self.open_pull(doer, json.loads(body) if body else {})
+            answer = self.open_pull(doer, json.loads(body) if body else {})
+            return DROP if ('POST', '/pulls') in self.drop_after else answer
         if route.startswith(f'{repo}/pulls/'):
             rest = route[len(f'{repo}/pulls/'):].split('/')
+            if method == 'GET' and len(rest) >= 2 and not rest[0].isdigit():
+                # GET /pulls/{base}/{head} (GetPullRequestByBaseHead): the pull request of that base and head
+                # branch, whatever its state
+                head_ref = urllib.parse.unquote('/'.join(rest[1:]))
+                found = [n for n, pr in sorted(self.pulls.items()) if pr['base'] == rest[0]
+                         and pr['head_ref'] == head_ref]
+                if not found:
+                    return self.reply(404, {'message': 'pull request does not exist'})
+                return self.reply(200, self.pull_view(found[0]))
             number = int(rest[0]) if rest[0].isdigit() else None
             if number not in self.pulls:
                 return self.reply(404, {'message': 'pull request not found'})
@@ -280,17 +303,27 @@ class FakeGitea:
         head, base = form.get('head'), form.get('base')
         if head not in self.branches or base != 'main':
             return self.reply(422, {'message': 'head or base missing'})
+        if any(pr['head_ref'] == head and pr['base'] == base and pr['state'] == 'open' and not pr['merged']
+               for pr in self.pulls.values()):
+            # routers/api/v1/repo/pull.go CreatePullRequest: an unmerged pull request of the same head and base
+            return self.reply(409, {'message': 'pull request already exists for these targets'})
         number = len(self.pulls) + 1
         self.pulls[number] = {'state': 'open', 'title': form.get('title') or '', 'user': doer, 'base': base,
                               'head_ref': head, 'base_at_open': self.branches[base], 'merged': False,
                               'merged_by': None, 'merge_commit_sha': None, 'mergeable': True,
-                              'head_repo': self.repository}
+                              'head_repo': self.repository, 'body': form.get('body') or ''}
         return self.reply(201, self.pull_view(number))
 
     def pull_view(self, number):
         pr = self.pulls[number]
+        # E-05.4: Gitea 28.3.0's view also carries the body, html_url and draft: a title beginning with one of the
+        # default WORK_IN_PROGRESS_PREFIXES, ASCII case-insensitive (models/issues/pull.go IsWorkInProgress), which
+        # also makes it not mergeable (PullRequest.Mergeable)
+        draft = any(pr['title'][:len(p)].lower() == p.lower() for p in WIP_PREFIXES)
         return {'number': number, 'state': pr['state'], 'title': pr['title'], 'user': {'login': pr['user']},
-                'merged': pr['merged'], 'mergeable': pr['mergeable'],
+                'body': pr.get('body', ''), 'draft': draft,
+                'html_url': f'http://127.0.0.1/{self.repository}/pulls/{number}',
+                'merged': pr['merged'], 'mergeable': pr['mergeable'] and not draft,
                 'merged_by': {'login': pr['merged_by']} if pr['merged_by'] else None,
                 'merge_commit_sha': pr['merge_commit_sha'],
                 'base': {'ref': pr['base'], 'sha': self.branches[pr['base']], 'repo': {'full_name': self.repository}},

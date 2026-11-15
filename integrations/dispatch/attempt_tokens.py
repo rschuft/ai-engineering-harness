@@ -50,6 +50,11 @@ amendment 1):
 3. the per-attempt inference token (decision 0015) is a separate credential, issued by the inference broker and
    revoked at attempt end; it is not handled here.
 
+``ResultSession(delivery, repository=, port=)`` (E-05.4) is the result path's Gitea API session in that context:
+the delivered token's ``Authorization`` header on the requests of ``result_routes`` only (the reconciliation's and
+the read-back's reads and ``POST /pulls``); a merge, review, contents or administration request is
+BOT_ROUTE_REFUSED before anything is sent, and the session ends with the context.
+
 A token Gitea refuses (revoked by the administrative lifecycle, or not this instance's) is ROLE_TOKEN_REJECTED
 until that lifecycle replaces the entry. During bootstrap the Owner's account can read the standing credential
 (decision 0013 point 6, a disclosed same-account limit). Not here: any live run
@@ -61,6 +66,8 @@ import contextlib
 import hashlib
 import http.client as http_client
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -170,6 +177,74 @@ def _gitea_view(port: int, token: str, bot: str, scopes, http=None) -> None:
     if sorted(map(str, granted)) != sorted(scopes):
         raise DispatchRefused('ROLE_TOKEN_MISMATCH', f'the token\'s scopes are {sorted(map(str, granted))!r}, not '
                               f'exactly {sorted(scopes)!r}')
+
+
+# ---------------------------------------------------------------------------
+# E-05.4: the builder bot's Gitea API session of the result path (integrations/dispatch/result_path.py), on a closed
+# route list, as authorization_proposal.BOT_ROUTES is for the proposal act: the reconciliation's and the read-back's
+# reads and the one write that opens a pull request. No merge, review, contents, branch, protection, token, user or
+# administration route: a request outside the list is BOT_ROUTE_REFUSED before anything is sent. The push itself is
+# git's (smart HTTP, repository_access push), never the API's.
+
+PULL_PAGE_LIMIT = 50                     # open pull requests a page; a page shorter than this is the last
+ATTEMPT_BRANCH = r'work/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'   # work/<attempt id>
+BASE_BRANCH = roles.DEFAULT_BRANCH       # the protected branch a result's pull request targets
+REPOSITORY_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}')
+TIMEOUT_S = 30.0
+
+
+def result_routes(repository: str) -> tuple:
+    """Every (method, path) the result path's bot session can send for REPOSITORY (OWNER/NAME), as compiled
+    patterns: the protected branch and the attempt's branch (Gitea 28.3.0 routes GET /branches/*, so the branch's
+    slash travels as it is), the open pull requests page by page, the pull request of the protected branch and an
+    attempt's branch (GET /pulls/{base}/*, GetPullRequestByBaseHead), one pull request by its index, and the one
+    write, POST /pulls."""
+    if not isinstance(repository, str) or REPOSITORY_NAME.fullmatch(repository) is None:
+        raise ValueError(f'not a repository OWNER/NAME: {repository!r}')
+    repo = '/repos/' + re.escape(repository)
+    base = re.escape(BASE_BRANCH)
+    return tuple((method, re.compile(pattern)) for method, pattern in (
+        ('GET', rf'^{repo}/branches/(?:{base}|{ATTEMPT_BRANCH})$'),
+        ('GET', rf'^{repo}/pulls\?state=open&page=[1-9][0-9]{{0,2}}&limit={PULL_PAGE_LIMIT}$'),
+        ('GET', rf'^{repo}/pulls/{base}/{ATTEMPT_BRANCH}$'),
+        ('GET', rf'^{repo}/pulls/[1-9][0-9]{{0,9}}$'),
+        ('POST', rf'^{repo}/pulls$'),
+    ))
+
+
+class ResultSession:
+    """The stage bot's requests of the result path to one repository: each in ``result_routes``, with the
+    delivered token's ``Authorization`` header taken from the attempt context at each call (so the session ends
+    with the context), and nothing else. ``call`` answers (status, parsed JSON or None); a request outside the
+    list is BOT_ROUTE_REFUSED with nothing sent; a lost answer is the transport's own exception, for the caller to
+    settle (a read refuses, a write is settled by reading)."""
+
+    def __init__(self, delivery: AttemptRoleToken, *, repository: str, port: int, http=None):
+        if not isinstance(delivery, AttemptRoleToken):
+            raise TypeError('the session takes the attempt context\'s delivery')
+        self.delivery, self.repository, self.port = delivery, repository, port
+        self.user = delivery.bot
+        self.routes = result_routes(repository)
+        self._http = http or roles.host.http_get
+
+    def allowed(self, method: str, path: str) -> bool:
+        return any(m == method and p.match(path) for m, p in self.routes)
+
+    def call(self, method: str, path: str, body=None):
+        if not isinstance(path, str) or not self.allowed(method, path):
+            raise DispatchRefused('BOT_ROUTE_REFUSED', f'{method} {str(path)[:200]} is not a request of the result '
+                                  'path\'s bot session (no merge, review, contents or administration route)')
+        headers = {'Accept': 'application/json', 'Authorization': self.delivery.credential().authorization()}
+        data = None
+        if body is not None:
+            data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+        status, _headers, payload = self._http(self.port, '/api/v1' + path, method=method, body=data,
+                                               headers=headers, timeout=TIMEOUT_S)
+        try:
+            return status, json.loads(payload) if payload else None
+        except ValueError:
+            return status, None
 
 
 @contextlib.contextmanager

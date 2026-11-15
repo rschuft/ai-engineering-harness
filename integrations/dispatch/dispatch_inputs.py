@@ -292,6 +292,43 @@ REFUSALS = {
     'ATTEMPT_ENDED': 'the attempt has an end record: no result is taken from it',
     'ATTEMPT_RESULT_HANDED_ON': 'the attempt\'s result journal is dispatched: its result is the result path\'s, and it '
                                 'is not ended as interrupted',
+    # E-05.4: the result path (result_path.py) and the bot session of attempt_tokens.py
+    'RESULT_NOT_RESERVED': 'the attempt has no result journal reserved at its intake for this verified result: '
+                           'nothing is pushed',
+    'RESULT_JOURNAL_CONFLICT': 'the attempt\'s result journal holds another verified result: a second result of one '
+                               'attempt is never taken',
+    'RESULT_JOURNAL_FAILED': 'the attempt\'s result journal is failed (its code in its detail): nothing is written for '
+                             'it; what follows is planning\'s',
+    'RESULT_EMPTY_CHANGE': 'the verified result\'s tree is the base\'s tree: a finished attempt with no change hands '
+                           'on no usable result; its journal is failed and nothing is written to Gitea (the open '
+                           'decision of the work design, section 7, is planning\'s)',
+    'RESULT_REPOSITORY_NOT_ADMITTED': 'the attempt\'s repository is not one the result path admits (the D1 demo '
+                                      'repository only) or the Gitea target names another',
+    'OUTBOUND_SEARCH_REQUIRED': 'there is no not-found report of the outbound token search with valid controls that '
+                                'names this result bundle and every text to be written or sent: nothing is written '
+                                'or sent',
+    'OUTBOUND_TOKEN_MISMATCH': 'the native token held for the outbound search is not the one the attempt\'s dispatch '
+                               'recorded (its fingerprint): nothing is searched, written or sent',
+    'OUTBOUND_TOKEN_FOUND': 'the outbound search found a copy of the native token in the result bundle, a text or a '
+                            'record to be written or sent: nothing is written or sent (a security stop)',
+    'OUTBOUND_SEARCH_NOT_PASSED': 'the outbound search is invalid (a positive control missed) or incomplete: nothing '
+                                  'is written or sent',
+    'BOT_ROUTE_REFUSED': 'a Gitea request outside the result path\'s closed route list (no merge, review, contents or '
+                         'administration route): nothing was sent',
+    'RESULT_GITEA_UNAVAILABLE': 'a read of Gitea\'s actual state was not answered, or not as its kind: nothing is '
+                                'written until Gitea is read',
+    'RESULT_BASE_MOVED': 'Gitea\'s protected branch is no longer at the result\'s base: nothing is written',
+    'RESULT_BRANCH_CONFLICT': 'the attempt\'s work/<attempt id> branch exists on Gitea at another commit: refused, '
+                              'never forced',
+    'RESULT_EARLIER_PR_OPEN': 'a pull request from an earlier attempt of the task is open: no second pull request is '
+                              'opened for the task',
+    'RESULT_PR_CONFLICT': 'the pull request of the attempt\'s branch exists and is not the one the result path opens '
+                          '(closed, merged, another author, base, head, title or body): it is not reused',
+    'RESULT_WRITE_UNSETTLED': 'a write to Gitea (the push or the pull request) was refused or its answer was lost '
+                              'after the result journal was dispatched: the journal is unknown, and the next run '
+                              'settles it by reading Gitea\'s actual state',
+    'RESULT_READBACK': 'Gitea does not read back the branch at the exact commit and the pull request as opened: the '
+                       'journal stays unsettled',
     'BODY_MALFORMED': 'the create body is not a JSON object, or a bodyless call (GET, HEAD, DELETE) carries a body',
     'BODY_FIELD_UNKNOWN': 'the create body carries a field outside the allowlist',
     'BODY_NOT_TEMPLATE': 'an allowlisted create body field differs from the profile\'s pinned create template',

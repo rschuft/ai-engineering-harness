@@ -1310,6 +1310,125 @@ enough for the two built commands of an attempt, so the guard is unchanged. **No
 live: whether git runs in a conversation container, how much output the bash route returns and
 whether it masks or alters any, and the inspection's runtime answer for a running conversation.
 
+## The result path (E-05.4; D1 slice B)
+
+[`result_path.py`](result_path.py) takes a result the host verified (`attempt_run.VerifiedResult`)
+to Gitea as the stage's bot, in the order the D1 work design fixes (G6 to G8; rulings R1, R3, R5
+and the A3 ruling S7). `publish_result(store, operation_key, verified=, native=, provider=,
+target=, actor=, observations=None, extra_texts=None, report_dir=None)`:
+
+```
+journal      dispatch/attempt/<id>/result, reserved at the intake by attempt_run's hook (result_hook)
+verify       the commit re-read from the verified repository: its id, tree, parent, R5 message and trailers
+empty        a tree equal to the base's: the journal failed (RESULT_EMPTY_CHANGE), nothing written
+texts        the PR title and body, the commit message, the diff, the report's and receipt's drafts
+search       the bundle and every text, for the native token (E-05.9's search, controls): not-found or refused
+bot          attempt_role_token (the builder's standing token, in the attempt context) and ResultSession
+reconcile    main, work/<id>, its pull request, the open pull requests: reuse, or refuse, before any write
+dispatch     the journal dispatched (with the search's summary) immediately before the first write
+push         work/<id> at the exact commit, from the verified repository (Dulwich, fast-forward only)
+open         one pull request to main, title "WIP: " + the commit's subject (a draft), the body below
+read-back    the branch at the commit; the pull request open, unmerged, by the bot, a draft, as sent
+search       the final report and receipt, which name the pull request
+confirm      the journal confirmed with the receipt; report.json and report.md written (report_dir)
+```
+
+**The journal** (G6). Its intent is the verified result's record (digests and sizes only), less
+`resumed`: a resumed intake reserves the same journal, a different result is
+`RESULT_JOURNAL_CONFLICT`. It is `dispatched` before the first write, `confirmed` with the receipt
+after the read-back, and `unknown` when a write was refused or its answer lost, or the read-back
+was not answered (`RESULT_WRITE_UNSETTLED`); only the next run's reading of Gitea settles it. A run
+that finds the journal `dispatched` (it stopped after the dispatch) moves it to `unknown` and reads.
+A confirmed journal returns its receipt with no call. Once dispatched, `end_interrupted_attempt`
+refuses the attempt (`ATTEMPT_RESULT_HANDED_ON`); the path refuses an attempt whose end journal
+exists in any state (`ATTEMPT_ENDED`), read at the start and again just before the dispatch.
+
+**An empty change** (the open decision of the design's section 7). A result whose tree is the
+base's hands on no usable result: the journal is `failed` with `RESULT_EMPTY_CHANGE` and nothing is
+written to Gitea, as the design says for the run; what follows is planning's.
+
+**The outbound search** (decision 0023 section 5). Before anything is written beyond digests or
+sent, `outbound_search` runs E-05.9's search (`native_token_search`) with the dispatcher's held
+`NativeToken` (its fingerprint must be the one the attempt's dispatch recorded:
+`OUTBOUND_TOKEN_MISMATCH`) over the result bundle (its bytes and every pack object, inflated,
+deltas applied; the file's sha256 must be the verified one) and every text: the test output, the
+excluded paths, the commit message, the PR's title and body, the diff, the report's draft (JSON
+and Markdown), the journal's intent, and the caller's `extra_texts` (the run record's texts, slice
+C). `require_not_found` admits only a `not-found` report with valid controls (S-03.2's and the
+bundle's) whose `subject` names the bundle's sha256 and each text's sha256, each surface complete
+with nothing found: `OUTBOUND_TOKEN_FOUND`, `OUTBOUND_SEARCH_NOT_PASSED`,
+`OUTBOUND_SEARCH_REQUIRED` otherwise. The final report and receipt are searched again before they
+are recorded or written. Records hold the search's summary (verdict, fingerprint, counts, the
+subject's digests), never a searched byte.
+
+**Reconciliation** before any write, as the bot, through `attempt_tokens.ResultSession`: its
+closed route list (`result_routes`) is `GET /branches/{main|work/<attempt id>}`, `GET
+/pulls?state=open&page=N&limit=50`, `GET /pulls/main/work/<attempt id>` (Gitea 28.3.0's
+`GetPullRequestByBaseHead`, any state), `GET /pulls/{index}` and `POST /pulls`; anything else,
+a merge, a review, a contents write or `/token` among them, is `BOT_ROUTE_REFUSED` with nothing
+sent, and the session ends with the attempt context. The attempt's branch at the exact commit and
+its pull request (open, unmerged, by the bot, from that branch at that commit into `main`, the
+title, a draft) are reused; a branch at another commit is `RESULT_BRANCH_CONFLICT`; a pull request
+of the branch that is not that one is `RESULT_PR_CONFLICT` (its body is not compared here: an
+earlier run of the attempt sent it). When anything is to be written, `main` must be at the
+result's base (`RESULT_BASE_MOVED`) and no pull request from another attempt of the task may be
+open (`RESULT_EARLIER_PR_OPEN`): the task's attempts are the store's typed attempts of the work
+item, matched by their `work/<attempt id>` branches, never by a pull request's text (G8).
+
+**The push** is `repository_access` `push` (F-10.6, Dulwich smart HTTP, no process) of
+`<commit>:refs/heads/work/<attempt id>` from the verified repository, with the builder's
+`Credential` (`Authorization: token`, to Gitea's origin only); never forced.
+
+**The pull request.** Gitea 28.3.0's create option has no draft field
+(`modules/structs/pull.go` `CreatePullRequestOption`: head, base, title, body, assignees,
+milestone, labels, due date, reviewers). A pull request is a draft when its title begins with one of
+`[repository.pull-request] WORK_IN_PROGRESS_PREFIXES`, ASCII case-insensitive
+(`models/issues/pull.go` `IsWorkInProgress`, `CutWorkInProgressPrefix`), by default `WIP:` and
+`[WIP]` (`modules/setting/repository.go`; `custom/conf/app.example.ini`); the API view says
+`draft` (`services/convert/pull.go`), and a work-in-progress pull request is not mergeable
+(`PullRequest.Mergeable`). The harness's `app.ini` sets no prefixes (`gitea_host.render_app_ini`).
+So the title is `WIP: ` and the commit's subject (R5: `<task>: <task title>`), and the read-back
+requires `draft` true. Read in the pinned source `gitea-src-28.3.0.tar.gz` (sha256
+`a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4`, `composition/compatibility-matrix.md`). The draft marker does not carry "not
+mergeable except by the Owner": protection does (the demo's rules: `merge_whitelist_usernames`
+`[aieh-owner]` on every rule, no force push; G8).
+
+The body is built from the reserved record and the verified result only: a table of the
+repository, the base and `main`, the exact SHA, the branch, the task and its `backlog:`
+reference, the attempt, the conversation (`openhands:conversation/`), the outcome, the design
+revision and the bundle's sha256; then the tests, labelled not independent CI (`TEST_LABEL`), the
+command, the outcome `PASSED` or `FAILED (exit N)` / `FAILED (timeout)` (R1: the path proceeds),
+and the output; then R3's exclusions (the rule, the count, the whole list's sha256, the paths
+listed). Agent text is shown as data: control characters but newline and tab removed, in a fence
+longer than any backtick run in it. After a result step resumed from its intake receipt the test
+output and the excluded paths exist only as digests (receipts never hold agent text): the body
+and the report say so and give the digests.
+
+**Lineage** (G7). The confirmed journal's receipt (`result-receipt/v1`) holds `workRef`
+(`backlog:`), `outcomeRef`, `executionRef` (`openhands:conversation/`), `baseRef` and `resultRef`
+(`git:<repository>@<commit>`), each parsed by `integrations/lineage` and canonical, the design
+revision (the store's `openspec:changes/<change>@<commit>`), the branch, the pull request's number,
+URL, title, author and body digest, the bundle's sha256, the commit's trailers, what this run wrote,
+the test status and output digest, the report's digests and the two searches' summaries. The
+commit's trailers (`Task`, `Attempt`, `Outcome`, `Design`) and the body mirror it on Gitea. No
+lineage kind or resolver edge is added.
+
+**The Owner report** (E-05.5: "with the diff and the test output, without a Gitea sign-in"), JSON
+(`owner-report/v1`) and Markdown, host code from the verified objects: the identities, the pull
+request's number and URL, the commit message, the diff base..result computed here (`tree_diff`:
+the verified repository's objects through `repository_access`, `difflib` for text files, a line for
+a binary or mode change, at most 256 KiB shown with the whole diff's sha256, control characters
+removed; no process launched), the tests and exclusions as in the body, the outbound search's
+summary, and the run's observations: a slot (`observations`, JSON data) the run driver (slice C)
+fills, stated as not supplied otherwise. `write_report` creates `report.json` and `report.md`
+exclusively and never overwrites other bytes.
+
+`gitea_target(repository_id, port)` admits the demo repository only (`ADMITTED_REPOSITORIES`:
+`aieh-d1-demo` to `aieh-demo/aieh-d1-demo`, pushed at `http://127.0.0.1:<port>/aieh-demo/aieh-d1-demo.git`).
+**Not yet verified** live: the push to and the pull request on the host Gitea, its draft view and
+the WIP title, the branch route with an unencoded slash, `GetPullRequestByBaseHead` on a branch
+with a slash, and the read-back of the body as sent.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -1462,6 +1581,10 @@ acceptance takes effect when a manifest naming it is promoted.
 | `TURN_RUN_NOT_STARTED`, `TURN_NOT_FINISHED`, `RESULT_UNANSWERED` | a 429 at the message (saved, the run not started: the attempt is ended as an interruption); a resumed result step on a conversation that did not finish; a RESULT not answered (resumed with `resume_result`) |
 | `RESULT_COMMAND_FAILED`, `RESULT_NOT_VERIFIED`, `RESULT_REFS_INVALID`, `RESULT_COMMIT_MISMATCH`, `RESULT_TREE_REFUSED`, `ATTEMPT_ENDED` | the result: the command's report or delivery; the retained verifier or the digest; the references; the specified commit; the tree policy; an attempt with an end record |
 | `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause and escalation records: neither interruption nor security-stop; no end record the cause applies to (interruption: an unclassified end not escalated; security-stop: any end but a non-retryable one); a receipt holding another intent |
+| `RESULT_NOT_RESERVED`, `RESULT_JOURNAL_CONFLICT`, `RESULT_JOURNAL_FAILED`, `RESULT_EMPTY_CHANGE`, `RESULT_REPOSITORY_NOT_ADMITTED` | the result path (E-05.4): no journal reserved for this verified result (or a hook record not its own); the journal holds another result; the journal is failed; a result whose tree is the base's (the journal failed, nothing written); a repository or Gitea target other than the demo's |
+| `OUTBOUND_SEARCH_REQUIRED`, `OUTBOUND_TOKEN_MISMATCH`, `OUTBOUND_TOKEN_FOUND`, `OUTBOUND_SEARCH_NOT_PASSED` | the outbound search before any write: no not-found report naming the bundle and every text (or no token held); a held token other than the attempt's; the token found (a security stop); an invalid or incomplete search |
+| `BOT_ROUTE_REFUSED`, `RESULT_GITEA_UNAVAILABLE`, `RESULT_BASE_MOVED`, `RESULT_BRANCH_CONFLICT`, `RESULT_EARLIER_PR_OPEN`, `RESULT_PR_CONFLICT` | the reconciliation: a request outside the bot session's routes (nothing sent); a read not answered as its kind; `main` not at the base; `work/<attempt>` at another commit; an earlier attempt's pull request open; the branch's pull request not the one opened here |
+| `RESULT_WRITE_UNSETTLED`, `RESULT_READBACK` | after the dispatch: a push or pull request refused or its answer lost, or the read-back not answered (the journal `unknown`, settled by the next run's reading); the read-back not as written |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
 without a pin refuses every request (`NO_APPROVED_CATALOG` or `CATALOG_PIN_REQUIRED`). That is
@@ -1713,6 +1836,17 @@ transport called zero times:
 | `Run` | with a fake Agent Server and the real commands: exactly the declared calls (count, conversation, runtime, SEED, message, status, RESULT, runtime stop and read), `reserve_result` called once with the verified result; a second conversation, a runtime not running, a container problem or a failing hook sends no message and ends the attempt (`containment-stop` `INSPECTION_FAILED`, non-retryable); a turn `error`, `stuck` or `paused` runs no RESULT; an observer's record before the message, after the turn or after the result calls `end_interrupted_attempt` with that record and reserves no result; a base of another repository or design is refused before any call A3: a slot that cannot be filled (a title the commit message cannot take) is refused before any call (S2); a 429 ends the attempt as a retryable interruption `run-not-started` with no RESULT (S4); a second `run_attempt` makes no call; a lost RESULT answer (`RESULT_UNANSWERED`) is resumed with `resume_result` from the delivered bundle (re-run without a delivery, verified by the commit-id equality) or by running RESULT again; the resume refuses an attempt with no turn, an unfinished conversation, or a dispatched result journal (S3); `reserve_result` receives the record (digests only) and the in-memory result (S7). A4: a 503 settled from the events that stays idle with no agent event is ended `run-not-started`, a 2xx turn that stays idle is `TURN_CEILING` with no end (D3); a failed runtime stop after the intake is resumed with only the steps after it, twice, no RESULT or pull; a verified pull is reused and never pulled again; a changed staged bundle is `RESULT_STAGED_UNVERIFIED`; a refused pull is `RESULT_PULL_FAILED` (D2); a resume that must run RESULT on a stopped runtime is `RUNTIME_NOT_RUNNING` (N-f). |
 | `Policy` (unit) | the R3 names found in every variant (case, trailing dot or space, `.git` and its variants) and not in near names (`claude/`, `.claudex`, `.gitignore`, `.github`); `folded` is NFC and case-fold A4: `git~1`, `GIT~1` and `.git:` streams are refused; a zero-width space is not folded (the documented residual). |
 | `EndExclusion` | a reserved result journal does not keep a security stop from ending the attempt; a dispatched, confirmed or unknown one is `ATTEMPT_RESULT_HANDED_ON` with no call; `model-stop` and `provider-stop` are security stops |
+
+[`tests/test_result_path.py`](tests/test_result_path.py) (E-05.4), on the E-05.9 native fixture, a verified result made by `attempt_run.intake_result` over a repository and bundle written with Dulwich, the owner suite's fake Gitea API (in memory) over the demo repository's smart-HTTP side (Dulwich's server under `wsgiref` on 127.0.0.1; the builder's token pushes `work/*`, nothing pushes `main`); **E-05.4's proof**, clause by clause:
+
+| Class | What it shows |
+|---|---|
+| `FirstRun` | from a reserved result, one push of `work/<attempt>` and one pull request by the builder: open, unmerged, a draft (WIP title), not mergeable, from the branch at the exact SHA into `main`, its body naming the repository, the base, the SHA, the task, the attempt, the outcome and the design, the tests labelled not independent CI; every request the builder's, no merge; the journal reserved, dispatched, confirmed; the receipt's references in the lineage reader's grammars, the trailers, both searches not-found, no token and no agent text in it; a failing test run marked FAILED and the path proceeds (R1); after the confirmation the end is `ATTEMPT_RESULT_HANDED_ON`; the report written and never overwritten |
+| `Retry` | the same attempt again makes no request; a branch and pull request already there (a lost read-back) are reused with no write; a branch at another SHA is `RESULT_BRANCH_CONFLICT`, an earlier attempt's open pull request `RESULT_EARLIER_PR_OPEN` (one of a branch that is no attempt of the task is not), a moved base `RESULT_BASE_MOVED`, an end record `ATTEMPT_ENDED` with no request, a pull request not the one opened here `RESULT_PR_CONFLICT`, each with nothing written and the journal reserved; a lost answer at the push (landed or not), at the pull request (landed) and a refused pull request leave the journal `unknown`, and the next run settles it by reading with one branch and one pull request; a run stopped after the dispatch is settled by reading |
+| `NoMerge` | the bot session refuses a merge, a review, a contents write, a pull request edit, a branch delete, `/token`, another repository, another branch and another listing before anything is sent, and ends with the attempt context; the fake refuses a bot's merge (405) and the demo rules' merge allowlist is `[aieh-owner]` with no force push; the route list is exactly the declared one |
+| `Search` | a token in the test output, in a file of the result (found in the bundle's objects), in the observations, in an extra text, and base64-encoded, is `OUTBOUND_TOKEN_FOUND` with no request and the journal reserved; another token is `OUTBOUND_TOKEN_MISMATCH`, none or a dropped one `OUTBOUND_SEARCH_REQUIRED`; a report without this bundle, its surface or a text's digest is `OUTBOUND_SEARCH_REQUIRED`, `found` `OUTBOUND_TOKEN_FOUND`, `invalid`, `incomplete` or a missed control `OUTBOUND_SEARCH_NOT_PASSED`, and the path never dispatches on one; a staged bundle that is not the verified one is `RESULT_STAGED_UNVERIFIED` |
+| `Report` | the diff from the verified objects with `subprocess.Popen` patched to fail (a modified, an added and a binary file; the escape character removed); control characters removed from the test output; a backtick run cannot close its fence; a result resumed from its intake receipt shows the output's digest and the exclusions' count and digest, never their text; the excluded paths listed when held; the observations slot carried |
+| `Journal` | the hook is repeat-safe and a resumed intake reserves the same journal; another result is `RESULT_JOURNAL_CONFLICT`; an unreserved result or a foreign hook record `RESULT_NOT_RESERVED`; an empty change fails the journal (`RESULT_EMPTY_CHANGE`, then `RESULT_JOURNAL_FAILED`) with nothing written; only the demo repository is a target |
 
 [`tests/test_attempt_end.py`](tests/test_attempt_end.py) (E-05.8), on the E-05.9 native fixture with a fake of
 the pinned Agent Server's conversation, event-search, runtime-stop and runtime-status routes, events in the shapes
