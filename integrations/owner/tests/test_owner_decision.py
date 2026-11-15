@@ -6,7 +6,8 @@ Run from the repository root, under the tools interpreter:
 
 Pure tests of ``owner_decision.py``: the record's shape (its fields in order, the kinds, the
 ``accept-objective`` subject), and how a statement is judged: missing, authored by a model, not
-attributed to the Owner, or malformed. Every statement here is synthetic.
+attributed to the Owner, or malformed; and an ``accept-objective`` record resting on a recorded statement
+(plan leaf E-05.12: ``recorded`` in place of ``shown``). Every statement here is synthetic.
 """
 import json
 import sys
@@ -112,6 +113,71 @@ class RecordShape(unittest.TestCase):
         ids = {D.new_decision_id() for _ in range(5)}
         self.assertEqual(len(ids), 5)
         self.assertTrue(all(D.UUID4.match(i) for i in ids), ids)
+
+
+ENTRY = 'evidence/bootstrap-log.md#owner-direction-d1-planning-2026-11-15'
+
+
+def recorded_record(recorded=None, **changes):
+    """An accept-objective record resting on a recorded statement (plan leaf E-05.12): ``recorded`` in place
+    of ``shown``. Synthetic."""
+    base = good_record()
+    block = {'restsOn': 'recorded-statement', 'entry': ENTRY, 'date': '2026-11-15', 'revision': 'a' * 40,
+             'digest': 'sha256:' + 'b' * 64, 'challengeShown': False}
+    record = {name: base[name] for name in ('format', 'decisionId', 'kind', 'subject')}
+    record['recorded'] = {**block, **(recorded or {})}
+    record['statement'] = {**base['statement'], 'reference': f'harness:{ENTRY}'}
+    record.update(recordedBy=base['recordedBy'], recordedAt=base['recordedAt'])
+    record.update(changes)
+    return record
+
+
+class RecordedStatement(unittest.TestCase):
+    """An accept-objective record may rest on the Owner's statement recorded in the log (E-05.12)."""
+
+    def test_the_recorded_shape_passes(self):
+        record = recorded_record()
+        self.assertEqual(D.check_record(record), [])
+        self.assertEqual(list(record), list(D.RECORDED_FIELDS))
+        self.assertEqual(list(D.RECORDED_FIELDS), ['format', 'decisionId', 'kind', 'subject', 'recorded', 'statement',
+                                                   'recordedBy', 'recordedAt'])
+        self.assertEqual(list(D.RECORDED_BLOCK_FIELDS), ['restsOn', 'entry', 'date', 'revision', 'digest',
+                                                         'challengeShown'])
+        self.assertEqual(D.RECORDED_KINDS, ('accept-objective',))
+
+    def test_problems_are_reported(self):
+        both = recorded_record()
+        both = {**{k: both[k] for k in ('format', 'decisionId', 'kind', 'subject')}, 'shown': good_record()['shown'],
+                'recorded': both['recorded'], **{k: both[k] for k in ('statement', 'recordedBy', 'recordedAt')}}
+        reordered = recorded_record()
+        reordered = {'recorded': reordered.pop('recorded'), **reordered}
+        cases = {
+            'shown and recorded': both,
+            'order': reordered,
+            'another kind': recorded_record(kind='authorize-operation'),
+            'a challenge shown': recorded_record({'challengeShown': True}),
+            'challengeShown absent': recorded_record({'challengeShown': None}),
+            'restsOn': recorded_record({'restsOn': 'challenge'}),
+            'entry': recorded_record({'entry': 'evidence/other.md#x'}),
+            'date': recorded_record({'date': '15 Nov 2026'}),
+            'revision': recorded_record({'revision': 'HEAD'}),
+            'digest': recorded_record({'digest': 'b' * 64}),
+            'block fields': recorded_record(recorded={'extra': 1}),
+            'another entry referenced': recorded_record(statement={**recorded_record()['statement'],
+                                                                   'reference': 'harness:evidence/bootstrap-log.md#x'}),
+            'not a block': recorded_record(),
+        }
+        cases['not a block']['recorded'] = 'evidence/bootstrap-log.md'
+        for name, record in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(D.check_record(record), name)
+        self.assertIn('recorded.challengeShown must be false: no challenge was shown',
+                      D.check_record(recorded_record({'challengeShown': True})))
+
+    def test_a_record_with_neither_block_is_refused_as_before(self):
+        record = good_record()
+        del record['shown']
+        self.assertIn(f'shown must have exactly {", ".join(D.SHOWN_FIELDS)}', D.check_record(record))
 
 
 if __name__ == '__main__':

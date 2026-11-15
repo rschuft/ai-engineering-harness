@@ -386,7 +386,7 @@ tasks:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/owner/tests -v'
 
   owner:accept:
-    desc: "The acceptance recorder (<tools python> -I -B integrations/owner/acceptance_recorder.py <command>): pass -- prepare --project DIR --change NAME --item O<n> [--expires-in-minutes N] [--out FILE] to print the challenge to show the Owner (writes nothing), or -- record --project DIR --challenge FILE --statement FILE --recorded-by ATTRIBUTION --identity 'Name <email>' [--amend] to record the Owner's statement, mint or keep the outcome id and commit; exit 2 on a refusal, with its code and remedy"
+    desc: "The acceptance recorder (<tools python> -I -B integrations/owner/acceptance_recorder.py <command>): pass -- prepare --project DIR --change NAME --item O<n> [--expires-in-minutes N] [--out FILE] to print the challenge to show the Owner (writes nothing), or -- record --project DIR --challenge FILE --statement FILE --recorded-by ATTRIBUTION --identity 'Name <email>' [--amend] to record the Owner's statement, mint or keep the outcome id and commit, or -- record-from-log --project DIR --change NAME --item O<n> --statement FILE --recorded-by ATTRIBUTION --identity 'Name <email>' [--harness DIR] [--amend] to do the same without a challenge, from the Owner's statement recorded verbatim in the harness log's Decisions (E-05.12); exit 2 on a refusal, with its code and remedy"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'

@@ -29,6 +29,16 @@ Fields, in this order (``FIELDS``):
 ``recordedBy``  who ran the recorder: ``owner``, ``agent:<id>`` or ``person:<id>``
 ``recordedAt``  when, as ``YYYY-MM-DDTHH:MM:SSZ`` (UTC)
 
+**A decision resting on a recorded statement** (plan leaf E-05.12): an ``accept-objective`` record
+may rest on the Owner's statement already recorded verbatim in the harness log's Decisions (decision
+0018 points 4.3 and 7) instead of on a challenge. Such a record has ``recorded`` where the others have
+``shown`` (``RECORDED_FIELDS``), and never ``shown``: no challenge was shown. ``recorded`` is, in
+this order (``RECORDED_BLOCK_FIELDS``): ``restsOn`` (``recorded-statement``), ``entry`` (the entry,
+``evidence/bootstrap-log.md#<anchor>``), ``date`` (the entry's date, ``YYYY-MM-DD``), ``revision``
+(the full commit of the harness repository at which the log was read), ``digest`` (``sha256:`` of
+the log's blob there) and ``challengeShown`` (``false``). The statement's ``reference`` is then
+``harness:<entry>``. Only the kinds in ``RECORDED_KINDS`` may rest on a recorded statement.
+
 Attribution and reference values use the intent-record/v1 grammar
 (``catalog/skills/intent-normalization/references/intent-record.md``). The record is clerical: it
 says what was shown and what was said, by whom it was recorded and when. It does not authenticate
@@ -45,6 +55,14 @@ FORMAT = 'owner-decision/v1'
 FIELDS = ('format', 'decisionId', 'kind', 'subject', 'shown', 'statement', 'recordedBy', 'recordedAt')
 SHOWN_FIELDS = ('summary', 'nonce', 'expiresAt')
 STATEMENT_FIELDS = ('text', 'attributedTo', 'channel', 'reference')
+# A decision resting on the Owner's statement recorded in the harness log (plan leaf E-05.12): `recorded`
+# in place of `shown`.
+RECORDED_FIELDS = ('format', 'decisionId', 'kind', 'subject', 'recorded', 'statement', 'recordedBy', 'recordedAt')
+RECORDED_BLOCK_FIELDS = ('restsOn', 'entry', 'date', 'revision', 'digest', 'challengeShown')
+RECORDED_KINDS = ('accept-objective',)
+RESTS_ON = 'recorded-statement'
+LOG_ENTRY = re.compile(r'^evidence/bootstrap-log\.md#[a-z0-9][a-z0-9-]{0,127}$')
+ENTRY_DATE = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
 # The subject of each kind this module validates.
 SUBJECT_FIELDS = {
     'accept-objective': ('change', 'item', 'outcome', 'revision', 'proposal'),
@@ -157,8 +175,10 @@ def check_record(record):
     problems = []
     if not isinstance(record, dict):
         return ['the record must be an object']
-    if list(record) != list(FIELDS):
-        problems.append(f'the fields must be exactly {", ".join(FIELDS)}, in that order')
+    rests_on_log = 'recorded' in record and 'shown' not in record
+    fields = RECORDED_FIELDS if rests_on_log else FIELDS
+    if list(record) != list(fields):
+        problems.append(f'the fields must be exactly {", ".join(fields)}, in that order')
     if record.get('format') != FORMAT:
         problems.append(f'format must be {FORMAT}')
     if not isinstance(record.get('decisionId'), str) or not UUID4.match(record['decisionId']):
@@ -169,7 +189,12 @@ def check_record(record):
     else:
         problems.extend(_subject_problems(kind, record.get('subject')))
     shown = record.get('shown')
-    if not isinstance(shown, dict) or list(shown) != list(SHOWN_FIELDS):
+    if rests_on_log:
+        if kind in KINDS and kind not in RECORDED_KINDS:
+            problems.append(f'only {", ".join(RECORDED_KINDS)} may rest on a recorded statement (recorded in place '
+                            'of shown)')
+        problems.extend(recorded_problems(record.get('recorded'), record.get('statement')))
+    elif not isinstance(shown, dict) or list(shown) != list(SHOWN_FIELDS):
         problems.append(f'shown must have exactly {", ".join(SHOWN_FIELDS)}')
     else:
         if not isinstance(shown['summary'], str) or not shown['summary'].strip():
@@ -189,6 +214,30 @@ def check_record(record):
         problems.append('recordedBy must be owner, agent:<id> or person:<id>')
     if not isinstance(record.get('recordedAt'), str) or not TIMESTAMP.match(record['recordedAt']):
         problems.append('recordedAt must be YYYY-MM-DDTHH:MM:SSZ')
+    return problems
+
+
+def recorded_problems(recorded, statement):
+    """The problems of RECORDED, the ``recorded`` block of a decision resting on the Owner's statement recorded
+    in the harness log, with the record's STATEMENT (whose reference must name the same entry)."""
+    if not isinstance(recorded, dict) or list(recorded) != list(RECORDED_BLOCK_FIELDS):
+        return [f'recorded must have exactly {", ".join(RECORDED_BLOCK_FIELDS)}']
+    problems = []
+    if recorded['restsOn'] != RESTS_ON:
+        problems.append(f'recorded.restsOn must be {RESTS_ON}')
+    entry = recorded['entry']
+    if not isinstance(entry, str) or not LOG_ENTRY.match(entry):
+        problems.append('recorded.entry must be evidence/bootstrap-log.md#<anchor>')
+    elif isinstance(statement, dict) and statement.get('reference') != f'harness:{entry}':
+        problems.append(f'statement.reference must be harness:{entry}, the entry the decision rests on')
+    if not isinstance(recorded['date'], str) or not ENTRY_DATE.match(recorded['date']):
+        problems.append('recorded.date must be the entry\'s date, YYYY-MM-DD')
+    if not isinstance(recorded['revision'], str) or not FULL_COMMIT.match(recorded['revision']):
+        problems.append('recorded.revision must be a full commit id of the harness repository')
+    if not isinstance(recorded['digest'], str) or not DIGEST.match(recorded['digest']):
+        problems.append('recorded.digest must be sha256:<64 hex digits>, the log\'s blob at that revision')
+    if recorded['challengeShown'] is not False:
+        problems.append('recorded.challengeShown must be false: no challenge was shown')
     return problems
 
 

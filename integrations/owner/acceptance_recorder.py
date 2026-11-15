@@ -30,12 +30,30 @@ The outcome id is minted only here, only when an acceptance reference exists, an
 the same item (decision 0008, point 2): an item that already has one is refused
 (``OUTCOME_ALREADY_MINTED``) unless the request is an amendment, which keeps it.
 
+**The recorded-statement path** (plan leaf E-05.12; decision 0018 points 4.3 and 7):
+``record_from_log`` records the Owner's acceptance of an objective from his statement already recorded
+verbatim, dated and anchored in the Decisions of the harness log (``evidence/bootstrap-log.md``),
+without a challenge. The statement's reference is ``harness:evidence/bootstrap-log.md#<anchor>``. The
+recorder reads the log at the harness repository's ``HEAD`` commit through the repository-access module
+(the committed blob, never the work tree; decision 0014) and admits the statement only when the anchor
+names a Decisions entry (``delegated_decision.decisions_entry``, the P-04.3 pattern) whose title is
+dated and whose verbatim Owner block (its ``>`` lines) holds the statement's text, by this rule
+(``verbatim_admits``): the statement's words, each of its lines read without a leading ``>`` quote
+marker and the text split on any whitespace (line breaks included), are a contiguous run of the
+block's words, compared exactly (case and punctuation kept). The commit is the one ``record`` makes;
+the decision record has ``recorded`` (the entry, its date, the harness revision, the log's digest and
+``challengeShown: false``) in place of ``shown`` (``owner_decision.py``) and its commit message says
+that no challenge was shown.
+
 Usage (from the repository root, under the tools interpreter: Dulwich is required):
 
     <tools python> -I -B integrations/owner/acceptance_recorder.py prepare --project DIR \\
         --change NAME --item O<n> [--expires-in-minutes N] [--out FILE]
     <tools python> -I -B integrations/owner/acceptance_recorder.py record --project DIR \\
         --challenge FILE --statement FILE --recorded-by ATTRIBUTION --identity "Name <email>" [--amend]
+    <tools python> -I -B integrations/owner/acceptance_recorder.py record-from-log --project DIR \\
+        --change NAME --item O<n> --statement FILE --recorded-by ATTRIBUTION --identity "Name <email>" \\
+        [--harness DIR] [--amend]
 
 Exit status: 0 done (JSON on standard output), 2 refused (the code and its remedy on standard
 error).
@@ -48,6 +66,7 @@ import secrets
 import sys
 import uuid
 from pathlib import Path
+from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -68,6 +87,7 @@ D = _load('owner_decision', HERE / 'owner_decision.py')
 R = _load('lineage_resolve', REPO / 'integrations' / 'lineage' / 'lineage_resolve.py')
 L = R.L
 ra = R.planning.repository_access
+G = _load('delegated_decision', HERE / 'delegated_decision.py')  # the log's anchored Decisions entries (P-04.3)
 
 KIND = 'accept-objective'
 CHALLENGE_FORMAT = 'owner-decision-challenge/v1'
@@ -77,6 +97,7 @@ DECISIONS_DIR = 'owner-decisions'
 CONFIG_POLICY = 'repository'  # the project's own configuration only (decision 0014 section 5)
 DEFAULT_EXPIRY_MINUTES = 60
 MAX_EXPIRY_MINUTES = 7 * 24 * 60
+LOG_REFERENCE = f'harness:{G.LOG}#'  # + <anchor>: the statement's reference on the recorded-statement path
 
 REMEDIES = {
     'PROJECT_UNAVAILABLE': 'name the work tree of the project repository, with a commit on a branch, and run '
@@ -114,6 +135,20 @@ REMEDIES = {
                          'by hand in the decision-0008 form, or in a repository without client hooks',
     'COMMIT_REFUSED': 'clean, commit or move aside the change\'s files, check out its branch, then prepare again',
     'OBJECT_NAME_INVALID': 'name the change and the item as the intent record and OpenSpec write them',
+    # The recorded-statement path (plan leaf E-05.12).
+    'STATEMENT_REFERENCE_NOT_LOG': 'reference the Owner\'s statement as the anchored Decisions entry of the harness '
+                                   'log that records it: harness:evidence/bootstrap-log.md#<anchor>',
+    'HARNESS_UNAVAILABLE': 'name the work tree of the harness repository (--harness) and run under the tools '
+                           'interpreter (task tools:install)',
+    'STATEMENT_LOG_NOT_COMMITTED': 'commit evidence/bootstrap-log.md in the harness repository, then record again: '
+                                   'the recorder reads the log at the harness\'s HEAD commit, never the work tree',
+    'STATEMENT_ANCHOR_ABSENT': 'reference an anchored entry of the log\'s Decisions section that is committed at the '
+                               'harness\'s HEAD',
+    'STATEMENT_ENTRY_UNDATED': 'reference a Decisions entry whose bold title begins with its date, "YYYY-MM-DD: "',
+    'STATEMENT_OUTSIDE_VERBATIM': 'give the statement\'s text as the entry\'s verbatim Owner block (its "> " lines) '
+                                  'records it: the Owner\'s words, not a reading of them',
+    'ACCEPTANCE_IS_REQUEST': 'the acceptance must be a separate statement: reference the entry where the Owner '
+                             'accepted, not the source of an Original Quote (intent-record/v1 invariant 4)',
 }
 
 
@@ -263,12 +298,17 @@ def _guarded(call, *args):
     raise RecorderError('GIT_FAILED', str(failure))
 
 
-def _check_statement(statement):
+def _check_owner(statement):
+    """The statement as an Owner's decision (``owner_decision.statement_verdict``), or its refusal."""
     verdict, detail = D.statement_verdict(statement)
     code = {D.MISSING: 'ACCEPTANCE_MISSING', D.MODEL: 'ACCEPTANCE_MODEL_AUTHORED', D.NOT_OWNER: 'STATEMENT_NOT_OWNER',
             D.INVALID: 'STATEMENT_INVALID'}.get(verdict)
     if code is not None:
         raise RecorderError(code, detail)
+
+
+def _check_statement(statement):
+    _check_owner(statement)
     reference = statement['reference']
     if reference.startswith('decision:'):
         return
@@ -351,76 +391,205 @@ def record(project, challenge, statement, *, recorded_by, identity, amend=False,
                                 f'{change} at {subject["revision"]}')
         state = _guarded(_Change, repo, head.commit, change, item)
         recorded = _guarded(_recorded_decisions, repo, head.commit, state.base)
-        if any(r['shown']['nonce'] == shown['nonce'] for r in recorded):
+        # A decision resting on a recorded statement (E-05.12) had no challenge, hence has no nonce.
+        if any(r.get('shown', {}).get('nonce') == shown['nonce'] for r in recorded):
             raise RecorderError('CHALLENGE_CONSUMED', f'a decision on nonce {shown["nonce"]} is already recorded')
         if state.digest != subject['proposal']:
             raise RecorderError('CHALLENGE_STALE', f'{state.proposal_path} changed after the challenge was prepared')
-        quotes = {q.fields.get('source') for q in state.record.sections.get('Original Quote', [])}
-        if reference in quotes:
+        if reference in _quote_sources(state):
             raise RecorderError('ACCEPTANCE_REFERENCE_INVALID', f'{reference} is the request itself; the acceptance '
                                 'must be a separate statement (intent-record/v1 invariant 4)')
-        current = state.item.fields.get('acceptance')
-        if state.outcome is not None and not amend:
-            raise RecorderError('OUTCOME_ALREADY_MINTED', f'{item} of {change} has outcome {state.outcome}')
-        if state.outcome is None and amend:
-            raise RecorderError('OUTCOME_NOT_MINTED', f'{item} of {change} has no outcome id to keep')
-        if amend and current == reference:
-            raise RecorderError('ACCEPTANCE_ALREADY_RECORDED', f'{item} of {change} is already accepted by {reference}')
-        minted = state.outcome is None
-        outcome = str((new_outcome or uuid.uuid4)()) if minted else state.outcome
-        decision_id = str((new_decision_id or uuid.uuid4)())
-        decision = {
-            'format': D.FORMAT, 'decisionId': decision_id, 'kind': KIND,
-            'subject': {'change': change, 'item': item, 'outcome': outcome, 'revision': subject['revision'],
-                        'proposal': subject['proposal']},
-            'shown': {name: shown[name] for name in D.SHOWN_FIELDS},
-            'statement': {name: statement[name] for name in D.STATEMENT_FIELDS},
-            'recordedBy': recorded_by, 'recordedAt': timestamp(now)}
-        problems = D.check_record(decision)
-        if problems:  # the recorder's own invariant
-            raise RecorderError('RESOLUTION_FAILED', f'the decision record is malformed: {problems[0]}')
-        proposal = set_acceptance(state.proposal, item, reference)
-        problems = _record_problems(proposal)
-        if problems:
-            raise RecorderError('INTENT_RECORD_INVALID', f'accepting {item} would leave {state.proposal_path} '
-                                'invalid: ' + '; '.join(problems[:3]))
-        meta = declare_outcome(state.meta, outcome, item, reference)
-        expected = {**state.outcomes, outcome: {'item': item, 'acceptance': reference}}
-        if R.read_x_outcomes(meta) != expected:
-            raise RecorderError('RESOLUTION_FAILED', f'the x-outcomes block written for {state.meta_path} does not '
-                                'read back as declared')
-        path = f'{state.base}/{DECISIONS_DIR}/{decision_id}.json'
-        files = {state.proposal_path: proposal, state.meta_path: meta, path: D.dumps(decision).encode('utf-8')}
+        return _accept(repo, head, state, statement, ('shown', {name: shown[name] for name in D.SHOWN_FIELDS}),
+                       revision=subject['revision'], proposal_digest=subject['proposal'], recorded_by=recorded_by,
+                       identity=identity, amend=amend, now=now, new_outcome=new_outcome,
+                       new_decision_id=new_decision_id)
 
-        def verify(commit):
-            answer = R.ObjectiveResolver(repo.root).resolve(L.parse(f'outcome:{outcome}@{commit}'))
-            facts = answer.facts or {}
-            if (not answer.resolved or facts.get('change') != state.base or facts.get('item') != item
-                    or facts.get('acceptance') != reference):
-                raise RecorderError('RESOLUTION_FAILED', f'outcome:{outcome}@{commit} answers {answer.outcome} '
-                                    f'{answer.code or ""} {answer.detail}'.rstrip())
 
-        message = commit_message(decision, minted, statement)
-        failure = None
-        try:
-            commit = repo.write_commit(files, message, identity=identity, expected_head=head.commit,
-                                       when=(int(now.timestamp()), 0), check=verify)
-        except ra.RepositoryError as exc:
-            failure = exc
-        if failure is not None:
-            code = failure.code if failure.code in REMEDIES else 'GIT_FAILED'
-            raise RecorderError(code, failure.message, **failure.details)
+def _quote_sources(state):
+    """The sources of the change's Original Quotes: the request itself."""
+    return {q.fields.get('source') for q in state.record.sections.get('Original Quote', [])}
+
+
+def _accept(repo, head, state, statement, provenance, *, revision, proposal_digest, recorded_by, identity, amend,
+            now, new_outcome, new_decision_id):
+    """The commit of an acceptance of STATE's item on STATEMENT, whose PROVENANCE is ``('shown', <the challenge
+    shown>)`` (``record``) or ``('recorded', <the log entry it rests on>)`` (``record_from_log``); REVISION and
+    PROPOSAL_DIGEST are the subject's. Shared by both paths, after their own checks."""
+    change, item, reference = state.change, state.item_id, statement['reference']
+    current = state.item.fields.get('acceptance')
+    if state.outcome is not None and not amend:
+        raise RecorderError('OUTCOME_ALREADY_MINTED', f'{item} of {change} has outcome {state.outcome}')
+    if state.outcome is None and amend:
+        raise RecorderError('OUTCOME_NOT_MINTED', f'{item} of {change} has no outcome id to keep')
+    if amend and current == reference:
+        raise RecorderError('ACCEPTANCE_ALREADY_RECORDED', f'{item} of {change} is already accepted by {reference}')
+    minted = state.outcome is None
+    outcome = str((new_outcome or uuid.uuid4)()) if minted else state.outcome
+    decision_id = str((new_decision_id or uuid.uuid4)())
+    block, value = provenance
+    decision = {
+        'format': D.FORMAT, 'decisionId': decision_id, 'kind': KIND,
+        'subject': {'change': change, 'item': item, 'outcome': outcome, 'revision': revision,
+                    'proposal': proposal_digest},
+        block: value,
+        'statement': {name: statement[name] for name in D.STATEMENT_FIELDS},
+        'recordedBy': recorded_by, 'recordedAt': timestamp(now)}
+    problems = D.check_record(decision)
+    if problems:  # the recorder's own invariant
+        raise RecorderError('RESOLUTION_FAILED', f'the decision record is malformed: {problems[0]}')
+    proposal = set_acceptance(state.proposal, item, reference)
+    problems = _record_problems(proposal)
+    if problems:
+        raise RecorderError('INTENT_RECORD_INVALID', f'accepting {item} would leave {state.proposal_path} '
+                            'invalid: ' + '; '.join(problems[:3]))
+    meta = declare_outcome(state.meta, outcome, item, reference)
+    expected = {**state.outcomes, outcome: {'item': item, 'acceptance': reference}}
+    if R.read_x_outcomes(meta) != expected:
+        raise RecorderError('RESOLUTION_FAILED', f'the x-outcomes block written for {state.meta_path} does not '
+                            'read back as declared')
+    path = f'{state.base}/{DECISIONS_DIR}/{decision_id}.json'
+    files = {state.proposal_path: proposal, state.meta_path: meta, path: D.dumps(decision).encode('utf-8')}
+
+    def verify(commit):
+        answer = R.ObjectiveResolver(repo.root).resolve(L.parse(f'outcome:{outcome}@{commit}'))
+        facts = answer.facts or {}
+        if (not answer.resolved or facts.get('change') != state.base or facts.get('item') != item
+                or facts.get('acceptance') != reference):
+            raise RecorderError('RESOLUTION_FAILED', f'outcome:{outcome}@{commit} answers {answer.outcome} '
+                                f'{answer.code or ""} {answer.detail}'.rstrip())
+
+    message = commit_message(decision, minted, statement)
+    failure = None
+    try:
+        commit = repo.write_commit(files, message, identity=identity, expected_head=head.commit,
+                                   when=(int(now.timestamp()), 0), check=verify)
+    except ra.RepositoryError as exc:
+        failure = exc
+    if failure is not None:
+        code = failure.code if failure.code in REMEDIES else 'GIT_FAILED'
+        raise RecorderError(code, failure.message, **failure.details)
     return {'decision': decision, 'outcome': outcome, 'minted': minted, 'commit': commit, 'path': path,
             'reference': f'outcome:{outcome}@{commit}'}
+
+
+# ---------------------------------------------------------------------------- the recorded-statement path
+
+class RecordedEntry(NamedTuple):
+    """The Decisions entry a recorded statement rests on, as read at the harness repository's ``HEAD``: the
+    entry (``delegated_decision.LogEntry``), the harness commit and the log blob's digest."""
+    entry: object
+    revision: str
+    digest: str
+
+
+def statement_words(text):
+    """The words of a statement's TEXT as the recorded-statement path compares them: each line read without a
+    leading ``>`` quote marker (after optional whitespace, one space after it dropped), then the text split on
+    any whitespace, line breaks included."""
+    lines = (m.group('text') if (m := G.VERBATIM_LINE.match(line)) else line for line in text.splitlines())
+    return [word for line in lines for word in line.split()]
+
+
+def verbatim_admits(entry, text):
+    """Whether TEXT lies inside ENTRY's verbatim Owner block: its words (``statement_words``) are a contiguous
+    run of the block's words (the ``>`` lines, markers stripped, split on any whitespace), compared exactly."""
+    words, block = statement_words(text), entry.verbatim.split()
+    count = len(words)
+    return count > 0 and any(block[start:start + count] == words for start in range(len(block) - count + 1))
+
+
+def _log_anchor(reference):
+    """The anchor of a recorded-statement reference ``harness:evidence/bootstrap-log.md#<anchor>``, or the
+    refusal."""
+    anchor = reference[len(LOG_REFERENCE):] if reference.startswith(LOG_REFERENCE) else None
+    if anchor is None or not G.ANCHOR.match(anchor):
+        raise RecorderError('STATEMENT_REFERENCE_NOT_LOG', f'{reference} is not {LOG_REFERENCE}<anchor>')
+    return anchor
+
+
+def read_log_entry(harness, anchor):
+    """The Decisions entry ANCHOR of the log at the ``HEAD`` commit of the harness repository HARNESS (its work
+    tree's root), read through the repository-access module with the repository's own configuration only (the
+    upward search stops at HARNESS): the committed blob, never the work tree. A ``RecordedEntry``, or the refusal:
+    ``HARNESS_UNAVAILABLE``, ``STATEMENT_LOG_NOT_COMMITTED``, ``STATEMENT_ANCHOR_ABSENT``,
+    ``STATEMENT_ENTRY_UNDATED``."""
+    harness = Path(harness).absolute()
+    failure = None
+    try:
+        with ra.open_repository(harness, config=CONFIG_POLICY, ceilings=[str(harness.parent)]) as repo:
+            commit = repo.head().commit
+            if commit is None:
+                raise RecorderError('STATEMENT_LOG_NOT_COMMITTED', f'the harness repository {harness} has no commit at '
+                                    'HEAD')
+            blob = _read(repo, commit, G.LOG)
+    except (ra.CannotRun, ra.RepositoryError) as exc:
+        failure = exc
+    if failure is not None:
+        raise RecorderError('HARNESS_UNAVAILABLE', f'the harness repository {harness}: {failure}')
+    if blob is None:
+        raise RecorderError('STATEMENT_LOG_NOT_COMMITTED', f'{G.LOG} is not committed at the harness\'s HEAD {commit}')
+    try:
+        text = blob.decode('utf-8')
+    except UnicodeDecodeError:
+        raise RecorderError('HARNESS_UNAVAILABLE', f'{G.LOG} at {commit} is not UTF-8') from None
+    entry = G.decisions_entry(text, anchor)
+    if entry is None:
+        raise RecorderError('STATEMENT_ANCHOR_ABSENT', f'{G.LOG} at {commit} has no Decisions entry with the anchor '
+                            f'{anchor!r} (the committed log, not the work tree)')
+    if entry.date is None:
+        raise RecorderError('STATEMENT_ENTRY_UNDATED', f'the entry {anchor!r} of {G.LOG} at {commit} has no '
+                            '"<date>: " title')
+    return RecordedEntry(entry, commit, 'sha256:' + hashlib.sha256(blob).hexdigest())
+
+
+def record_from_log(project, change, item, statement, *, recorded_by, identity, harness=REPO, amend=False, now=None,
+                    new_outcome=None, new_decision_id=None):
+    """Record the Owner's acceptance of ITEM of CHANGE from STATEMENT, his statement recorded verbatim in the
+    Decisions entry its reference names (``harness:evidence/bootstrap-log.md#<anchor>``) of the log at the
+    ``HEAD`` commit of the harness repository HARNESS, and commit it in the project repository at its ``HEAD``.
+    No challenge is shown: the record rests on the recorded statement (``recorded``, never ``shown``). Returns
+    what ``record`` returns. NEW_OUTCOME and NEW_DECISION_ID (callables) stand in for the random UUIDs in tests."""
+    _check_owner(statement)
+    reference = statement['reference']
+    anchor = _log_anchor(reference)
+    if not isinstance(recorded_by, str) or not D.ATTRIBUTION.match(recorded_by):
+        raise RecorderError('RECORDED_BY_INVALID', f'{recorded_by!r} is not owner, agent:<id> or person:<id>')
+    if not isinstance(identity, str) or not ra.IDENTITY.fullmatch(identity):
+        raise RecorderError('IDENTITY_INVALID', f'{identity!r} is not "Name <email>"')
+    _check_names(change, item)
+    now = now or utc_now()
+    found = read_log_entry(harness, anchor)
+    if not verbatim_admits(found.entry, statement['text']):
+        raise RecorderError('STATEMENT_OUTSIDE_VERBATIM', 'the statement\'s text is not inside the verbatim block '
+                            f'(the "> " lines) of the entry {anchor!r} at {found.revision}')
+    recorded = {'restsOn': D.RESTS_ON, 'entry': f'{G.LOG}#{anchor}', 'date': found.entry.date,
+                'revision': found.revision, 'digest': found.digest, 'challengeShown': False}
+    with _open(project) as repo:
+        head = repo.head()
+        if head.commit is None:
+            raise RecorderError('PROJECT_UNAVAILABLE', 'the project repository has no commit at HEAD')
+        state = _guarded(_Change, repo, head.commit, change, item)
+        _guarded(_recorded_decisions, repo, head.commit, state.base)  # the committed records are well formed
+        if reference in _quote_sources(state):
+            raise RecorderError('ACCEPTANCE_IS_REQUEST', f'{reference} is the source of an Original Quote of {change}: '
+                                'the request itself')
+        return _accept(repo, head, state, statement, ('recorded', recorded), revision=head.commit,
+                       proposal_digest=state.digest, recorded_by=recorded_by, identity=identity, amend=amend,
+                       now=now, new_outcome=new_outcome, new_decision_id=new_decision_id)
 
 
 def commit_message(decision, minted, statement):
     subject = decision['subject']
     verb = 'Accept' if minted else 'Re-accept'
     tail = 'outcome id minted' if minted else 'outcome id kept'
+    recorded = decision.get('recorded')
+    rests = '' if recorded is None else (
+        f'It rests on the Owner\'s statement recorded in {recorded["entry"]} ({recorded["date"]}),\n'
+        f'read at the harness revision {recorded["revision"]}. No challenge was shown.\n\n')
     return (f'{verb} {subject["item"]} of {subject["change"]}: outcome {subject["outcome"]} ({tail})\n\n'
             f'Owner decision {decision["decisionId"]} ({KIND}), recorded by {decision["recordedBy"]} with the\n'
             f'acceptance recorder. Statement: {statement["reference"]} ({statement["channel"]}).\n\n'
+            f'{rests}'
             f'AIEH-Decision-Id: {decision["decisionId"]}\n'
             f'AIEH-Outcome-Id: {subject["outcome"]}\n'
             f'AIEH-Recorder: {RECORDER}\n')
@@ -541,8 +710,8 @@ def _read_json(path, code):
 
 def main(argv=None, out=None, err=None):
     parser = argparse.ArgumentParser(prog='acceptance_recorder.py', description='Record the Owner\'s acceptance of '
-                                     'an objective and mint its outcome id (plan leaf P-04.1; decision 0008). Exit 0 '
-                                     'done, 2 refused (a stable code and its remedy).')
+                                     'an objective and mint its outcome id (plan leaves P-04.1 and E-05.12; '
+                                     'decision 0008). Exit 0 done, 2 refused (a stable code and its remedy).')
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('prepare', help='print the challenge to show the Owner; writes nothing')
     p.add_argument('--project', required=True)
@@ -557,6 +726,18 @@ def main(argv=None, out=None, err=None):
     r.add_argument('--recorded-by', required=True)
     r.add_argument('--identity', required=True, help='the commit identity, "Name <email>"')
     r.add_argument('--amend', action='store_true', help='record a new acceptance of an item that has its outcome id')
+    g = sub.add_parser('record-from-log', help='record the Owner\'s acceptance from his statement recorded verbatim in '
+                       'the harness log\'s Decisions, without a challenge, and commit')
+    g.add_argument('--project', required=True)
+    g.add_argument('--change', required=True)
+    g.add_argument('--item', required=True)
+    g.add_argument('--statement', help='{text, attributedTo, channel, reference} as JSON, the reference '
+                   'harness:evidence/bootstrap-log.md#<anchor>')
+    g.add_argument('--harness', default=str(REPO), help='the harness repository whose committed log is read '
+                   '(default: this checkout)')
+    g.add_argument('--recorded-by', required=True)
+    g.add_argument('--identity', required=True, help='the commit identity, "Name <email>"')
+    g.add_argument('--amend', action='store_true', help='record a new acceptance of an item that has its outcome id')
     args = parser.parse_args(argv)
     out, err = out or sys.stdout, err or sys.stderr
     if out is sys.stdout and hasattr(out, 'reconfigure'):
@@ -567,6 +748,10 @@ def main(argv=None, out=None, err=None):
             if args.out:
                 with open(args.out, 'x', encoding='utf-8', newline='\n') as handle:
                     handle.write(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+        elif args.command == 'record-from-log':
+            statement = _read_json(args.statement, 'STATEMENT_INVALID')
+            result = record_from_log(args.project, args.change, args.item, statement, recorded_by=args.recorded_by,
+                                     identity=args.identity, harness=args.harness, amend=args.amend)
         else:
             challenge = _read_json(args.challenge, 'CHALLENGE_INVALID')
             statement = _read_json(args.statement, 'STATEMENT_INVALID')

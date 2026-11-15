@@ -41,12 +41,14 @@ under the managed data root and write the live manifest there.
 | `envelope_decisions.py` | The provider-envelope authorizations' read side (plan leaf S-03.5, slice 1): the authorization recorder's receipts of operation kind `provider-envelope`, the governing one (the last confirmed), and the verifier the inference broker's `serve` asks (`verify_envelope`, `verifier`) with its refusal codes; importable without the recorder (no Gitea, credential or store module) |
 | `selection_recorder.py` | The model-selection recorder (plan leaf S-03.5, slice 2): `delegate` (the engineering manager's `select-models` decision under decision 0018 point 3, resting on the governing provider-envelope receipt) and `status`; the codes and remedies, the context and the command line. It imports no Gitea or credential module |
 | `input_recorder.py` | The dispatch-input commands: `design prepare`, `record` and `delegate`; `manifest prepare`, `record`, `delegate` and `resolve`; `status`; the codes and remedies, the context and the command line |
-| `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
+| `acceptance_recorder.py` | `prepare` and `record`; `record_from_log`, the recorded-statement path (plan leaf E-05.12), with its log reader (`read_log_entry`) and its text-matching rule (`verbatim_admits`); the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
 | `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy (`policy_of`) and the admitted sets (`managed_policies`: the authorization repository alone; `exercise_policies`: the S-01.2.2 fixture), the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
 | `authorization_proposal.py` | The proposal act (plan leaf E-05.7; decision 0022 point 4): one pull request of one operation manifest from `work/<id>` into the protected branch, by the builder bot, read back (sha256 equal) and approved by the reviewer bot, with bot tokens only and its own route allowlist (`BOT_ROUTES`); never merges; its command line admits the authorization repository alone |
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
+| `tests/test_recorded_statement.py` | `record_from_log` on throwaway project repositories and a throwaway harness log: the resolver round trip, the record naming the entry and the revision with no challenge shown, the id minted once (and kept by `--amend`), P-04.1's path beside it unchanged, a rehearsal of E-05.1 on a copy of the D1 demo design, every refusal changing neither repository, the text-matching rule, the command line; and, read only, that the fixture's copy is the real entry of this checkout's log at `HEAD` and admits E-05.1's statement (integration) |
+| `tests/fixtures/recorded-statement-log.md` | The throwaway harness log: a byte-for-byte copy of the real entry `owner-direction-d1-planning-2026-11-15` among synthetic entries (undated, without a verbatim block, outside the Decisions section, the D1 demo change's request) |
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
@@ -81,6 +83,22 @@ One JSON object per decision, with exactly these fields in this order:
 Attributions and references use the intent-record/v1 grammar. The file is JSON with a two-space
 indent, the fields in this order, UTF-8 kept, LF. The example is
 [`tests/fixtures/accept-objective.decision.json`](tests/fixtures/accept-objective.decision.json).
+
+**A decision resting on a recorded statement** (plan leaf E-05.12; below): an `accept-objective` record
+may have `recorded` where the others have `shown`, and then never has `shown`, since no challenge was
+shown (`RECORDED_FIELDS`). Only `accept-objective` may (`RECORDED_KINDS`); there is no new kind.
+
+| Field of `recorded` | Value |
+|---|---|
+| `restsOn` | `recorded-statement` |
+| `entry` | the log entry the decision rests on, `evidence/bootstrap-log.md#<anchor>`; the statement's `reference` is `harness:<entry>` |
+| `date` | the entry's date, `YYYY-MM-DD`, from its title |
+| `revision` | the full commit of the harness repository at which the log was read |
+| `digest` | `sha256:` of the log's blob at that commit |
+| `challengeShown` | `false` |
+
+The subject is the same; its `revision` and `proposal` are the project's `HEAD` and the proposal's
+sha256 there, as read when the decision was recorded.
 
 The record is **clerical**. It says what was shown, what was said, who recorded it and when. It
 does not authenticate the Owner: `attributedTo` and `channel` are declared by whoever transcribed
@@ -140,6 +158,44 @@ recording.
 (`decision:<id>`), and never the request itself (an Original Quote's `source`; intent-record/v1
 invariant 4).
 
+### The recorded-statement path (plan leaf E-05.12)
+
+[Decision 0018](../../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md)
+point 4.3 makes the Owner's recorded statement sufficient for the acceptance of an objective, and point 7
+records his statements verbatim, dated, in the log's Decisions. **`record-from-log`**
+(`record_from_log`) records such an acceptance without a challenge, in the same single commit as
+`record` (the decision record, the item, the outcome id minted once or kept with `--amend`, and the
+resolver's check before the branch moves). Nothing is shown to the Owner: the decision record has
+`recorded` in place of `shown` (above), and the commit message says that it rests on the recorded
+statement, names the entry and the harness revision, and that no challenge was shown.
+
+**The statement reference rules.** The statement is `{text, attributedTo, channel, reference}`, judged
+first as any statement is (it must be the Owner's, above). Then:
+
+1. The reference is `harness:evidence/bootstrap-log.md#<anchor>` (the form the intent records already
+   use for the log), the anchor in the log's anchor grammar (`[a-z0-9][a-z0-9-]*`). Any other reference
+   is refused here; the challenge path (`record`) keeps its own rules and refuses this one.
+2. The log is read at the `HEAD` commit of the harness repository (`--harness`, by default this
+   checkout) through the repository-access module, with the repository's own configuration only and
+   the upward search stopped at it: the committed blob, never the work tree. A log absent there, or no
+   commit at `HEAD`, is refused; an entry present only in the work tree is absent.
+3. The anchor names an entry of the log's `## Decisions` section, as `delegated_decision.decisions_entry`
+   reads one (P-04.3): a top-level list item `- <a id="<anchor>"></a>**<title>**` running to the next
+   top-level list item or heading. An anchored entry of another section is absent.
+4. The entry's title begins with its date, `YYYY-MM-DD: `.
+5. **The text-matching rule** (`verbatim_admits`): the entry's verbatim Owner block is its `>` lines
+   (after any indentation, the marker and one space after it removed). The statement's text is read
+   the same way, each of its lines without a leading `>` marker, so it may be given with or without the
+   markers. Both are split into words on any whitespace (spaces, tabs, line breaks, blank lines). The
+   statement is admitted when its words are a contiguous run of the block's words, compared exactly:
+   case, punctuation and order kept, no word cut. A multi-line statement spanning several quote lines,
+   blank `>` lines included, is admitted; text from the entry's title or from a reading outside the
+   block (such as the product manager's) is not.
+6. The reference is not the request itself: no Original Quote of the change has it as its `source`.
+
+That the Owner wrote the block is not checked (decision 0018 point 7: a log quote is checked for
+presence, not authorship); the statement's `attributedTo` must still be `owner`.
+
 ### Refusals
 
 Each refusal has a stable code and its remedy (`acceptance-recorder: CODE: detail. Remedy: ...`,
@@ -168,6 +224,19 @@ exit 2), and changes nothing: the branch, the work tree and the index are as the
 | `COMMIT_REFUSED` | the repository module refused the commit: the change's files have local changes, HEAD is not a branch or moved, signing is configured, or the index cannot be rewritten (`details['reason']`) |
 | `RESOLUTION_FAILED` | the new commit's outcome does not resolve as declared; nothing was committed |
 | `PROJECT_UNAVAILABLE`, `GIT_FAILED` | not a work tree with a commit, or Dulwich is not importable; the repository could not be read |
+
+`record-from-log` refuses with the statement, name, item, outcome, commit and project codes above
+(never a challenge code), and with these:
+
+| Code | Refused when |
+|---|---|
+| `STATEMENT_REFERENCE_NOT_LOG` | the reference is not `harness:evidence/bootstrap-log.md#<anchor>` (rule 1) |
+| `HARNESS_UNAVAILABLE` | the harness repository cannot be read, or its log is not UTF-8 |
+| `STATEMENT_LOG_NOT_COMMITTED` | the harness has no commit at `HEAD`, or the log is not committed there (rule 2) |
+| `STATEMENT_ANCHOR_ABSENT` | the committed log has no Decisions entry with the anchor (rules 2 and 3) |
+| `STATEMENT_ENTRY_UNDATED` | the entry's title has no `YYYY-MM-DD: ` date (rule 4) |
+| `STATEMENT_OUTSIDE_VERBATIM` | the text is not inside the entry's verbatim block, or the entry has none (rule 5) |
+| `ACCEPTANCE_IS_REQUEST` | the reference is an Original Quote's `source`: the request itself (rule 6) |
 
 ## The Owner authorization recorder (plan leaf P-04.2)
 
@@ -580,11 +649,14 @@ From the repository root, under the tools interpreter (`<tools python>` is what
 <tools python> -I -B integrations/owner/acceptance_recorder.py prepare --project DIR --change NAME --item O1 --out challenge.json
 <tools python> -I -B integrations/owner/acceptance_recorder.py record --project DIR --challenge challenge.json \
     --statement statement.json --recorded-by agent:<id> --identity "Name <email>" [--amend]
+<tools python> -I -B integrations/owner/acceptance_recorder.py record-from-log --project DIR --change NAME --item O1 \
+    --statement statement.json --recorded-by agent:<id> --identity "Name <email>" [--harness DIR] [--amend]
 <tools python> -I -B -m unittest discover -s integrations/owner/tests -v      # task owner:test
 <tools python> -I -B integrations/owner/tests/owner_fixture.py [--record]     # the example record
 ```
 
-`task owner:accept -- prepare ...` and `task owner:accept -- record ...` run the first two.
+`task owner:accept -- prepare ...`, `task owner:accept -- record ...` and `task owner:accept --
+record-from-log ...` run the first three.
 
 The authorization recorder, only in the main session on an Owner decision:
 
@@ -703,6 +775,9 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
 
 - Any real acceptance: the recorder has run on throwaway fixture repositories only, with synthetic
   statements. No Owner acceptance has been recorded with it.
+- The recorded-statement path (E-05.12) on a real project: it has run on throwaway project repositories
+  and a throwaway harness log only (one test reads this checkout's log at `HEAD`, read only, and records
+  nothing). It has not run on the demo repository `aieh-d1-demo` or recorded any Owner acceptance.
 - The statement's attribution against its source: the Owner conversation store (U-02.x) does not
   exist, so whether the referenced message is the Owner's is declared, not checked.
 - Under `core.autocrlf=true` the files are written as their blob bytes (LF), where git's checkout
