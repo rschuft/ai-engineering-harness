@@ -96,6 +96,10 @@ END_CAUSE_KEY = 'dispatch/attempt/{attempt_id}/end-cause'
 END_CAUSE_FORMAT = 'ai-engineering-harness/dispatch/end-cause/v1'
 ESCALATION_KEY = 'dispatch/attempt/{attempt_id}/escalation'
 ESCALATION_FORMAT = 'ai-engineering-harness/dispatch/escalation/v1'
+# The result path's journal (D1 work design G6; slice B reserves and dispatches it): once dispatched, the attempt's
+# result is handed on and the attempt is not ended as interrupted (ATTEMPT_RESULT_HANDED_ON).
+RESULT_KEY = 'dispatch/attempt/{attempt_id}/result'
+HANDED_ON = ('dispatched', 'confirmed', 'unknown')
 CONVERSATION_ENDED, ATTEMPT_STOPPED = 'conversation-ended', 'attempt-stopped'
 TRIGGERS = (CONVERSATION_ENDED, ATTEMPT_STOPPED)
 
@@ -111,7 +115,10 @@ INTERRUPTION_CAUSES = (USAGE_LIMIT, OVERLOAD, STREAM_CUT, PATH_LOST)
 
 # The dispatcher's own records: what it observed itself about the attempt (never the conversation's say-so).
 NON_RETRYABLE_RECORDS = {'containment-stop': 'containment', 'credential-stop': 'credential',
-                         'egress-stop': 'unexpected-egress'}
+                         'egress-stop': 'unexpected-egress',
+                         # R2 (the engineering manager, 2026-11-15): a model identifier outside the attempt's model
+                         # record, and the provider process check after the turn (slice C's producers)
+                         'model-stop': 'unexpected-model', 'provider-stop': 'provider-process'}
 INTERRUPTION_RECORDS = {'provider-path-lost': PATH_LOST}
 RECORD_KINDS = (*NON_RETRYABLE_RECORDS, *INTERRUPTION_RECORDS)
 RECORD_REF_RE = re.compile(r'[A-Za-z0-9._:/@#-]{1,256}')
@@ -497,6 +504,10 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
     held = integration_store.get(key)
     if held is not None and held.state == 'confirmed':
         return _detail(integration_store, key, 'confirmed')
+    result = integration_store.get(RESULT_KEY.format(attempt_id=attempt_id))
+    if result is not None and result.state in HANDED_ON:
+        raise _refused('ATTEMPT_RESULT_HANDED_ON', f'the result journal of attempt {attempt_id} is {result.state}: '
+                       'its result is the result path\'s', result_state=result.state)
     begun = {'trigger': trigger, 'dispatcherRecords': records}
     client = _client(resolved, transport)(read_artifact)
     if held is None:

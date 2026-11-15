@@ -250,6 +250,37 @@ REFUSALS = {
                          'user text, run true; a command: bounded text, cwd /workspace, a bounded timeout)',
     'COMMAND_NOT_BUILT': 'the command tail\'s body is not a command made by a registered builder (a raw string, a '
                          'mapping or any other object is refused)',
+    # D1 slice A2: the attempt run (attempt_run.py)
+    'BASE_UNAVAILABLE': 'the approved repository\'s base cannot be read from its project clone (no branch, a missing '
+                        'object, no complete bundle)',
+    'BASE_LACKS_DESIGN': 'the base does not contain the attempt\'s accepted design commit, or is not the approved '
+                         'repository checked against it',
+    'SEED_TREE_REFUSED': 'the base tree holds an entry that is not a regular file (a link, a gitlink) or has a '
+                         'forbidden name (.claude, .mcp.json) anywhere: nothing is seeded',
+    'SEED_FAILED': 'the seed command\'s answer is not its success line: nothing was sent to the agent',
+    'MESSAGE_SLOT_UNRESOLVED': 'a slot of the message frame (or of the commit message) cannot be filled from the '
+                               'reserved record and the seeded tree',
+    'INSPECTION_FAILED': 'the conversation is not the one, running conversation of the declared shape: no message is '
+                         'sent and the attempt is ended',
+    'TURN_CONFLICT': 'the attempt\'s turn journal holds another base, seed, frame or message',
+    'TURN_ALREADY_SENT': 'the attempt\'s turn journal is past reserved: the message is never sent again',
+    'TURN_REFUSED': 'the Agent Server refused the message with a 4xx',
+    'TURN_UNRECONCILED': 'the message\'s answer was lost and the conversation\'s events do not hold it: nothing is '
+                         'sent again',
+    'TURN_NOT_CONFIRMED': 'the attempt\'s turn journal is not confirmed: no result is taken',
+    'TURN_CEILING': 'the turn did not end within its ceiling',
+    'RESULT_COMMAND_FAILED': 'the result command did not report a commit, its tests and a bundle delivered into the '
+                             'exchange as printed',
+    'RESULT_NOT_VERIFIED': 'the pulled bundle did not pass the retained verifier (decision 0014 row R6) at the '
+                           'delivered digest',
+    'RESULT_REFS_INVALID': 'the bundle holds another or a second reference, or a prerequisite',
+    'RESULT_COMMIT_MISMATCH': 'the bundle\'s commit is not the commit the dispatcher specified over its tree (parent, '
+                              'identity, time, message or header), or not the one the command printed',
+    'RESULT_TREE_REFUSED': 'the result tree holds an entry that is not a regular file (a link, a gitlink) or has a '
+                           'forbidden name (.claude, .mcp.json) anywhere',
+    'ATTEMPT_ENDED': 'the attempt has an end record: no result is taken from it',
+    'ATTEMPT_RESULT_HANDED_ON': 'the attempt\'s result journal is dispatched: its result is the result path\'s, and it '
+                                'is not ended as interrupted',
     'BODY_MALFORMED': 'the create body is not a JSON object, or a bodyless call (GET, HEAD, DELETE) carries a body',
     'BODY_FIELD_UNKNOWN': 'the create body carries a field outside the allowlist',
     'BODY_NOT_TEMPLATE': 'an allowlisted create body field differs from the profile\'s pinned create template',

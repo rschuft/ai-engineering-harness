@@ -574,7 +574,7 @@ classifies nothing (fail closed):
 
 | Surfaced | Read as | Classification |
 |---|---|---|
-| a dispatcher record `containment-stop`, `credential-stop` or `egress-stop` | containment, credential, unexpected egress | **non-retryable** (a security stop), whatever the conversation says |
+| a dispatcher record `containment-stop`, `credential-stop`, `egress-stop`, `model-stop` or `provider-stop` (the last two R2's, D1 slice A2) | containment, credential, unexpected egress, unexpected model, provider process | **non-retryable** (a security stop), whatever the conversation says |
 | code `ACPAuthRequired` (`-32000`, or a `-32603` naming 401/403, expired, OAuth token, credential), `LLMAuthenticationError`; or an ACP code with error kind `authentication_failed` or `oauth_org_not_allowed` | authentication | **authentication refusal**: an interruption that needs the Owner |
 | `ACPPromptError`, `ACPInitError`, `ACPStartupTimeout` with error kind `rate_limit` or `billing_error`; `LLMRateLimitError` | usage-limit | interruption |
 | the same codes, error kind `server_error`, text `Repeated 529 Overloaded errors` or `This is a server-side issue` (a 5xx) | overload | interruption |
@@ -1097,6 +1097,124 @@ UNKNOWN.
 - N-3: an interrupt during the teardown's DELETE itself leaves the conversation; destroying the disposable guest
   removes it.
 
+## The attempt run (D1 slice A2)
+
+[`attempt_run.py`](attempt_run.py) runs a confirmed native D1 attempt to a verified result, in the
+order the D1 work design fixes (accepted 2026-11-15; G2 to G6 and the engineering manager's rulings
+R1 to R5). Every Agent Server call goes through `AgentServerClient`, the conversation proxy only
+on its two listed tails. `run_attempt(store, operation_key, transport=, base=, actor=, inspect=,
+pull=, observe=, reserve_result=)`:
+
+```
+inspect      GET /api/conversations/count is 1, GET /api/conversations/{id} is the reserved one,
+             GET .../runtime is running, and inspect(conversation_id) (the container facts) finds
+             nothing; else no message, and the attempt is ended (containment-stop INSPECTION_FAILED)
+SEED         the base's tree into /workspace/<repository>       (bash tail, build_seed)
+MESSAGE      turn journal reserved, dispatched, then the one POST (events tail, send_message)
+wait         GET /api/conversations/{id} to a terminal status, bounded by a ceiling (wait_for_turn)
+RESULT       only after finished: one commit, its bundle delivered into the exchange, the tests
+             (bash tail, build_result, deliver=)
+intake       pull(name) (exchange-pull: the retained verifier, decision 0014 row R6), then
+             intake_result
+close        the runtime stopped and observed missing (attempt_end.stop_runtime); reserve_result
+```
+
+`observe(phase, **facts)` is called at `before-message`, `after-turn` and `after-result`. Slice C
+supplies the observations. Any dispatcher record it returns ends the attempt through
+`attempt_end.end_interrupted_attempt` (trigger `attempt-stopped`), and nothing is handed on. A
+refusal anywhere else leaves the conversation and the guest as they are, for a resumed step. A
+turn that is not `finished` returns `turn-not-finished` and runs no RESULT.
+
+**The base** (`read_base(project, repository=, design_commit=)`) is the approved repository's
+`refs/heads/main` in its project clone, read through the repository-access module (Dulwich, no
+git launch). It must contain the accepted design commit (`BASE_LACKS_DESIGN`). Its tree must hold
+regular files only, with no link, no gitlink and no `.claude` or `.mcp.json` anywhere
+(`SEED_TREE_REFUSED`, R3). A complete bundle of the branch is made for RESULT.
+
+**SEED** (`build_seed`, a registered builder) runs `printf %s '<hex>' | python -c '<SEED_SCRIPT>'
+'/workspace/<repository>' '<sha256>'`. The hex is a gzipped tar of the base's files, sorted, with
+times and owners 0. The script checks the sha256, creates the directory (an existing one fails
+the command), extracts with tarfile's `data` filter and prints `AIEH-SEED ok <sha256> <files>`;
+anything else is `SEED_FAILED`. No `.git` and no history enter the workspace.
+
+**The message** (`build_message`, frame `aieh-d1-message/v1`) points the agent at the task file
+(`backlog/tasks/<task id> - *.md`, exactly one in the seeded tree) and the change folder
+(`openspec/changes/<change>/`, which must be there). It asks the agent to implement the change
+as designed and to run the accepted design's test command offline. It also asks the agent to
+edit nothing under `backlog/` or `openspec/` and not to commit or push. Every slot comes from the
+reserved record or the seeded tree (`MESSAGE_SLOT_UNRESOLVED` otherwise).
+
+**The turn journal** is `dispatch/attempt/<attempt id>/turn` (`attempt-turn/v1`). Its intent is
+the base (repository, ref, commit), the seed's sha256 and file count, the frame version and the
+message's sha256. A journal for another intent is `TURN_CONFLICT`. The journal is `dispatched`
+immediately before the POST, then `confirmed` with the status:
+
+- a 4xx is `failed` (`TURN_REFUSED`);
+- no answer, a 5xx or a 429 is `unknown`. `reconcile_turn` settles it only by reading the
+  conversation's events (the user message with that sha256), or refuses with `TURN_UNRECONCILED`;
+- a journal past `reserved` is `TURN_ALREADY_SENT`, with zero calls. The message is never sent
+  twice.
+
+**RESULT** (`build_result`) runs `printf %s '<hex of JSON>' | python -c '<RESULT_SCRIPT>'
+'/workspace/<repository>'`. Every value travels hex-encoded: the base, its bundle, the work
+branch `refs/heads/work/<attempt id>`, R5's identity `aieh-bot-builder
+<aieh-bot-builder@localhost.invalid>` and the message. The date is the attempt's `confirmed` time
+in the store (`attempt_time`), so a resumed RESULT makes the same commit. The message is
+`<task id>: <title>` with the trailers `Task:`, `Attempt:`, `Outcome:` and `Design:`, from the
+reserved record and the task file's front matter (`commit_message`).
+
+In the container the script runs these git steps:
+
+1. Make a fresh git directory outside the workspace, with configuration isolated: no system or
+   global file, `core.autocrlf` false, `core.fileMode` false, `commit.gpgSign` false and
+   `safe.directory` given on the command line. Nothing of a `.git` the agent left in the
+   workspace is read.
+2. Fetch the base bundle, check the base commit, `read-tree` the base and `add -A` the workspace.
+3. `write-tree`, then `commit-tree` with the parent the base.
+4. Bundle the work branch completely.
+5. Check out the commit into an export and run the accepted design's test command there
+   (`python -m unittest discover -s tests`), with a minimal environment: PATH and a temporary
+   HOME, none of the conversation's variables.
+
+It prints the base, tree and commit, the tests' exit status and the tail of their output (hex,
+at most 64 KiB) and the bundle in the exchange delivery's frame (A1). The API probe writes the
+bundle into the guest exchange as `work-<attempt id>.bundle` and answers its sha256 and size
+(`parse_result`; `RESULT_COMMAND_FAILED` otherwise). The test output is labelled: run by the
+dispatcher's fixed command in the attempt's container on an export of the committed tree, not
+independent CI (G5). A failing run is reported as it is, and the path proceeds (R1).
+
+**The intake** (`intake_result`) checks, in order:
+
+1. The attempt is confirmed and has no end record (`ATTEMPT_ENDED`), and its turn is confirmed
+   (`TURN_NOT_CONFIRMED`).
+2. The pull passed the retained verifier at the delivered sha256 and size (`RESULT_NOT_VERIFIED`).
+3. The bundle holds exactly `refs/heads/work/<attempt id>`, with no prerequisite
+   (`RESULT_REFS_INVALID`).
+4. Its commit is the printed one, and its raw object is byte for byte `expected_commit(tree, base,
+   message, time)`: tree, one parent the base, the bot as author and committer at the store's
+   time, the message, nothing else. The host recomputes the id itself (`RESULT_COMMIT_MISMATCH`).
+   This one equality covers the parent, the identity, the time, the message and any extra
+   header.
+5. The tree holds regular files only, with no link, gitlink or forbidden name
+   (`RESULT_TREE_REFUSED`, with each entry's reason: never dropped silently, R3).
+
+It returns a `VerifiedResult` (`attempt-result/v1`). The result journal is slice B's:
+`reserve_result(verified)` is called last, after the runtime stop.
+
+**The end's exclusion** (G6). `attempt_end.end_interrupted_attempt` refuses an attempt whose
+result journal `dispatch/attempt/<attempt id>/result` is dispatched, confirmed or unknown
+(`ATTEMPT_RESULT_HANDED_ON`); a journal that is only reserved does not stop a security stop. The
+intake refuses an attempt with an end record. R2 adds two security-stop kinds to the dispatcher's
+records: `model-stop` (a model identifier outside the attempt's model record, cause
+`unexpected-model`) and `provider-stop` (the provider process check after the turn, cause
+`provider-process`).
+
+Measured on this host (2026-11-15), the client's role-token guard takes about 0.43 s per MiB of a
+hex body while a role token is held: about 1.7 s at the command tail's 4 MiB bound. That is fast
+enough for the two built commands of an attempt, so the guard is unchanged. **Not yet verified**
+live: whether git runs in a conversation container, how much output the bash route returns and
+whether it masks or alters any, and the inspection's runtime answer for a running conversation.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -1241,6 +1359,11 @@ acceptance takes effect when a manifest naming it is promoted.
 | `PRIOR_END_SECURITY_STOP`, `PRIOR_END_UNCLASSIFIED` | an attempt of the work item (any design revision or stage) ended non-retryable or was escalated to a security stop (the leaf's security stop); or an earlier one ended unclassified and the engineering manager has not classified it |
 | `PRIOR_AUTH_CAUSE_UNRECORDED`, `PRIOR_AUTH_TOKEN_NOT_REPLACED`, `NATIVE_TOKEN_NOT_REPLACED` | after an authentication refusal: no cause record; the provider refused the token and no newer entry receipt holds another; the token read is a refused one or not the receipt's |
 | `AUTH_CAUSE_INVALID`, `AUTH_CAUSE_NOT_APPLICABLE`, `AUTH_CAUSE_CONFLICT` | the cause record: an unknown cause; no end record of an authentication refusal; another cause recorded |
+| `ATTEMPT_RESULT_HANDED_ON` | the end: the attempt's result journal is dispatched, confirmed or unknown (the result path's) |
+| `BASE_UNAVAILABLE`, `BASE_LACKS_DESIGN`, `SEED_TREE_REFUSED`, `SEED_FAILED` | the attempt run's base and seed: unreadable; not containing the accepted design (or not the approved repository); a link, gitlink or forbidden name; the seed command did not succeed |
+| `MESSAGE_SLOT_UNRESOLVED`, `INSPECTION_FAILED` | a frame or commit-message slot the record and the seeded tree cannot fill; the inspection before any work failed |
+| `TURN_CONFLICT`, `TURN_ALREADY_SENT`, `TURN_REFUSED`, `TURN_UNRECONCILED`, `TURN_NOT_CONFIRMED`, `TURN_CEILING` | the turn journal: another intent; past reserved (never sent twice); a 4xx; a lost answer the events do not settle; not confirmed at the intake; no terminal status within the ceiling |
+| `RESULT_COMMAND_FAILED`, `RESULT_NOT_VERIFIED`, `RESULT_REFS_INVALID`, `RESULT_COMMIT_MISMATCH`, `RESULT_TREE_REFUSED`, `ATTEMPT_ENDED` | the result: the command's report or delivery; the retained verifier or the digest; the references; the specified commit; the tree policy; an attempt with an end record |
 | `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause and escalation records: neither interruption nor security-stop; no end record the cause applies to (interruption: an unclassified end not escalated; security-stop: any end but a non-retryable one); a receipt holding another intent |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
@@ -1479,6 +1602,19 @@ transport called zero times:
 | `ReadOrder` | the order `admit`, `stage_inference`, read, `admit_secrets`, workspace, `send_create`, the attempt reserved and no workspace at the read; a missing, malformed or unreadable entry, or no provider, is a refused attempt |
 | `NoOtherCredential` | negative control: sentinels in other entries, the credential environment names and a host Claude configuration (an audit hook on file opens); only the one entry is read; positive controls see each kind of read |
 | `Custody` | the store, the result, the admitted-create record and captured output and logs carry the fingerprint only, also on a refused, unknown and unanswered create |
+
+[`tests/test_attempt_run.py`](tests/test_attempt_run.py) (D1 slice A2), on the E-05.9 native fixture, a Dulwich-built demo repository (C0 to C3) and, for the oracle, the real SEED and RESULT commands run by Git Bash (Windows) or bash with git, the workspace a temporary directory, and the retained verifier (`tools/guest.py` `verify_pulled_bundle`):
+
+| Class | What it shows |
+|---|---|
+| `Goldens` (contract) | the sha256 of SEED_SCRIPT, RESULT_SCRIPT and the frame, and of the fixture's seeded tar; the SEED command's exact text; RESULT's parameters are exactly its named values (base, bundle, branch, R5's identity and date, message, bounds, frame), and an attempt id or time out of grammar is `TAIL_BODY_INVALID`; the frame constants equal `tools/guest.py`'s |
+| `Base` | the base is the branch head containing the design commit, its sorted files and a complete one-reference bundle; a commit not in the history is `BASE_LACKS_DESIGN`; a bad id, branch or clone `BASE_UNAVAILABLE`; a `.claude` or `.mcp.json` anywhere, a link or a gitlink is `SEED_TREE_REFUSED` with its reason; an executable is a regular file |
+| `Message` (unit) | the frame's exact text for the fixture, within the message grammar; the commit message's exact text; another change, no design, a bad work id, no or two task files, a bad repository, no title are `MESSAGE_SLOT_UNRESOLVED` |
+| `Oracle` | the real commands: an edited tree (add, modify, delete) and an untouched one (its tree the base's) are committed once on the base, verified by git (R6), the commit id recomputed on the host and equal; a failing test run is reported (R1); a workspace `.git` with hooks, `HEAD`, `hooksPath` and an `fsmonitor` changes nothing and none of it runs; a forbidden name, a nested repository (a gitlink) and a symbolic link are `RESULT_TREE_REFUSED`; another time or message is `RESULT_COMMIT_MISMATCH`; the seed refuses an existing workspace and writes the base's bytes |
+| `Intake` | another, a second, another attempt's or no reference and a prerequisite are `RESULT_REFS_INVALID`; an unverified pull, another digest or size `RESULT_NOT_VERIFIED`; a commit or base other than the printed one `RESULT_COMMIT_MISMATCH`; an ended attempt `ATTEMPT_ENDED`, a turn not confirmed `TURN_NOT_CONFIRMED`, an attempt not confirmed refused; the result output parsed strictly (a failed step, a missing or repeated marker, a delivery error or mismatch, a 500) |
+| `Turn` | the journal is `dispatched` when the one POST is made (seen by the transport); a second send makes zero calls; a lost answer is `unknown`, `TURN_UNRECONCILED` until the events show the message, then `confirmed` (reconciled) with no second POST; a 503 is settled from the events, a 422 `TURN_REFUSED`; the wait reads to a terminal status with bounded waits, and `TURN_CEILING` |
+| `Run` | with a fake Agent Server and the real commands: exactly the declared calls (count, conversation, runtime, SEED, message, status, RESULT, runtime stop and read), `reserve_result` called once with the verified result; a second conversation, a runtime not running, a container problem or a failing hook sends no message and ends the attempt (`containment-stop` `INSPECTION_FAILED`, non-retryable); a turn `error`, `stuck` or `paused` runs no RESULT; an observer's record before the message, after the turn or after the result calls `end_interrupted_attempt` with that record and reserves no result; a base of another repository or design is refused before any call |
+| `EndExclusion` | a reserved result journal does not keep a security stop from ending the attempt; a dispatched, confirmed or unknown one is `ATTEMPT_RESULT_HANDED_ON` with no call; `model-stop` and `provider-stop` are security stops |
 
 [`tests/test_attempt_end.py`](tests/test_attempt_end.py) (E-05.8), on the E-05.9 native fixture with a fake of
 the pinned Agent Server's conversation, event-search, runtime-stop and runtime-status routes, events in the shapes
