@@ -23,12 +23,22 @@ The key:
   module never opens the host custody copy (``session_key.host_path``): that copy is the provision and inspect
   steps' fingerprint source, disclosed under decision 0013 point 6.
 
-A call whose body carries ``secrets`` (the D1 create's attempt token, E-05.6) uses ``GuestApi``'s sealed form: the
-request travels in the probe's text on ssh's standard input, never on a command line (``sealed_secret``).
+Every call with a body uses ``GuestApi``'s sealed form: the request travels in the probe's text on ssh's standard
+input, never on a command line (D1 work design G2: a seed or a result command does not fit a command line, which
+Windows caps near 32767 characters; before, only a body with ``secrets`` was sealed). The seal is the body's one
+secret word when it carries ``secrets`` (the D1 create's attempt token, E-05.6; ``sealed_secret``), else a fresh
+nonce. A bodyless call keeps the probe's argument form.
 
-``calls`` records each call's method, path, status, seconds and the sha256 of its canonical body (``body_sha256``),
-never a body, a key or an answer. Standard library only; it imports nothing of ``tools/guest.py`` unless
-``for_instance`` is given that module.
+``calls`` records each call's method, path, status and seconds, and the sha256 of its canonical body
+(``body_sha256``), never a body, a key or an answer. A body that carries ``secrets`` gets no digest (``None``): it
+would fingerprint the secret with the body's known text (E-05.11 review N4, the engineering manager's ruling R7 of
+2026-11-15 moving it from the driver into the transport).
+
+``transport(method, path, body, deliver={"part", "name"})`` asks the API probe for the exchange delivery of that
+call's answer (``tools/guest.py`` ``GuestApi``, D1 work design G2): the framed part of the answer's standard output
+is written, exclusively and bounded, into the guest exchange under ``name``, and the answer carries only its
+``delivered`` ``{"name", "sha256", "size"}`` (or ``{"error"}``), never the part's bytes. Standard library only; it
+imports nothing of ``tools/guest.py`` unless ``for_instance`` is given that module.
 """
 from __future__ import annotations
 
@@ -42,6 +52,8 @@ import time
 from pathlib import Path
 
 CALL_TIMEOUT_S = 600  # the per-request ceiling inside the guest (a create can take minutes)
+DELIVERY_KEYS = ('part', 'name')
+DELIVERED_KEYS = ('name', 'sha256', 'size')
 
 
 def _native_token():
@@ -66,6 +78,7 @@ def _native_token():
 # native profile the token itself is sealed and redacted from the answer, never a nonce in its place (E-05.11 review
 # item 4; before, a native token longer than 128 characters was sealed with a nonce and its echo not redacted).
 SEALABLE = re.compile(r'[A-Za-z0-9_-]{16,%d}' % _native_token().TOKEN_LENGTH[1])
+SHA256_HEX = re.compile(r'[0-9a-f]{64}')
 # The declared custody of the management key that this transport requires, with the login put in.
 CUSTODY_FIELDS = ('owner', 'group', 'mode', 'guest_dir_owner', 'guest_dir_group', 'guest_dir_mode')
 
@@ -131,20 +144,28 @@ class GuestTransport:
                                  f'holds the key ({self.custody["login"]!r})')
         self.api, self.timeout, self.calls = api, timeout, []
 
-    def __call__(self, method: str, path: str, body):
+    def __call__(self, method: str, path: str, body, *, deliver=None):
         request = {'method': method, 'path': path, 'timeout': self.timeout}
         if body is not None:
             request['json'] = body
-        entry = {'method': method, 'path': path, 'body_sha256': body_sha256(body), 'status': None}
+        if deliver is not None:
+            if not isinstance(deliver, dict) or sorted(deliver) != sorted(DELIVERY_KEYS)                     or not all(isinstance(deliver[k], str) for k in DELIVERY_KEYS) or body is None:
+                raise TransportError('DELIVERY_INVALID', f'{method} {path}: an exchange delivery is {{part, name}} '
+                                     'on a call with a body')
+            request['deliver'] = {k: deliver[k] for k in DELIVERY_KEYS}
+        carries_secrets = isinstance(body, dict) and 'secrets' in body
+        # R7 (E-05.11 review N4): no digest of a body that carries secrets
+        entry = {'method': method, 'path': path, 'body_sha256': None if carries_secrets else body_sha256(body),
+                 'status': None}
         self.calls.append(entry)
         t0 = time.monotonic()
         try:
-            if isinstance(body, dict) and 'secrets' in body:
-                # E-05.6: a body that carries secrets (the D1 create's attempt token) goes sealed: the request
-                # travels in the probe's text on ssh's standard input, never in an argument of ssh or of the
-                # guest's python3, where a refusal or a TimeoutExpired would show it. The sealed secret is the
-                # body's one URL-safe secret value (the token, then redacted from the answer), else a fresh nonce.
-                data = self.api([request], secret=sealed_secret(body))
+            if body is not None:
+                # Every body goes sealed: the request travels in the probe's text on ssh's standard input, never in
+                # an argument of ssh or of the guest's python3, where its size is capped and a refusal or a
+                # TimeoutExpired would show it (E-05.6; D1 work design G2). The seal is the body's one URL-safe
+                # secret value when it carries secrets (the token, then redacted from the answer), else a fresh nonce.
+                data = self.api([request], secret=sealed_secret(body) if carries_secrets else secrets.token_urlsafe(32))
             else:
                 data = self.api([request])
         except BaseException as exc:
@@ -167,7 +188,19 @@ class GuestTransport:
             entry['error'] = str(response.get('error') or 'no status')[:64]
             raise TransportError('NO_ANSWER', f'{method} {path}: not answered ({entry["error"]})')
         entry['status'] = status
-        return {'status': status, 'body': response.get('body')}
+        if deliver is None:
+            return {'status': status, 'body': response.get('body')}
+        delivered = response.get('delivered')
+        if not (isinstance(delivered, dict) and (
+                (sorted(delivered) == sorted(DELIVERED_KEYS) and delivered['name'] == deliver['name']
+                 and isinstance(delivered['sha256'], str) and SHA256_HEX.fullmatch(delivered['sha256'])
+                 and type(delivered['size']) is int and delivered['size'] >= 0)
+                or (sorted(delivered) == ['error'] and isinstance(delivered['error'], str)))):
+            delivered = {'error': 'MALFORMED'}
+        else:
+            delivered = {k: delivered[k] for k in sorted(delivered)}
+        entry['delivered'] = delivered
+        return {'status': status, 'body': response.get('body'), 'delivered': delivered}
 
 
 def for_instance(guest, ctx, name: str, *, timeout: int = CALL_TIMEOUT_S) -> GuestTransport:

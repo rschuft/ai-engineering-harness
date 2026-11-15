@@ -4364,6 +4364,8 @@ class ApiProbe(unittest.TestCase):
                 length = int(self.headers.get('Content-Length', 0))
                 body = json.loads(self.rfile.read(length))
                 test.seen.append(('POST', self.path, self.headers.get('X-Session-API-Key'), body))
+                if self.path.endswith('/bash/execute_bash_command'):
+                    return self.reply(200, {'exit_code': 0, 'stdout': test.stdout, 'stderr': ''})
                 self.reply(201, {'id': body.get('conversation_id')})
 
         self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -4374,6 +4376,7 @@ class ApiProbe(unittest.TestCase):
         thread.start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
+        self.stdout = ''
 
     def probe(self, requests):
         spec = base64.b64encode(json.dumps(requests).encode()).decode()
@@ -4419,6 +4422,45 @@ class ApiProbe(unittest.TestCase):
                                       {'conversation_id': secret})])
         self.assertEqual(out['responses'][0]['body'], {'id': '<sealed secret redacted>'})
         self.assertEqual((out['sealed_occurrences'], out['session_key_occurrences']), (1, 0))
+
+    def test_exchange_delivery(self):
+        """D1 work design G2: a request's deliver writes the framed hex part of its answer's stdout
+        exclusively into the exchange directory and returns only its name, sha256 and size; the
+        part's bytes never reach the probe's output; a second write of the name, a digest or size
+        that is not the payload's, and a malformed frame write nothing."""
+        exchange = self.tmp / 'exchange'
+        exchange.mkdir()
+        payload = bytes(range(256)) * 9
+        digest = hashlib.sha256(payload).hexdigest()
+
+        def frame(data=payload, sha=digest, size=None):
+            lines = [data.hex()[i:i + 64] for i in range(0, 2 * len(data), 64)]
+            return '\n'.join([guest.EXCHANGE_PART_BEGIN.format(part='bundle', sha256=sha,
+                                                                size=len(data) if size is None else size),
+                              *lines, guest.EXCHANGE_PART_END.format(part='bundle')])
+
+        def run(name, stdout):
+            self.stdout = stdout
+            spec = dict(guest.exchange_delivery(PROFILE, {'part': 'bundle', 'name': name}), dir=str(exchange))
+            out = self.probe([{'method': 'POST', 'path': '/api/conversations/c/bash/execute_bash_command',
+                               'json': {'command': 'x'}, 'deliver': spec}])
+            self.assertNotIn(payload.hex()[:64], json.dumps(out))
+            return out['responses'][0]
+        got = run('w.bundle', 'tests OK\n' + frame() + '\n')
+        self.assertEqual(got['delivered'], {'name': 'w.bundle', 'sha256': digest, 'size': len(payload)})
+        self.assertEqual(got['body']['stdout'], 'tests OK\n' + guest.EXCHANGE_PART_DELIVERED.format(
+            part='bundle', sha256=digest, size=len(payload)) + '\n')
+        self.assertEqual((exchange / 'w.bundle').read_bytes(), payload)
+        again = run('w.bundle', frame(b'x', hashlib.sha256(b'x').hexdigest()))
+        self.assertEqual(again['delivered'], {'error': 'EXISTS'})
+        self.assertEqual((exchange / 'w.bundle').read_bytes(), payload)
+        for name, stdout, code in (('a.bundle', frame(sha='1' * 64), 'DIGEST_MISMATCH'),
+                                   ('b.bundle', frame(size=3), 'PART_SIZE'),
+                                   ('c.bundle', frame() + frame(), 'PART_MALFORMED'),
+                                   ('d.bundle', 'no part\n', 'PART_MALFORMED')):
+            with self.subTest(code=code, name=name):
+                self.assertEqual(run(name, stdout)['delivered'], {'error': code})
+        self.assertEqual(sorted(p.name for p in exchange.iterdir()), ['w.bundle'])
 
     def test_connection_refused_is_recorded(self):
         port = self.server.server_address[1]

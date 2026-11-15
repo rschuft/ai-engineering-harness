@@ -403,7 +403,8 @@ token's alphabet, still holds a part of the token of 8 or more characters is wit
 other, every word holding a token, such a part, or a provider key's shape is redacted
 (`create_secrets.redact`). The live transport sends a body that carries `secrets` sealed
 (`guest_transport.GuestTransport`: on ssh's standard input, never in an argument, so neither a
-command line nor a `TimeoutExpired` shows it). The dispatcher holds no provider credential and
+command line nor a `TimeoutExpired` shows it; since D1 slice A1 every body travels so, and a body
+that carries `secrets` gets no digest in the transport's records). The dispatcher holds no provider credential and
 reads none: importing it loads no inference or credential module, and the D1 stage's own modules
 (`acp_qualification`, `inference_control`) are loaded on first use.
 
@@ -804,7 +805,34 @@ process: the probe sends it on the guest's loopback, redacts it from every answe
 and an answer that carried it is refused (`SECRET_IN_ANSWER`). The transport never opens the host
 custody copy, which the provision and inspect steps fingerprint (disclosed under decision 0013
 point 6). `calls` records each call's method, path, status, seconds and the sha256 of its
-canonical body (`body_sha256`), never a body or an answer. `tools/guest.py drill --kind
+canonical body (`body_sha256`), never a body or an answer; a body that carries `secrets` gets no
+digest (`null`: it would fingerprint the secret with the body's known text; E-05.11 review N4, moved
+from the native qualification driver into the transport by the engineering manager's ruling R7 of
+2026-11-15). Every call with a body goes sealed, on ssh's standard input (D1 work design G2: a
+seed or a result command does not fit a command line, which Windows caps near 32767 characters):
+the seal is the body's one secret word when it carries `secrets`, else a fresh nonce; a bodyless
+call keeps the probe's argument form.
+
+**The exchange delivery (D1 work design G2, slice A1).** `transport(method, path, body,
+deliver={"part", "name"})` asks the API probe to deliver one part of that call's answer into the
+guest exchange. `GuestApi` completes the request from the profile's `exchange` before anything is
+sent (`exchange_delivery`: the answer's `stdout`, `exchange.guest_dir`, the pull name grammar and
+never a `.partial` name, the smaller of `exchange.pull.max_bytes` and 12 MiB; anything else is
+refused on the host). In the guest the probe finds the one frame of that part in the answer
+(`tools/guest.py` `EXCHANGE_PART_BEGIN` `AIEH-EXCHANGE-PART <part> <sha256> <size>`, lower-case hex
+lines, `EXCHANGE_PART_END` `AIEH-EXCHANGE-END <part>`), checks the size and the sha256 the frame
+states, and writes the bytes into the exchange with an exclusive create (an existing name is
+`EXISTS`, never overwritten). The frame is replaced in the answer by one
+`AIEH-EXCHANGE-DELIVERED <part> <sha256> <size>` line, and the answer's `delivered` is `{"name",
+"sha256", "size"}` or `{"error"}` (`NO_PART`, `PART_MALFORMED`, `PART_SIZE`, `DIGEST_MISMATCH`,
+`NAME_INVALID`, `EXISTS`, `OPEN_*`, `WRITE_FAILED`; a malformed answer is `MALFORMED`). The part's
+bytes never come back: a field whose frame cannot be cut out is withheld (`null`). The host then
+pulls the file with `exchange-pull` and verifies it (decision 0014 section 7, row R6). It adds no
+isolation (the mover is the dispatcher's own login, which owns the exchange); it gives the result
+one path whose first parser is git. A delivery is `{"part", "name"}` on a call with a body, else
+`DELIVERY_INVALID`.
+
+`tools/guest.py drill --kind
 admitted-create` and `tests/live_admitted_create.py` use this transport; neither has a bridge of
 its own. **Not yet verified** live.
 
@@ -1394,9 +1422,10 @@ times wherever nothing may be called. The positive control asserts exactly one `
 
 | Class | What it shows |
 |---|---|
-| `SeamTests` (unit) | one `GuestApi` request per call; every HTTP status is an answer; a refused, malformed or doubled probe result is `NO_ANSWER`; an answer that carried the key is `SECRET_IN_ANSWER`; a failing channel is re-raised and recorded; `calls` carries the body's canonical digest, never the body |
+| `SeamTests` (unit) | one `GuestApi` request per call; every HTTP status is an answer; a refused, malformed or doubled probe result is `NO_ANSWER`; an answer that carried the key is `SECRET_IN_ANSWER`; a failing channel is re-raised and recorded; `calls` carries the body's canonical digest, never the body, and no digest of a body with `secrets` (R7); every body is sealed (its secret word, else a fresh nonce), a bodyless call not; a delivery is passed on and its answer checked (a wrong name, digest, size or shape is `MALFORMED`), a malformed delivery is `DELIVERY_INVALID` |
 | `CustodyTests` (contract) | the checked-in profile declares the bootstrap custody; another group, mode, owner, directory, path or login, or none, is `KEY_CUSTODY_UNDECLARED`; a channel of another login is `LOGIN_MISMATCH`, and `tools/guest.py`'s channel login is `Ssh.run`'s default; `for_instance` builds the instance's `Ssh` and `GuestApi` and refuses an unprovisioned instance |
 | `ProbePairTests` | a fake ssh runs the real API probe locally against a loopback fake Agent Server: the key is read from the fake guest's file and sent on the guest side only; it is never on an ssh command line, in the script, an answer, a record or a refusal; the host process never opens the host custody copy that holds the same synthetic key (negative controls: the open spy sees a read of it, and the text check finds a planted key); an answer echoing the key is redacted in the guest and refused |
+| `ExchangeDeliveryTests` | D1 slice A1, a built command through the client, the transport, `GuestApi`, the fake ssh and the real probe: the part is written into the (temporary) exchange and only its name, sha256 and size return, its frame replaced by one line, no payload byte on the host side; the same name again is `EXISTS` and the file unchanged; a digest or size mismatch, two parts, no end, upper-case hex, base64, another part or none write nothing (a field whose frame cannot be cut out is withheld); the profile's pull bound applies; a name outside the grammar is refused on the host before any ssh run; a 200 000-character body travels on standard input |
 | `DispatchOverTheProbePairTests` | `dispatch` end to end over the live transport and the probe pair: `GET /server_info` and the create, each with the key on the guest side only, the attempt `confirmed` |
 
 [`tests/test_conversation_containment.py`](tests/test_conversation_containment.py) (S-03.3 slice 1, unit), over an

@@ -22,6 +22,7 @@ Every value is synthetic. No guest, ssh, Agent Server or network beyond the test
 from pathlib import Path
 import builtins
 import copy
+import hashlib
 import http.server
 import importlib.util
 import inspect
@@ -136,6 +137,60 @@ class SeamTests(unittest.TestCase):
         self.assertEqual(t.calls[0]['error'], 'TimeoutExpired')
         self.assertIsNone(t.calls[0]['status'])
 
+    def test_a_body_with_secrets_gets_no_digest_and_every_body_is_sealed(self):
+        """R7 (E-05.11 review N4, now in the transport): a body that carries secrets is recorded without a digest;
+        any other body keeps its digest. Every body goes sealed (standard input): the body's secret word, else a
+        fresh nonce that is not in the body; a bodyless call goes unsealed."""
+        seals = []
+
+        def api(requests, timeout=900, secret=None):
+            seals.append(secret)
+            return answer(201, {})
+        t = transport(api)
+        t('POST', '/api/conversations', copy.deepcopy(SECRET_BODY))
+        t('POST', '/api/conversations', {'secrets': {}})
+        t('POST', '/api/conversations/x/events', {'role': 'user'})
+        t('GET', '/server_info', None)
+        self.assertEqual([c['body_sha256'] for c in t.calls],
+                         [None, None, gt.body_sha256({'role': 'user'}), None])
+        self.assertEqual(seals[0], TOKEN)
+        for nonce in seals[1:3]:
+            self.assertRegex(nonce, r'^[A-Za-z0-9_-]{43}$')
+        self.assertNotEqual(seals[1], seals[2])
+        self.assertIsNone(seals[3])
+        self.assertNotIn(TOKEN, json.dumps(t.calls))
+
+    def test_a_delivery_is_passed_on_and_its_answer_checked(self):
+        delivered = {'name': 'work-1.bundle', 'sha256': 'a' * 64, 'size': 10}
+        api = FakeApi(answer(200, {'stdout': 'AIEH-EXCHANGE-DELIVERED bundle ' + 'a' * 64 + ' 10'},
+                             delivered=delivered))
+        t = transport(api)
+        got = t('POST', '/api/conversations/x/bash/execute_bash_command', {'command': 'c'},
+                deliver={'part': 'bundle', 'name': 'work-1.bundle'})
+        self.assertEqual(api.requests[0][0]['deliver'], {'part': 'bundle', 'name': 'work-1.bundle'})
+        self.assertEqual(got['delivered'], delivered)
+        self.assertEqual(t.calls[0]['delivered'], delivered)
+        for bad in ({'name': 'other.bundle', 'sha256': 'a' * 64, 'size': 10}, {'name': 'work-1.bundle'},
+                    {'name': 'work-1.bundle', 'sha256': 'A' * 64, 'size': 10},
+                    {'name': 'work-1.bundle', 'sha256': 'a' * 64, 'size': -1},
+                    {'name': 'work-1.bundle', 'sha256': 'a' * 64, 'size': True}, None, 'x',
+                    {'error': 5}, {'error': 'EXISTS', 'size': 1}):
+            with self.subTest(delivered=bad):
+                t = transport(FakeApi(answer(200, {}, delivered=bad)))
+                got = t('POST', '/p', {'command': 'c'}, deliver={'part': 'bundle', 'name': 'work-1.bundle'})
+                self.assertEqual(got['delivered'], {'error': 'MALFORMED'})
+        t = transport(FakeApi(answer(200, {}, delivered={'error': 'EXISTS'})))
+        self.assertEqual(t('POST', '/p', {'c': 1}, deliver={'part': 'b', 'name': 'n'})['delivered'],
+                         {'error': 'EXISTS'})
+        for deliver, body in (({'part': 'b'}, {'c': 1}), ({'part': 'b', 'name': 'n', 'dir': '/'}, {'c': 1}),
+                              ({'part': 'b', 'name': 5}, {'c': 1}), ('n', {'c': 1}),
+                              ({'part': 'b', 'name': 'n'}, None)):
+            with self.subTest(deliver=deliver), self.assertRaises(gt.TransportError) as caught:
+                transport(FakeApi())('POST', '/p', body, deliver=deliver)
+            self.assertEqual(caught.exception.code, 'DELIVERY_INVALID')
+        # without a delivery the answer is {status, body} only, as before
+        self.assertEqual(transport(FakeApi(answer(200, {})))('POST', '/p', {'c': 1}), {'status': 200, 'body': {}})
+
     def test_the_body_digest_is_canonical(self):
         self.assertEqual(gt.body_sha256({'a': 1, 'b': [1, 'é']}), gt.body_sha256({'b': [1, 'é'], 'a': 1}))
         self.assertNotEqual(gt.body_sha256({'a': 1}), gt.body_sha256({'a': '1'}))
@@ -246,6 +301,9 @@ class FakeAgentServer(http.server.ThreadingHTTPServer):
                     created = copy.deepcopy(cc.CREATE_ANSWER['body'])
                     created['id'] = body['conversation_id']
                     return self.reply(cc.CREATE_ANSWER['status'], created)
+                if self.command == 'POST' and self.path.endswith('/bash/execute_bash_command'):
+                    return self.reply(200, {'command': body.get('command'), 'exit_code': 0,
+                                            'stdout': server.stdout, 'stderr': ''})
                 return self.reply(404, {'detail': 'Not Found'})
 
             def do_GET(self):
@@ -255,7 +313,7 @@ class FakeAgentServer(http.server.ThreadingHTTPServer):
                 self.handle_any(json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0)))))
 
         super().__init__(('127.0.0.1', 0), Handler)
-        self.seen = []
+        self.seen, self.stdout = [], ''
 
 
 class FakeSsh:
@@ -361,7 +419,12 @@ class ProbePairTests(unittest.TestCase):
         # never on a command line, in a script, an answer or a record of the host process
         self.assertEqual([r['user'] for r in self.ssh.runs], ['agent', 'agent'])
         self.assertTrue(all(r['argv'][2] == KEY_FILE for r in self.ssh.runs))
-        self.assertTrue(all(r['script'] == guest.API_PROBE for r in self.ssh.runs))
+        # the bodyless GET in the probe's argument form; the create, a body, sealed in the script on standard input
+        # (D1 work design G2), its argv the key file, the address and the port only
+        self.assertEqual(self.ssh.runs[0]['script'], guest.API_PROBE)
+        self.assertEqual(len(self.ssh.runs[1]['argv']), 5)
+        self.assertTrue(self.ssh.runs[1]['script'].startswith('SEALED = (')
+                        and self.ssh.runs[1]['script'].endswith(guest.API_PROBE))
         self.assertNotIn(SYNTHETIC_KEY, self.host_side_text(info, created))
         # the host custody copy, holding the same value, was never opened by the host process
         self.assertFalse(spy.opened(self.custody), 'the dispatcher opened the host custody copy')
@@ -444,12 +507,24 @@ class SealedSecretsTests(unittest.TestCase):
         # python3 - <key file> <address> <port>: no request argument
         self.assertEqual((argv[-5:-3], argv[-3]), (['python3', '-'], KEY_FILE))
         self.assertEqual(live.calls[0]['error'], 'TimeoutExpired')
-        # Negative control: a body without secrets goes unsealed, and the same search finds its request in argv.
+        # A body without secrets is sealed too (D1 work design G2: every body on standard input), with a nonce.
         runs.clear()
+        plain_body = {'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'}
         with mock.patch.object(guest.subprocess, 'run', times_out):
             with self.assertRaises(subprocess.TimeoutExpired) as plain:
-                live('POST', '/api/conversations', {'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})
-        self.assertIn(needles({'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})[3], str(plain.exception))
+                live('POST', '/api/conversations', plain_body)
+        shown = json.dumps([runs[0][0], str(plain.exception), repr(plain.exception)])
+        for needle in needles(plain_body)[2:]:
+            self.assertNotIn(needle, shown)
+        self.assertIn(needles(plain_body)[3].encode(), runs[0][1])   # on standard input, in the sealed text
+        # Negative control: GuestApi's unsealed form (its own probes' channel, never the transport's for a body):
+        # the same search finds the request in argv.
+        runs.clear()
+        request = [{'method': 'POST', 'path': '/api/conversations', 'timeout': gt.CALL_TIMEOUT_S, 'json': plain_body}]
+        with mock.patch.object(guest.subprocess, 'run', times_out):
+            with self.assertRaises(subprocess.TimeoutExpired) as unsealed:
+                guest.GuestApi(self.ssh(), PROFILE)(request)
+        self.assertIn(needles(plain_body)[3], str(unsealed.exception))
 
     def test_a_long_native_token_is_sealed_itself(self):
         """E-05.11 review item 4: on the D1 path on the native profile the native token, up to its grammar's 512
@@ -498,6 +573,151 @@ class SealedSecretsTests(unittest.TestCase):
         t('POST', '/api/conversations', copy.deepcopy(SECRET_BODY))
         t('GET', '/server_info', None)
         self.assertEqual(calls, [TOKEN, None])
+
+
+def framed(data, part='bundle', digest=None, size=None, width=76):
+    """DATA as a command prints a part for the exchange delivery: tools/guest.py's frame, the payload in hex lines."""
+    hexed = data.hex()
+    return '\n'.join([guest.EXCHANGE_PART_BEGIN.format(part=part, sha256=digest or hashlib.sha256(data).hexdigest(),
+                                                       size=len(data) if size is None else size),
+                      *[hexed[i:i + width] for i in range(0, len(hexed), width)],
+                      guest.EXCHANGE_PART_END.format(part=part)])
+
+
+def _deliver_command(name='work-1.bundle', part='bundle'):
+    """A test builder (D1's RESULT builder is slice A2's): a fixed command whose answer the transport delivers."""
+    return {'command': 'make-the-bundle', 'timeout': 60, 'deliver': {'part': part, 'name': name}}
+
+
+# registered once per process
+deliver_command = cc.di._COMMAND_BUILDERS.get('a1-test-delivery') or \
+    cc.di.command_builder('a1-test-delivery')(_deliver_command)
+
+
+class ExchangeDeliveryTests(unittest.TestCase):
+    """The API probe's exchange delivery (D1 work design G2), end to end: a built command through the dispatcher's
+    client, GuestTransport, GuestApi, a fake ssh and the real probe against a fake Agent Server. The part is
+    written exclusively and bounded into the exchange; only its name, sha256 and size come back."""
+    category = 'integration'
+
+    PAYLOAD = bytes(range(256)) * 40
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-delivery-'))
+        guest_key = cls.tmp / 'guest' / KEY_FILE.lstrip('/')
+        guest_key.parent.mkdir(parents=True)
+        guest_key.write_text(SYNTHETIC_KEY + '\n', encoding='ascii')
+        cls.server = FakeAgentServer()
+        cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(10)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.exchange = Path(tempfile.mkdtemp(prefix='exchange-', dir=self.tmp))
+        self.profile = copy.deepcopy(PROFILE)
+        self.profile['exchange']['guest_dir'] = str(self.exchange)   # the guest's exchange directory, here
+        self.ssh = FakeSsh(self.tmp / 'guest', self.server.server_address[1])
+        self.transport = gt.GuestTransport(guest.GuestApi(self.ssh, self.profile), PROFILE, api_login='agent')
+
+    def run_command(self, stdout, name='work-1.bundle', part='bundle'):
+        self.server.stdout = stdout
+        return cc.client(self.transport).call(
+            'POST', '/api/conversations/{conversation_id}/{tail}', body=deliver_command(name, part),
+            params={'conversation_id': cc.CONVERSATION, 'tail': 'bash/execute_bash_command'})
+
+    def files(self):
+        return sorted(p.name for p in self.exchange.iterdir())
+
+    def host_side(self, *values):
+        return json.dumps([values, self.transport.calls, self.ssh.runs], default=repr)
+
+    def test_the_part_is_written_and_only_its_digest_and_size_return(self):
+        digest = hashlib.sha256(self.PAYLOAD).hexdigest()
+        answer = self.run_command('Ran 3 tests\nOK\n' + framed(self.PAYLOAD) + '\ncommit 1234\n')
+        self.assertEqual(answer['status'], 200)
+        self.assertEqual(answer['delivered'], {'name': 'work-1.bundle', 'sha256': digest, 'size': len(self.PAYLOAD)})
+        self.assertEqual((self.exchange / 'work-1.bundle').read_bytes(), self.PAYLOAD)
+        self.assertEqual(answer['body']['stdout'], 'Ran 3 tests\nOK\n' + guest.EXCHANGE_PART_DELIVERED.format(
+            part='bundle', sha256=digest, size=len(self.PAYLOAD)) + '\ncommit 1234\n')
+        # no payload byte in anything the host process holds; the command went sealed, on standard input
+        for needle in (self.PAYLOAD.hex()[:64], self.PAYLOAD.hex()[-64:]):
+            self.assertNotIn(needle, self.host_side(answer))
+        self.assertEqual(len(self.ssh.runs[0]['argv']), 5)
+        self.assertEqual(self.transport.calls[0]['delivered']['sha256'], digest)
+        # the wire body the server received is the client's exact grammar
+        self.assertEqual(self.server.seen[-1][3], {'command': 'make-the-bundle', 'cwd': '/workspace', 'timeout': 60})
+        # exclusive: the same name again is refused and the file is unchanged
+        again = self.run_command(framed(b'other bytes'))
+        self.assertEqual(again['delivered'], {'error': 'EXISTS'})
+        self.assertEqual((self.exchange / 'work-1.bundle').read_bytes(), self.PAYLOAD)
+        self.assertNotIn(b'other bytes'.hex(), self.host_side(again))
+
+    def test_a_part_that_does_not_verify_is_not_written(self):
+        upper = framed(self.PAYLOAD).split('\n')
+        upper = '\n'.join([upper[0], *[line.upper() for line in upper[1:-1]], upper[-1]])
+        cases = {
+            'a digest mismatch': (framed(self.PAYLOAD, digest='0' * 64), 'DIGEST_MISMATCH'),
+            'a size that is not the payload': (framed(self.PAYLOAD, size=len(self.PAYLOAD) - 1), 'PART_SIZE'),
+            'two parts': (framed(self.PAYLOAD) + '\n' + framed(self.PAYLOAD), 'PART_MALFORMED'),
+            'no end': (framed(self.PAYLOAD).rsplit('\n', 1)[0], 'PART_MALFORMED'),
+            'upper-case hex': (upper, 'PART_MALFORMED'),
+            'base64, not hex': ('AIEH-EXCHANGE-PART bundle ' + '0' * 64 + ' 3\nQUJD\nAIEH-EXCHANGE-END bundle',
+                                'PART_MALFORMED'),
+            'another part': (framed(self.PAYLOAD, part='other'), 'PART_MALFORMED'),
+            'no part at all': ('Ran 3 tests\n', 'PART_MALFORMED'),
+        }
+        for number, (name, (stdout, code)) in enumerate(cases.items()):
+            with self.subTest(name):
+                answer = self.run_command(stdout, name=f'case-{number}.bundle')
+                self.assertEqual(answer['delivered'], {'error': code})
+                self.assertEqual(self.files(), [])
+                self.assertNotIn(self.PAYLOAD.hex()[:64], self.host_side(answer))
+                if code == 'PART_MALFORMED':
+                    self.assertIsNone(answer['body']['stdout'])   # withheld: its frame could not be cut out
+
+    def test_the_bound_is_the_profiles_pull_bound(self):
+        self.profile['exchange']['pull']['max_bytes'] = len(self.PAYLOAD) - 1
+        self.transport = gt.GuestTransport(guest.GuestApi(self.ssh, self.profile), PROFILE, api_login='agent')
+        self.assertEqual(self.run_command(framed(self.PAYLOAD))['delivered'], {'error': 'PART_SIZE'})
+        self.assertEqual(self.files(), [])
+        self.assertEqual(guest.exchange_delivery(PROFILE, {'part': 'bundle', 'name': 'w.bundle'})['max_bytes'],
+                         guest.EXCHANGE_DELIVERY_MAX_BYTES)
+
+    def test_a_name_outside_the_grammar_is_refused_before_anything_is_sent(self):
+        for name in ('../work.bundle', 'a/b.bundle', '.hidden', 'work.bundle.partial', '', 'x' * 101):
+            with self.subTest(name=name), self.assertRaises(guest.Refused):
+                self.transport('POST', f'/api/conversations/{cc.CONVERSATION}/bash/execute_bash_command',
+                               {'command': 'c', 'cwd': '/workspace', 'timeout': 60},
+                               deliver={'part': 'bundle', 'name': name})
+        for deliver in ({'part': 'Bundle', 'name': 'w.bundle'}, {'part': 'bundle', 'name': 'w', 'x': 1}):
+            with self.subTest(deliver=deliver), self.assertRaises(guest.Refused):
+                guest.exchange_delivery(PROFILE, deliver)
+        self.assertEqual(self.ssh.runs, [])
+        self.assertEqual(self.files(), [])
+        self.assertEqual(guest.exchange_delivery(PROFILE, {'part': 'bundle', 'name': 'w.bundle'}),
+                         {'field': 'stdout', 'part': 'bundle', 'name': 'w.bundle', 'dir': PROFILE['exchange']['guest_dir'],
+                          'name_pattern': PROFILE['exchange']['pull']['name_pattern'],
+                          'max_bytes': guest.EXCHANGE_DELIVERY_MAX_BYTES})
+
+    def test_a_large_body_travels_on_standard_input(self):
+        """D1 work design G2: a command far above a command line's size (Windows caps one near 32767 characters)
+        travels in the sealed probe's text, and the server receives it whole."""
+        command = 'echo ' + 'x' * 200000
+        self.server.stdout = 'done'
+        answer = self.transport('POST', f'/api/conversations/{cc.CONVERSATION}/bash/execute_bash_command',
+                                {'command': command, 'cwd': '/workspace', 'timeout': 60})
+        self.assertEqual(answer, {'status': 200, 'body': {'command': command, 'exit_code': 0, 'stdout': 'done',
+                                                          'stderr': ''}})
+        self.assertEqual(self.server.seen[-1][3]['command'], command)
+        self.assertLess(len(' '.join(self.ssh.runs[-1]['argv'])), 200)
+        self.assertGreater(len(self.ssh.runs[-1]['script']), len(command))
 
 
 class DispatchOverTheProbePairTests(adm.AdmissionFixture):

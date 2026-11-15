@@ -334,10 +334,12 @@ class DriverRun(unittest.TestCase):
                          (guest.ACP_QUALIFICATION_SCHEMA, 'acp-qualification', 'S-03.3'))
         self.assertEqual(out['stop_conditions'], [])
         self.assertEqual(out['attempt_token'], {'fingerprint': TOKEN_FP, 'redacted_from_record': 0})
-        # the create went through the dispatcher's transport, admitted: only its body's sha256 is recorded
+        # the create went through the dispatcher's transport, admitted; its body carries the attempt token in
+        # secrets, so no digest of it is recorded (the engineering manager's ruling R7 of 2026-11-15, E-05.11 review
+        # N4 in the transport; before, its sha256 was)
         create = [c for c in out['transport_calls'] if c['method'] == 'POST' and c['path'] == '/api/conversations']
         self.assertEqual(len(create), 1)
-        self.assertRegex(create[0]['body_sha256'], r'^[0-9a-f]{64}$')
+        self.assertIsNone(create[0]['body_sha256'])
         self.assertEqual(self.step(out, 2)['detail']['admission'], 'admitted (acp_qualification.check_create)')
         # the order of the live acts: nothing but these calls, the turn between the prompt and the teardown
         paths = [p for _, p in self.guest.calls]
@@ -776,8 +778,8 @@ class DriverRun(unittest.TestCase):
     def test_the_record_details(self):
         out = self.run_driver()
         create = self.guest.bodies[('POST', '/api/conversations')]
-        self.assertEqual(self.step(out, 2)['detail']['sent_body_sha256'],
-                         guest.dispatch_transport().body_sha256(create))
+        self.assertIn('secrets', create)
+        self.assertIsNone(self.step(out, 2)['detail']['sent_body_sha256'])   # R7: a body with secrets, no digest
         self.assertEqual(self.step(out, 2)['detail']['agent'],
                          {'kind': 'ACPAgent', 'acp_server': 'claude-code', 'acp_model': MODEL})
         self.assertEqual(self.step(out, 2)['detail']['containers'], 1)

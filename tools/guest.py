@@ -9015,8 +9015,62 @@ CONVERSATION_SMOKE_SCHEMA = 'ai-engineering-harness/profiles/conversation-smoke-
 # listener, with the session key read from its agent-readable file (never on a command
 # line, never printed: any occurrence in a response is counted and redacted). Prints one
 # JSON line: the responses (status, JSON body or text) and the redaction count.
-API_PROBE = r'''import base64, errno, http.client, json, sys, time
+# A request may carry ``deliver`` (GuestApi fills it from the profile's exchange; D1 work design
+# G2): the one framed part of its answer's field (EXCHANGE_PART_BEGIN, hex lines,
+# EXCHANGE_PART_END) is checked against the sha256 and size its frame states, written
+# exclusively into the exchange directory under the given name, and replaced in the answer by
+# one EXCHANGE_PART_DELIVERED line; the response's ``delivered`` is {name, sha256, size} or
+# {error}. The part's bytes never come back: a field whose frame cannot be cut out is withheld.
+API_PROBE = r'''import base64, errno, hashlib, http.client, json, os, re, sys, time
 key_path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+PART_BEGIN, PART_END, PART_DONE = 'AIEH-EXCHANGE-PART', 'AIEH-EXCHANGE-END', 'AIEH-EXCHANGE-DELIVERED'
+
+
+def deliver(spec, entry):
+    value = entry.get('body')
+    text = value.get(spec['field']) if isinstance(value, dict) else None
+    if not isinstance(text, str):
+        entry['body'] = None
+        return {'error': 'NO_PART'}
+    part = re.escape(spec['part'])
+    frame = re.compile(r'^%s %s ([0-9a-f]{64}) ([0-9]{1,12})\n((?:[0-9a-f]*\n)*)%s %s$'
+                       % (PART_BEGIN, part, PART_END, part), re.M)
+    found = list(frame.finditer(text))
+    if len(found) != 1 or text.count(PART_BEGIN) != 1 or text.count(PART_END) != 1:
+        value[spec['field']] = None
+        return {'error': 'PART_MALFORMED'}
+    match = found[0]
+    digest, size, data = match.group(1), int(match.group(2)), ''.join(match.group(3).split())
+    value[spec['field']] = '%s%s %s %s %d%s' % (text[:match.start()], PART_DONE, spec['part'], digest, size,
+                                                text[match.end():])
+    if size > spec['max_bytes'] or len(data) != 2 * size:
+        return {'error': 'PART_SIZE'}
+    data = bytes.fromhex(data)
+    if hashlib.sha256(data).hexdigest() != digest:
+        return {'error': 'DIGEST_MISMATCH'}
+    name = spec['name']
+    if not re.fullmatch(spec['name_pattern'], name) or name.endswith('.partial') or '/' in name:
+        return {'error': 'NAME_INVALID'}
+    path = os.path.join(spec['dir'], name)
+    try:  # exclusive: an existing name (or a link of that name) is never written through
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o640)
+    except FileExistsError:
+        return {'error': 'EXISTS'}
+    except OSError as exc:
+        return {'error': 'OPEN_' + str(errno.errorcode.get(exc.errno, 'FAILED'))}
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    except OSError:
+        os.close(fd)
+        os.unlink(path)
+        return {'error': 'WRITE_FAILED'}
+    os.close(fd)
+    return {'name': name, 'sha256': digest, 'size': size}
+
+
 # sealed (decision 0015): the requests and one secret arrive in this script's own text on standard
 # input (SEALED, prepended), never as an argument; the secret is redacted from every answer
 spec, sealed = (sys.argv[4], None) if len(sys.argv) > 4 else SEALED
@@ -9053,6 +9107,8 @@ for req in requests:
             value = {p: sorted(m.upper() for m in ops if m in ('get', 'post', 'put', 'patch', 'delete'))
                      for p, ops in (value.get('paths') or {}).items() if '/api/conversations' in p}
         entry['body'] = value
+        if 'deliver' in req:
+            entry['delivered'] = deliver(req['deliver'], entry)
     except OSError as exc:
         code = errno.errorcode.get(exc.errno) if isinstance(getattr(exc, 'errno', None), int) else None
         entry['error'] = code or type(exc).__name__
@@ -9077,19 +9133,51 @@ def sealed_api_probe(spec, secret):
     return f'SEALED = ({spec!r}, {secret!r})\n' + API_PROBE
 
 
+# The exchange delivery's frame (API_PROBE's deliver; D1 work design G2): a command prints one part
+# of its standard output as these lines, the payload lower-case hex (no base64: a secret's
+# spelling cannot hide in it), wrapped at any width.
+EXCHANGE_PART_BEGIN = 'AIEH-EXCHANGE-PART {part} {sha256} {size}'
+EXCHANGE_PART_END = 'AIEH-EXCHANGE-END {part}'
+EXCHANGE_PART_DELIVERED = 'AIEH-EXCHANGE-DELIVERED {part} {sha256} {size}'
+EXCHANGE_PART_RE = re.compile(r'[a-z][a-z0-9-]{0,31}')
+# The answer the probe reads is at most 32 MiB; a hex part of 12 MiB leaves room for the rest of it.
+EXCHANGE_DELIVERY_MAX_BYTES = 12 << 20
+
+
+def exchange_delivery(profile, deliver):
+    """A request's ``deliver`` {part, name} as the API probe takes it: the answer's ``stdout``
+    field, the profile's exchange directory, its pull name grammar (and never a .partial name),
+    and the smaller of exchange.pull.max_bytes and EXCHANGE_DELIVERY_MAX_BYTES."""
+    if not isinstance(deliver, dict) or sorted(deliver) != ['name', 'part'] or \
+            not isinstance(deliver['part'], str) or not EXCHANGE_PART_RE.fullmatch(deliver['part']):
+        raise Refused('REFUSED', 'an exchange delivery is {part, name}, the part in '
+                      f'{EXCHANGE_PART_RE.pattern}')
+    ex = exchange_config(profile)
+    bounds = ex.get('pull') or {}
+    pattern, limit = bounds.get('name_pattern'), bounds.get('max_bytes')
+    if not isinstance(pattern, str) or type(limit) is not int or limit <= 0:
+        raise Refused('REFUSED', f'profile {profile.get("name")} declares no exchange.pull bounds')
+    name = check_exchange_name(deliver['name'], pattern, 'exchange delivery name')
+    return {'field': 'stdout', 'part': deliver['part'], 'name': name, 'dir': ex['guest_dir'],
+            'name_pattern': pattern, 'max_bytes': min(limit, EXCHANGE_DELIVERY_MAX_BYTES)}
+
+
 class GuestApi:
     """The Agent Server API, called as agent on the guest's loopback over SSH. With ``secret``
     (sealed), the requests and that secret travel in the script's text on ssh's standard input,
     never in an argument of ssh or of the guest's python3, and the secret is redacted from the
-    answers (sealed_occurrences counts it)."""
+    answers (sealed_occurrences counts it). A request's ``deliver`` {part, name} is completed
+    from the profile's exchange (exchange_delivery) before anything is sent."""
 
     def __init__(self, ssh, profile):
         server = provisioning_config(profile)['agent_server']
-        self.ssh = ssh
+        self.ssh, self.profile = ssh, profile
         self.args = [server['session_key']['guest_path'], server['listener']['address'],
                      str(server['listener']['port'])]
 
     def __call__(self, requests, timeout=900, secret=None):
+        requests = [dict(r, deliver=exchange_delivery(self.profile, r['deliver']))
+                    if isinstance(r, dict) and 'deliver' in r else r for r in requests]
         spec = base64.b64encode(json.dumps(requests).encode('utf-8')).decode('ascii')
         if secret is None:
             argv, script = ['python3', '-'] + self.args + [spec], API_PROBE

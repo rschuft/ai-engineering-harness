@@ -592,7 +592,7 @@ class AdmittedCreate(unittest.TestCase):
         admitted = self.admitted(container)
         requests, used = [], []
 
-        def api(batch):
+        def api(batch, timeout=900, secret=None):   # GuestApi's call shape (a body goes sealed)
             requests.append(batch)
             (request,) = batch
             status = 200 if request['method'] != 'POST' else 201
@@ -627,7 +627,7 @@ class AdmittedCreate(unittest.TestCase):
         admitted = self.admitted(container)
 
         def api_answering(status):
-            def api(batch):
+            def api(batch, timeout=900, secret=None):
                 code = status if batch[0]['method'] == 'POST' else 200
                 return {'responses': [{'status': code, 'body': {}}], 'session_key_occurrences': 0}
             return api
@@ -652,7 +652,7 @@ class AdmittedCreate(unittest.TestCase):
     def test_a_stopped_chain_is_a_failed_step_and_the_cleanup_still_runs(self):
         container = tg.conversation_container()
 
-        def api(batch):
+        def api(batch, timeout=900, secret=None):   # GuestApi's call shape (a body goes sealed)
             return {'responses': [{'error': 'ECONNREFUSED'}], 'session_key_occurrences': 0}
 
         def chain(transport):
