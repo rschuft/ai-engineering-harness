@@ -682,6 +682,22 @@ class OutcomeReference(RepoCase):
                     self.plan_with(f'outcome:{OUTCOME_ID}@{"1" * 40}'), self.commit)
         self.assertFalse([c for c in self.backlog_argv() if c[:2] == ['task', 'create']])
 
+    def test_a_pinned_outcome_is_the_revision_or_an_ancestor_of_it(self):
+        later = self.commit_files({'later.txt': b'a later commit\n'})
+        result = adapter.create_tasks(self.git, self.backlog(), self.plan_with(f'outcome:{OUTCOME_ID}@{self.commit}'),
+                                      later)
+        self.assertEqual(result['tasks'][1]['references'][-1], f'outcome:{OUTCOME_ID}@{self.commit}')
+        before = len([c for c in self.backlog_argv() if c[:2] == ['task', 'create']])
+        error = self.expect('OUTCOME_REVISION_NOT_ANCESTOR', adapter.create_tasks, self.git, self.backlog(),
+                            self.plan_with(f'outcome:{OUTCOME_ID}@{later}', index=0), self.commit)
+        self.assertIn(later, error.message)
+        self.assertEqual(len([c for c in self.backlog_argv() if c[:2] == ['task', 'create']]), before)
+        with self.git.session():
+            self.assertTrue(adapter.is_ancestor(self.git, self.commit, later))
+            self.assertTrue(adapter.is_ancestor(self.git, later, later))
+            self.assertFalse(adapter.is_ancestor(self.git, later, self.commit))
+            self.assertFalse(adapter.is_ancestor(self.git, self.commit, later, limit=1))
+
     def test_a_duplicate_compares_the_outcome_too(self):
         outcome = f'outcome:{OUTCOME_ID}@{self.commit}'
         adapter.create_tasks(self.git, self.backlog(), self.plan_with(outcome), self.commit)

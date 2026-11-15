@@ -131,8 +131,10 @@ point 4: "a change that serves an existing outcome references it (... a Backlog 
 `outcome:<uuid>[@<commit>]` reference in the lineage objective reference's grammar, which the
 dispatch resolver reads from the task's references (`OUTCOME_REF_ABSENT` without one). It is
 passed as one more `--ref` after the task's pointers and read back with them. A malformed one is
-refused before anything runs (`OUTCOME_REF_INVALID`), and a pinned commit that the project does
-not have before any Backlog.md command (`OUTCOME_REVISION_MISSING`). `resolve` and the readiness
+refused before anything runs (`OUTCOME_REF_INVALID`), and before any Backlog.md command a pinned
+commit that the project does not have (`OUTCOME_REVISION_MISSING`) or that is neither the design
+revision nor one of its ancestors (`OUTCOME_REVISION_NOT_ANCESTOR`). That the outcome is declared
+at that commit is the lineage objective resolver's check (`task lineage:resolve`), not the adapter's. `resolve` and the readiness
 read re-resolve the `openspec:` pointers only; the outcome resolves through the lineage objective
 resolver (`task lineage:resolve`).
 

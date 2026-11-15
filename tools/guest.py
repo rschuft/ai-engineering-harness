@@ -156,7 +156,7 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE --name NAME
                                           [--sensitivity] [--token-fingerprint L=sha256:H] [--out FILE]
     python -I -B tools/guest.py repository-tests --profile PROFILE --state-dir STATE --name NAME
-                                          --repo REPO --ref BRANCH [--out FILE]
+                                          --repo REPO --ref BRANCH --commit SHA [--out FILE]
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision --drill
     python -I -B tools/guest.py drill     --profile PROFILE --state-dir STATE --name NAME
                                           --kind fail-closed|stored-state|root-scan|f2-closed
@@ -10502,7 +10502,11 @@ REPOSITORY_TESTS_AUTHORIZED = {'aieh-d1-demo': 'OA-22 (i)'}
 REPOSITORY_TESTS_COMMAND = 'python -m unittest discover -s tests'
 REPOSITORY_TESTS_DIR = '/workspace/aieh-repository-tests'
 REPOSITORY_TESTS_MARKER = 'AIEH-REPOSITORY-TESTS '
-REPOSITORY_TESTS_MAX_BYTES = 4 << 20   # the gzipped content, before base64
+# A bound on the gzipped content, before base64. It is not the binding limit: the request travels base64-encoded
+# in the API probe's argument on the ssh command line, which Windows caps at 32767 characters, so about 17 KB
+# gzipped is the real ceiling (E-05.1 review N1, measured: 9291 bytes gzipped made a 17396-character argument);
+# a larger content fails at the launch, before anything reaches the guest. The D1 demo repository is far below it.
+REPOSITORY_TESTS_MAX_BYTES = 4 << 20
 REPOSITORY_TESTS_TIMEOUT_S = 600       # a ceiling on the run inside the container, not an expected duration
 REPOSITORY_TESTS_OUTPUT_CHARS = 8000   # the tail of the run's output kept in the record
 # Unpacks the content (base64 of a gzipped tar on standard input) into DIRECTORY with tarfile's data filter: no
@@ -10523,12 +10527,36 @@ def repository_origin_name(url, root):
     return Path(root).name
 
 
-def repository_tests_content(ctx, repo, ref):
+def demo_sequence(repo):
+    """integrations/gitea/demo_repository.py's sequence_report of REPO (main exactly C0 to C3), loaded by path once;
+    its refusal is REPOSITORY_NOT_THE_SEQUENCE."""
+    name = 'aieh_gitea_demo_repository'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, REPO / 'integrations' / 'gitea' / 'demo_repository.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    try:
+        return module.sequence_report(repo)
+    except module.DemoError as exc:
+        raise Refused('REPOSITORY_NOT_THE_SEQUENCE', f'{repo}: {exc.code}: {exc.message}') from None
+
+
+def repository_tests_content(ctx, repo, ref, commit, sequence=None):
     """The content of the branch REF of the repository REPO for a repository-tests run: (summary, gzipped tar).
     Read in process through the repository-access module (its export: blob bytes, no end-of-line conversion), from
     a repository the run is authorized for (REPOSITORY_TESTS_AUTHORIZED), never this checkout or the state
-    directory."""
+    directory. The branch must be at COMMIT (REPOSITORY_NOT_THE_COMMIT), and the repository's main exactly the D1
+    sequence C0 to C3 with C3 that commit (SEQUENCE, by default demo_sequence; REPOSITORY_NOT_THE_SEQUENCE): the
+    origin's name alone authorizes nothing."""
     import tempfile
+    if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise Refused('REFUSED', f'--commit {commit!r} is not a full commit id')
     ra = repository_access
     repo = Path(repo).resolve()
     if inside(repo, ctx.state_dir) or inside(repo, ctx.repo) or inside(ctx.repo, repo):
@@ -10558,9 +10586,16 @@ def repository_tests_content(ctx, repo, ref):
             raise Refused('REPOSITORY_NOT_AUTHORIZED', f'{name!r} is not a repository whose content may enter a '
                           f'disposable guest (authorized: {sorted(REPOSITORY_TESTS_AUTHORIZED)})')
         try:
-            commit = opened.commit(full)
-            if commit is None:
+            found = opened.commit(full)
+            if found is None:
                 raise Refused('REPOSITORY', f'{full} names no commit')
+            if found != commit:
+                raise Refused('REPOSITORY_NOT_THE_COMMIT', f'{full} is {found}, not {commit}')
+            seq = (sequence or demo_sequence)(repo)
+            if not isinstance(seq, dict) or seq.get('complete') is not True or \
+                    (seq.get('commits') or {}).get('C3') != commit:
+                raise Refused('REPOSITORY_NOT_THE_SEQUENCE', f'{repo}\'s main is not the D1 sequence C0 to C3 ending at '
+                              f'{commit}: {(seq or {}).get("problems") if isinstance(seq, dict) else seq}')
             counts = opened.export_tree(commit, '.', export)
         except ra.RepositoryError as exc:
             raise Refused('REPOSITORY', f'{repo}: {exc.code}: {exc.message}') from None
@@ -10598,7 +10633,7 @@ def repository_tests_command(content):
             f"echo \"{REPOSITORY_TESTS_MARKER}rc=$?\"")
 
 
-def repository_tests(ctx, name, repo, ref, out_path=None, channels=None):
+def repository_tests(ctx, name, repo, ref, commit, out_path=None, channels=None, sequence=None):
     """repository-tests (E-05.1) on a running provisioned instance: the tests of one authorized repository's branch
     (REPOSITORY_TESTS_AUTHORIZED; OA-22 (i)) run offline in the pinned conversation image. One disposable
     conversation is created from the pinned fixture (no LLM, no message, no secret); in its container the content,
@@ -10606,8 +10641,9 @@ def repository_tests(ctx, name, repo, ref, out_path=None, channels=None):
     tests`` runs there; then the conversation is deleted. PASS when the one container is the declared one (the
     pinned image, the job shape), the content unpacked, the tests exited 0 and reported OK, and no conversation or
     container remains. The container's network is the job environment's, unchanged (no route out of the guest:
-    the egress guard); the run itself makes no request. ``channels(record) -> (api, facts)`` stands in for the guest
-    in tests."""
+    the egress guard); the run itself makes no request. The branch must be at COMMIT and the repository's main the D1
+    sequence ending there (repository_tests_content). ``channels(record) -> (api, facts)`` and ``sequence`` stand in
+    for the guest and the sequence check in tests."""
     idir = ctx.instance_dir(name)
     _, record = running_instance(ctx, name)
     if not record.get('provisioning'):
@@ -10619,7 +10655,7 @@ def repository_tests(ctx, name, repo, ref, out_path=None, channels=None):
                 inside(out_file, ctx.repo) or inside(out_file, idir):
             raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
                           'directory, outside the checkout and the instance directory')
-    summary, content = repository_tests_content(ctx, repo, ref)
+    summary, content = repository_tests_content(ctx, repo, ref, commit, sequence)
     profile = ctx.profile
     body, fixture_problems, _ = _fixture(ctx)
     body = dict(body, conversation_id=REPOSITORY_TESTS_CONVERSATION_ID, tags={'aieh': 'e-05.1-repository-tests'})
@@ -18832,6 +18868,7 @@ def main(argv=None):
         if op == 'repository-tests':
             p.add_argument('--repo', required=True, help='a clone of an authorized repository (OA-22 (i))')
             p.add_argument('--ref', required=True, help='one local branch')
+            p.add_argument('--commit', required=True, help='the commit the branch must be at (C3)')
             p.add_argument('--out', help='also write the record to this new file')
         if op == 'create':
             p.add_argument('--egress-falsification', action='store_true',
@@ -18963,7 +19000,7 @@ def main(argv=None):
             result = native_qualification_run(ctx, args.name, args.prompt, args.owner_act, out_path=args.out,
                                               owner_values=values, owner_value_act=args.owner_credential_act)
         elif op == 'repository-tests':
-            result = repository_tests(ctx, args.name, args.repo, args.ref, args.out)
+            result = repository_tests(ctx, args.name, args.repo, args.ref, args.commit, args.out)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
                                        args.sensitivity,

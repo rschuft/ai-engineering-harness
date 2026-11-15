@@ -383,7 +383,7 @@ auditor not added. The record of the leaf is [`evidence/E-05.1-demo-work-offline
 | `place --project CLONE --identity "Name <email>"` | **C1.** The change `openspec/changes/add-slugify/` byte for byte as planning stored it ([`evidence/D1-demo-design/`](../../evidence/D1-demo-design/), read only), in a work-tree clone of the seeded repository. Before the branch moves, the new commit's placement content (decision 0020 point 1, `input_recorder.read_design`) must be planning's `sha256:203a9c1e...a55745` (`PLACEMENT_CONTENT_MISMATCH`, nothing visible changes). A folder already present and equal is left as it is; one that differs is refused (`PLACEMENT_DIFFERS`). |
 | (`acceptance_recorder.py record-from-log`) | **C2.** The recorder's own commit (E-05.12). |
 | `commit-task --project CLONE --identity "Name <email>"` | **C3.** The one task file the planning adapter just created (`backlog/tasks/*.md`), committed alone; anything else in the work tree is refused (`TASK_NOT_ALONE`). |
-| `sequence --project CLONE` | Reads `main` against exactly C0 to C3: C0 the initial content (a root commit), C1 C0 and the placement, C2 the recorder's commit (the change's `proposal.md` and `.openspec.yaml` changed and one decision record added, nothing else), C3 one task file added. Exit 0 when it is. |
+| `sequence --project CLONE` | Reads `main` against exactly C0 to C3: C0 the initial content (a root commit), C1 C0 and the placement, C2 the recorder's commit (the change's `proposal.md` and `.openspec.yaml` changed and one decision record added, nothing else), C3 one task file added. It compares each tree's (path, mode, object id) entries read from the raw objects, so a gitlink, an executable or a link is seen and refused. Exit 0 when it is. |
 | `verify-placement --project CLONE --commit FULL` | The change at that commit against the placement. Exit 0 when identical. At C2 it shows exactly what the recorder changed. |
 | `statement --out FILE` | The statement `record-from-log` takes: the Owner's words about the change, verbatim from the entry `owner-direction-d1-planning-2026-11-15`, checked first at the harness's committed `HEAD`. |
 | `plan --outcome REF --out FILE` | The planning map of the change's one task (pointers to `proposal.md`, `specs/slugify/spec.md`, `design.md`) carrying the minted outcome reference, checked by the planning adapter. |
@@ -405,17 +405,29 @@ through the repository-access module (it must then read C3; the window in which 
 with no collaborator and no rule yet, so only the site administrator can push); the settings; the collaborators; the
 three rules (the window closes with the last). The report names the window's start, its end and the pushed commit.
 Then the read-back (`demo_verify`, with `main` at C3; `READBACK_DIFFERENT`), no pull request, and no administrator
-token afterwards. A stop after a write sends nothing further and undoes and retries nothing; its report lists the
+token afterwards. Before the first write it also checks the push's own preconditions on the clone (no client hook,
+which the repository module refuses to push past; `refs/heads/main` at C3): `CLONE_NOT_PUSHABLE`, nothing sent.
+From the first collaborator until the last rule the write collaborators can push `main` too: the report's `window`
+says `open` and names who (`pushes_main`), and a stop then sets `stopped.window_open` and its detail begins `THE
+WINDOW IS OPEN`. That is an urgent stop, closed with `--resume`: refused (`RESUME_REFUSED`, nothing written) unless
+everything present is as declared (the organization's settings, teams and members, `main` at C3 over C0 to C3, no
+pull request or deploy key, each collaborator present with its declared permission and none other, each rule present
+as declared and none other); then it only adds what is missing (the settings if they differ, the missing
+collaborators, the missing rules in declared order) and never changes or removes anything present. A stop after a write sends nothing further and undoes and retries nothing; its report lists the
 writes in order. `demo_declaration()`: the fixture's `protection_rules()` and `repository_settings()` with
 `has_actions` false; collaborators the planner and builder (write: `work/*`'s push allowlist), the reviewer (read:
 `main`'s approvals allowlist) and `aieh-owner` (write: the merge allowlist), the accounts the rules name; the
 organization's Owners team; no deploy key. It is not in `DECLARATIONS`, which is the protection auditor's reach.
 
-**The verifier** (`gitea_roles.py demo-verify [--main C3]`): read-only, as the site administrator: the
-organization's visibility, and the repository's view (Actions included), rules, `main`, collaborators and their
-permissions, teams and deploy keys, judged by `protection_check.judge` (its comparison, called, with the rules read
-through its `_rule`); with `--main`, `main` at that commit over exactly four first-parent commits from a root. Exit 0
-verified, 1 drift, 2 unverified (a read that does not answer as expected) or refused. `demo-clone --to DIR` makes a
+**The verifier** (`gitea_roles.py demo-verify --main C3`; `--main` is required): read-only, as the site
+administrator: the organization's settings, its teams and their members and its members (declared: the Owners team
+alone, whose only member is the site administrator, as Gitea makes an organization its creator owns; any other
+member or team is drift), and the repository's view (Actions included), rules, `main`, collaborators and their
+permissions, teams and deploy keys, each view checked as `protection_check.observe` checks the auditor's (its `_ok`,
+`_keys`, `_total`, `_rule`, `LOGIN` and `ACCESS_LEVELS`, called: an unknown or missing field, a list not read whole,
+a login outside the grammar before it is put in a URL, a repeated rule name or a non-object entry is unverified),
+judged by `protection_check.judge`, and `main` at C3 over exactly four first-parent commits from a root. Exit 0
+verified, 1 drift, 2 unverified or refused; any unexpected error is unverified (exit 2), its output still scanned. `demo-clone --to DIR` makes a
 local bare clone as the site administrator (read only on Gitea). The demo commands' output carries commit ids, so
 their no-exposure scan searches for the secret the act held (the administrator's password), not for the token shape
 a commit id has.

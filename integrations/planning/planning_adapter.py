@@ -17,7 +17,8 @@ digest.
 
 A planned task may also name the outcome it serves (``outcome``: one
 ``outcome:<uuid>[@<commit>]`` reference, decision 0008 point 4), which becomes one more
-``--ref`` after its pointers; a pinned commit must be a commit of the project.
+``--ref`` after its pointers; a pinned commit must be the design revision or one of its ancestors. That the
+outcome is declared there is checked by the lineage objective resolver, not here.
 
 What the adapter never does:
 
@@ -1054,6 +1055,27 @@ class Backlog:
         return new[0]
 
 
+ANCESTRY_LIMIT = 100000  # commits walked before the answer is "not an ancestor" (bounded, fail closed)
+
+
+def is_ancestor(git, ancestor, descendant, limit=ANCESTRY_LIMIT):
+    """Whether the commit ANCESTOR is DESCENDANT or reachable from it through parents (``git merge-base
+    --is-ancestor``), walking at most LIMIT commits; beyond that the answer is False."""
+    seen, stack = set(), [descendant]
+    while stack and len(seen) < limit:
+        current = stack.pop()
+        if current == ancestor:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        number = 1
+        while (parent := git.commit(f'{current}^{number}')) is not None:
+            stack.append(parent)
+            number += 1
+    return False
+
+
 def create_tasks(git, backlog, plan, revision, openspec=None):
     """Create the plan's tasks in Backlog.md with source pointers and dependencies."""
     plan = load_plan(plan)
@@ -1072,6 +1094,10 @@ def create_tasks(git, backlog, plan, revision, openspec=None):
                 if revision is not None and git.commit(revision) != revision:
                     raise PlanningError('OUTCOME_REVISION_MISSING', f'{task["key"]}: the repository has no '
                                         f'commit {revision} (the outcome reference {task["outcome"]})')
+                if revision is not None and not is_ancestor(git, revision, commit):
+                    raise PlanningError('OUTCOME_REVISION_NOT_ANCESTOR', f'{task["key"]}: the outcome reference '
+                                        f'{task["outcome"]} pins {revision}, which is not {commit} or an ancestor '
+                                        'of it')
                 references.append(task['outcome'])
             planned.append((task, references))
     existing = backlog.list_tasks()

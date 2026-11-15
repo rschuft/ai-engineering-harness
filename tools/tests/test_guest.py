@@ -7424,6 +7424,13 @@ class RepositoryTests(TempState):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.repo = self.make_repo('aieh-d1-demo', 'https://gitea.example.invalid/demo/aieh-d1-demo.git')
+        self.c3 = self.commit
+        self.sequence_calls = []
+
+    def sequence(self, repo, complete=True, c3=None):
+        """A stand-in for demo_repository.sequence_report (the fixture repository is not the D1 sequence)."""
+        self.sequence_calls.append(Path(repo))
+        return {'complete': complete, 'commits': {'C3': c3 or self.c3}, 'problems': [] if complete else ['x']}
 
     def make_repo(self, directory, origin):
         """A bare repository at DIRECTORY with one commit on main (pkg/__init__.py, tests/test_pkg.py) and ORIGIN as
@@ -7463,8 +7470,8 @@ class RepositoryTests(TempState):
 
     def run_tests(self, repo=None, ref='main', **faults):
         fake = FakeRepositoryTestsGuest(**faults)
-        out = guest.repository_tests(self.ctx(), 'rt', repo or self.repo, ref,
-                                     channels=lambda rec: (fake.api, fake.facts))
+        out = guest.repository_tests(self.ctx(), 'rt', repo or self.repo, ref, self.c3,
+                                     channels=lambda rec: (fake.api, fake.facts), sequence=self.sequence)
         return out, fake
 
     def test_the_tests_pass_in_one_disposable_conversation(self):
@@ -7517,12 +7524,47 @@ class RepositoryTests(TempState):
             with self.subTest(repo=repo.name, ref=ref):
                 fake = FakeRepositoryTestsGuest()
                 with self.assertRaises(guest.Refused) as caught:
-                    guest.repository_tests(self.ctx(), 'rt', repo, ref, channels=lambda rec: (fake.api, fake.facts))
+                    guest.repository_tests(self.ctx(), 'rt', repo, ref, self.c3,
+                                           channels=lambda rec: (fake.api, fake.facts), sequence=self.sequence)
                 self.assertEqual(caught.exception.code, code, caught.exception)
                 self.assertEqual(fake.calls, [])
         self.record = {'ports': {'ssh': 40001}}
         with self.assertRaises(guest.Refused):
-            guest.repository_tests(self.ctx(), 'rt', self.repo, 'main')
+            guest.repository_tests(self.ctx(), 'rt', self.repo, 'main', self.c3)
+
+    def refused(self, code, commit=None, sequence=None, repo=None):
+        fake = FakeRepositoryTestsGuest()
+        with self.assertRaises(guest.Refused) as caught:
+            guest.repository_tests(self.ctx(), 'rt', repo or self.repo, 'main', commit or self.c3,
+                                   channels=lambda rec: (fake.api, fake.facts), sequence=sequence)
+        self.assertEqual(caught.exception.code, code, caught.exception)
+        self.assertEqual(fake.calls, [])
+        return caught.exception
+
+    def test_the_branch_must_be_the_named_commit_of_the_d1_sequence(self):
+        # E-05.1 review SF-6: the origin's name alone authorizes nothing
+        self.refused('REPOSITORY_NOT_THE_COMMIT', commit='e' * 40, sequence=self.sequence)
+        self.refused('REFUSED', commit='C3', sequence=self.sequence)
+        self.refused('REPOSITORY_NOT_THE_SEQUENCE', sequence=lambda repo: self.sequence(repo, complete=False))
+        self.refused('REPOSITORY_NOT_THE_SEQUENCE', sequence=lambda repo: self.sequence(repo, c3='d' * 40))
+        # the reviewer's probe: another repository whose origin is named aieh-d1-demo, the real sequence check
+        error = self.refused('REPOSITORY_NOT_THE_SEQUENCE')
+        self.assertIn('not exactly C0 to C3', str(error))
+
+    def test_the_d1_sequence_passes_with_the_real_check(self):
+        demo_tests = module_code.load('aieh_test_demo_repository',
+                                      REPO / 'integrations' / 'gitea' / 'tests' / 'test_demo_repository.py')
+        root = self.tmp / 'sequence'
+        root.mkdir()
+        with mock.patch.dict(os.environ, {'GIT_CEILING_DIRECTORIES': str(self.tmp)}):
+            clone, commits, _ = demo_tests.build_sequence(root)
+            fake = FakeRepositoryTestsGuest()
+            out = guest.repository_tests(self.ctx(), 'rt', clone, 'main', commits['C3'],
+                                         channels=lambda rec: (fake.api, fake.facts))
+        self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:2000])
+        self.assertEqual((out['content']['repository'], out['content']['commit']), ('aieh-d1-demo', commits['C3']))
+        self.assertIn('aieh_d1_demo/__init__.py', fake.unpacked)
+        self.assertIn('openspec/changes/add-slugify/proposal.md', fake.unpacked)
 
     def test_the_repository_name_is_the_acceptance_recorder_s(self):
         recorder = module_code.load('acceptance_recorder', REPO / 'integrations' / 'owner' / 'acceptance_recorder.py')

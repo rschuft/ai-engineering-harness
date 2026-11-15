@@ -64,7 +64,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -256,17 +255,47 @@ def _check_identity(identity):
         raise DemoError('IDENTITY_INVALID', f'{identity!r} is not "Name <email>"')
 
 
-def tree_files(repo, commit) -> dict:
-    """{path: blob bytes} of every file of COMMIT, read through the repository module's export (no end-of-line
-    conversion), in path order."""
-    with tempfile.TemporaryDirectory(prefix='aieh-demo-tree-') as tmp:
-        repo.export_tree(commit, '.', tmp)
-        found = {}
-        for directory, _dirs, names in os.walk(tmp):
-            for name in names:
-                path = Path(directory, name)
-                found[path.relative_to(tmp).as_posix()] = path.read_bytes()
-    return dict(sorted(found.items(), key=lambda item: item[0].encode('utf-8')))
+REGULAR = '100644'  # the only mode the demo repository's trees hold: no executable, link or gitlink
+
+
+def blob_id(data: bytes) -> str:
+    """The SHA-1 object id git gives DATA as a blob."""
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+def expected_entries(files) -> dict:
+    """{path: (mode, blob id)} of FILES ({path: bytes}) as regular files."""
+    return {path: (REGULAR, blob_id(data)) for path, data in files.items()}
+
+
+def tree_entries(repo, commit) -> dict:
+    """{path: (mode, object id)} of every entry of COMMIT's tree below its subtrees, read from the raw objects
+    through the repository module (``read``): blobs, executables, links and gitlinks alike, so that a mode is compared
+    as well as the content. A SHA-256 repository or a malformed object is refused."""
+    if not re.fullmatch(r'[0-9a-f]{40}', commit or ''):
+        raise DemoError('SEQUENCE_UNREADABLE', f'{commit!r} is not a SHA-1 commit id')
+    found = repo.read(commit)
+    if found is None or found[1] != 'commit' or not found[2].startswith(b'tree '):
+        raise DemoError('SEQUENCE_UNREADABLE', f'{commit} is not a commit')
+    out = {}
+
+    def walk(oid, prefix):
+        found = repo.read(oid)
+        if found is None or found[1] != 'tree':
+            raise DemoError('SEQUENCE_UNREADABLE', f'{oid} ({prefix or "the root"}) is not a tree')
+        data = found[2]
+        while data:
+            space, nul = data.find(b' '), data.find(b'\0')
+            if space < 1 or nul < space or len(data) < nul + 21:
+                raise DemoError('SEQUENCE_UNREADABLE', f'the tree {oid} is malformed')
+            mode, name, sha = data[:space].decode('ascii'), data[space + 1:nul].decode('utf-8'), data[nul + 1:nul + 21]
+            data = data[nul + 21:]
+            if mode == '40000':
+                walk(sha.hex(), f'{prefix}{name}/')
+            else:
+                out[prefix + name] = (mode, sha.hex())
+    walk(found[2][5:45].decode('ascii'), '')
+    return dict(sorted(out.items(), key=lambda item: item[0].encode('utf-8')))
 
 
 def _parents(repo, commit) -> list:
@@ -283,7 +312,8 @@ def _seeded(path, files) -> dict:
         with _open(path, work_tree=False) as repo:
             head = repo.head()
             commit = repo.commit(BRANCH)
-            if head.ref != BRANCH or commit is None or _parents(repo, commit) or tree_files(repo, commit) != files:
+            if head.ref != BRANCH or commit is None or _parents(repo, commit) or \
+                    tree_entries(repo, commit) != expected_entries(files):
                 raise DemoError('SEED_DIFFERS', f'{path} exists and is not one root commit of the initial content on '
                                 'main; nothing is overwritten')
     except DemoError as exc:
@@ -450,8 +480,13 @@ def sequence_report(project) -> dict:
                             'exactly C0 to C3')
             return {'operation': 'sequence', 'complete': False, 'main': tip, 'problems': problems}
         commits = dict(zip(names, reversed(chain)))
-        trees = {name: tree_files(repo, commit) for name, commit in commits.items()}
-    template, design = template_files(), design_files()
+        trees = {name: tree_entries(repo, commit) for name, commit in commits.items()}
+    template, design = expected_entries(template_files()), expected_entries(design_files())
+    for name, entries in trees.items():
+        odd = sorted(f'{path} ({mode})' for path, (mode, _oid) in entries.items() if mode != REGULAR)
+        if odd:
+            problems.append(f'{name} holds entries that are not regular files (a gitlink, an executable or a link): '
+                            f'{odd}')
     if trees['C0'] != template:
         problems.append('C0 is not the initial content: ' + json.dumps(_changes(template, trees['C0'])))
     if trees['C1'] != {**trees['C0'], **design} or set(design) & set(trees['C0']):

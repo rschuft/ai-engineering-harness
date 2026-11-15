@@ -63,12 +63,15 @@ class DemoGitea:
         self.teams = [PF.team_view('Owners', 'owner')]
         self.requests, self.pushes, self.admin_tokens = [], [], []
         self.fail, self.ignore, self.push_fails = {}, set(), None
+        self.org_members, self.org_teams = [], [PF.team_view('Owners', 'owner', 1)]
+        self.no_total = set()  # list routes answered without X-Total-Count
 
     # ------------------------------------------------------------------ helpers for the tests
 
     def provisioned(self, clone, commits):
         """The repository as the act leaves it."""
         self.orgs[R.DEMO_ORG] = dict(R.DEMO_ORG_SETTINGS)
+        self.org_members = [G.SITE_ADMIN]
         self.create_repository()
         self.push(clone, R.demo_url(PORT), 'refs/heads/main:refs/heads/main', None, check=False)
         declared = R.demo_declaration()
@@ -106,6 +109,9 @@ class DemoGitea:
 
     # ------------------------------------------------------------------ HTTP
 
+    def listing(self, name, items):
+        return self.reply(200, items, {} if name in self.no_total else {'x-total-count': str(len(items))})
+
     @staticmethod
     def reply(status, payload, extra=None):
         return status, {'content-type': 'application/json', **(extra or {})}, \
@@ -137,7 +143,15 @@ class DemoGitea:
             if data['username'] in self.orgs:
                 return self.reply(422, {'message': 'user already exists'})
             self.orgs[data['username']] = {k: data[k] for k in R.DEMO_ORG_SETTINGS}
+            self.org_members = [G.SITE_ADMIN]  # Gitea makes the creator an owner
             return self.reply(201, {'username': data['username']})
+        if method == 'GET' and base == f'/orgs/{R.DEMO_ORG}/teams' and R.DEMO_ORG in self.orgs:
+            return self.listing('org-teams', copy.deepcopy(self.org_teams))
+        if method == 'GET' and base.startswith('/teams/') and base.endswith('/members') and R.DEMO_ORG in self.orgs:
+            members = [{'id': 1, 'login': G.SITE_ADMIN}] if base == '/teams/1/members' else []
+            return self.listing('team-members', members)
+        if method == 'GET' and base == f'/orgs/{R.DEMO_ORG}/members' and R.DEMO_ORG in self.orgs:
+            return self.listing('org-members', [{'id': n + 1, 'login': u} for n, u in enumerate(self.org_members)])
         if (method, base) == ('POST', f'/orgs/{R.DEMO_ORG}/repos'):
             if R.DEMO_ORG not in self.orgs or self.repo is not None or data['name'] != R.DEMO_REPO:
                 return self.reply(409, {'message': 'refused by the fake'})
@@ -158,8 +172,7 @@ class DemoGitea:
             self.collaborators[rest.split('/')[2]] = data['permission']
             return self.reply(204, None)
         if rest == '/collaborators' and method == 'GET':
-            return self.reply(200, [{'login': u} for u in self.collaborators],
-                              {'x-total-count': str(len(self.collaborators))})
+            return self.listing('collaborators', [{'id': n + 20, 'login': u} for n, u in enumerate(self.collaborators)])
         if rest.startswith('/collaborators/') and rest.endswith('/permission') and method == 'GET':
             user = rest.split('/')[2]
             return self.reply(200, {'permission': self.collaborators.get(user, 'none'), 'role_name': '',
@@ -172,13 +185,16 @@ class DemoGitea:
         if rest == '/teams' and method == 'GET':
             return self.reply(200, copy.deepcopy(self.teams))
         if rest == '/keys' and method == 'GET':
-            return self.reply(200, copy.deepcopy(self.keys))
+            return self.listing('keys', copy.deepcopy(self.keys))
         if rest == '/branches/main' and method == 'GET':
             if self.main is None:
                 return self.reply(404, {'message': 'branch not found'})
-            names = [r['rule_name'] for r in self.rules]
-            return self.reply(200, {'name': 'main', 'commit': {'id': self.main}, 'protected': bool(self.rules),
-                                    'effective_branch_protection_name': 'main' if 'main' in names else ''})
+            rule = next((r for r in self.rules if r['rule_name'] == 'main'), None)
+            return self.reply(200, {'name': 'main', 'commit': {'id': self.main}, 'protected': rule is not None,
+                                    'required_approvals': rule['required_approvals'] if rule else 0,
+                                    'enable_status_check': False, 'status_check_contexts': [],
+                                    'user_can_push': rule is None, 'user_can_merge': True,
+                                    'effective_branch_protection_name': 'main' if rule else ''})
         if rest.startswith('/git/commits/') and method == 'GET':
             sha = rest.split('/')[3]
             if sha not in self.commits:
@@ -351,7 +367,8 @@ class Verifier(Act):
         self.gitea.provisioned(self.clone, self.commits)
 
     def check(self, main=None):
-        return R.demo_check(http=self.gitea, ctx=(None, None, PORT, self.provider, self.cli), main=main)
+        return R.demo_check(http=self.gitea, ctx=(None, None, PORT, self.provider, self.cli),
+                            main=self.commits['C3'] if main is None else main)
 
     def test_verified_and_read_only(self):
         found = self.check(main=self.commits['C3'])
@@ -400,6 +417,171 @@ class Verifier(Act):
         self.assertEqual(result['refs'], {'refs/heads/main': self.commits['C3']})
 
 
+class ReviewFixes(Act):
+    """Dispatch 3: the reviewer's probes as tests (SF-1 to SF-4, N3)."""
+
+    def hooked_clone(self):
+        tmp = tempfile.mkdtemp(prefix='aieh-demo-hook-')
+        self.addCleanup(fx.rmtree, tmp)
+        hooked = Path(tmp) / 'aieh-d1-demo'
+        fx.git(tmp, 'clone', '--quiet', '-c', 'core.autocrlf=false', str(self.clone), str(hooked))
+        (hooked / '.git' / 'hooks' / 'pre-push').write_text('#!/bin/sh\nexit 0\n', encoding='ascii')
+        return hooked
+
+    def test_sf1_a_push_side_refusal_comes_before_any_write(self):
+        error = self.stopped('CLONE_NOT_PUSHABLE', refusal=True, clone=self.hooked_clone())
+        self.assertIn('HOOKS_UNSUPPORTED', error.detail)
+        self.assertEqual(self.gitea.requests, [])
+        # with the real push as well (no stand-in): still nothing sent
+        with self.assertRaises(G.GiteaError) as caught:
+            R.demo_repository(owner_act=R.DEMO_ACT, clone=self.hooked_clone(), http=self.gitea,
+                              ctx=(None, None, PORT, self.provider, self.cli))
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('CLONE_NOT_PUSHABLE', True))
+        self.assertEqual(self.gitea.requests, [])
+        self.assertEqual(R.demo_push_preconditions(self.clone, self.commits['C3']),
+                         {'hooks': None, 'main': self.commits['C3']})
+        with self.assertRaises(G.GiteaError) as caught:
+            R.demo_push_preconditions(self.clone, self.commits['C2'])
+        self.assertIn('not the sequence', caught.exception.detail)
+
+    def test_sf2_a_stop_with_the_window_open_says_so_and_resume_closes_it(self):
+        self.gitea.fail[('POST', f'{REPO_PATH}/branch_protections')] = 500
+        error = self.stopped('API_UNEXPECTED')
+        window = error.report['window']
+        self.assertTrue(error.report['stopped']['window_open'])
+        self.assertTrue(window['open'])
+        self.assertIn('the write collaborators', window['pushes_main'])
+        for user in ('aieh-bot-planner', 'aieh-bot-builder', G.OWNER):
+            self.assertIn(user, window['pushes_main'])
+        self.assertTrue(error.detail.startswith('THE WINDOW IS OPEN'))
+        self.assertIn('--resume', error.detail)
+        # without --resume the partial repository is refused; with it only the missing rules are written
+        del self.gitea.fail[('POST', f'{REPO_PATH}/branch_protections')]
+        self.gitea.requests = []
+        self.stopped('DEMO_REPOSITORY_EXISTS', refusal=True)
+        self.gitea.requests = []
+        report = R.demo_repository(owner_act=R.DEMO_ACT, clone=self.clone, http=self.gitea, resume=True,
+                                   ctx=(None, None, PORT, self.provider, self.cli), push=self.gitea.push)
+        self.assertEqual(self.gitea.writes(), [('POST', f'{REPO_PATH}/branch_protections')] * 3)
+        self.assertEqual((report['state'], report['window']['open'], report['verification']['status']),
+                         ('resumed', False, 'verified'))
+        # a second resume on the verified repository writes nothing
+        self.gitea.requests = []
+        again = R.demo_repository(owner_act=R.DEMO_ACT, clone=self.clone, http=self.gitea, resume=True,
+                                  ctx=(None, None, PORT, self.provider, self.cli), push=self.gitea.push)
+        self.assertEqual((again['state'], self.gitea.writes()), ('already present; nothing written', []))
+
+    def test_sf2_resume_after_a_stop_between_collaborators(self):
+        self.gitea.fail[('PUT', f'{REPO_PATH}/collaborators/aieh-bot-reviewer')] = 500
+        error = self.stopped('API_UNEXPECTED')
+        self.assertTrue(error.report['stopped']['window_open'])
+        del self.gitea.fail[('PUT', f'{REPO_PATH}/collaborators/aieh-bot-reviewer')]
+        self.gitea.requests = []
+        report = R.demo_repository(owner_act=R.DEMO_ACT, clone=self.clone, http=self.gitea, resume=True,
+                                   ctx=(None, None, PORT, self.provider, self.cli), push=self.gitea.push)
+        self.assertEqual(self.gitea.writes(), [('PUT', f'{REPO_PATH}/collaborators/aieh-bot-reviewer'),
+                                               ('PUT', f'{REPO_PATH}/collaborators/{G.OWNER}'),
+                                               *[('POST', f'{REPO_PATH}/branch_protections')] * 3])
+        self.assertEqual(report['verification']['status'], 'verified')
+
+    def test_sf2_resume_never_changes_what_is_present(self):
+        def resume():
+            return R.demo_repository(owner_act=R.DEMO_ACT, clone=self.clone, http=self.gitea, resume=True,
+                                     ctx=(None, None, PORT, self.provider, self.cli), push=self.gitea.push)
+        with self.assertRaises(G.GiteaError) as caught:
+            resume()
+        self.assertEqual(caught.exception.code, 'RESUME_REFUSED')  # nothing to resume
+        self.gitea.fail[('POST', f'{REPO_PATH}/branch_protections')] = 500
+        self.stopped('API_UNEXPECTED')
+        del self.gitea.fail[('POST', f'{REPO_PATH}/branch_protections')]
+        for mutate, needle in ((lambda g: g.collaborators.update({'aieh-bot-verifier': 'read'}), 'aieh-bot-verifier'),
+                               (lambda g: g.collaborators.update({'aieh-bot-reviewer': 'write'}), 'aieh-bot-reviewer'),
+                               (lambda g: g.org_members.append('someone'), 'members'),
+                               (lambda g: g.rules.append(PF.rule_view(dict(R.protection_rules()[2],
+                                                                          enable_push=True), 9)), '**')):
+            with self.subTest(needle=needle):
+                saved = (dict(self.gitea.collaborators), list(self.gitea.org_members), list(self.gitea.rules))
+                mutate(self.gitea)
+                self.gitea.requests = []
+                with self.assertRaises(G.GiteaError) as caught:
+                    resume()
+                self.assertEqual((caught.exception.code, caught.exception.refusal), ('RESUME_REFUSED', True))
+                self.assertIn(needle, caught.exception.detail)
+                self.assertEqual(self.gitea.writes(), [])
+                self.gitea.collaborators, self.gitea.org_members, self.gitea.rules = \
+                    dict(saved[0]), list(saved[1]), list(saved[2])
+
+    def test_a_completed_act_reports_the_window_closed(self):
+        report = self.run_act()
+        self.assertEqual((report['window']['open'], report['window']['pushes_main']),
+                         (False, 'nobody (the rules apply)'))
+
+
+class VerifierFailsClosed(Act):
+    """SF-3, SF-4, N3: demo-verify fails closed as protection_check.observe does, and reads the organization."""
+
+    def setUp(self):
+        super().setUp()
+        self.gitea.provisioned(self.clone, self.commits)
+
+    def check(self, main=None):
+        return R.demo_check(http=self.gitea, ctx=(None, None, PORT, self.provider, self.cli),
+                            main=self.commits['C3'] if main is None else main)
+
+    def test_every_view_is_checked(self):
+        cases = (
+            ('a non-object team', lambda g: g.teams.append('not-a-team-object'), 'unverified'),
+            ('a repository view without has_actions', lambda g: g.repo.pop('has_actions'), 'unverified'),
+            ('a repository view with an unknown field', lambda g: g.repo.update(surprise=1), 'unverified'),
+            ('a wider rule Gitea would order first', lambda g: g.rules.append(
+                PF.rule_view(dict(R.protection_rules()[1], rule_name='m*', priority=0), 9)), 'unverified'),
+            ('a repeated rule name', lambda g: g.rules.append(copy.deepcopy(g.rules[0])), 'unverified'),
+            ('a collaborator list read in part', lambda g: g.no_total.add('collaborators'), 'unverified'),
+            ('a deploy key list read in part', lambda g: g.no_total.add('keys'), 'unverified'),
+            ('a login outside the grammar', lambda g: g.collaborators.update({'../x': 'read'}), 'unverified'),
+            ('an extra team with access', lambda g: g.teams.append(PF.team_view('Writers', 'write', 2)), 'drift'),
+            ('an extra organization member', lambda g: g.org_members.append('someone-else'), 'drift'),
+            ('an extra organization team', lambda g: g.org_teams.append(PF.team_view('Pushers', 'write', 2)), 'drift'),
+        )
+        for name, mutate, status in cases:
+            with self.subTest(name=name):
+                self.gitea = DemoGitea()
+                self.gitea.provisioned(self.clone, self.commits)
+                mutate(self.gitea)
+                found = self.check()
+                self.assertEqual(found['status'], status, (name, found))
+                self.assertEqual({r['method'] for r in self.gitea.requests}, {'GET'})
+        self.gitea = DemoGitea()
+        self.gitea.provisioned(self.clone, self.commits)
+        self.assertEqual(self.check()['status'], 'verified')
+        self.assertTrue(any(r['path'].startswith(f'/orgs/{R.DEMO_ORG}/members') for r in self.gitea.requests))
+        self.assertTrue(any(r['path'].startswith('/teams/1/members') for r in self.gitea.requests))
+
+    def test_an_unexpected_error_is_unverified(self):
+        with mock.patch.object(R, '_demo_observe', side_effect=KeyError('surprise')):
+            found = self.check()
+        self.assertEqual((found['status'], found['code']), ('unverified', 'UNEXPECTED_ERROR'))
+
+    def test_main_is_required(self):
+        for main in ('', 'C3', 'a' * 39):
+            with self.subTest(main=main), self.assertRaises(G.GiteaError) as caught:
+                self.check(main=main)
+            self.assertEqual(caught.exception.code, 'MAIN_REQUIRED')
+        with self.assertRaises(G.GiteaError) as caught:
+            R.demo_check(http=self.gitea, ctx=(None, None, PORT, self.provider, self.cli))
+        self.assertEqual(caught.exception.code, 'MAIN_REQUIRED')
+
+    def test_the_clone_s_failures_are_stable_codes(self):
+        ra = DR._ra()
+        for raised, code in ((ra.RepositoryError('REMOTE_REFUSED', 'x'), 'CLONE_REFUSED'),
+                             (ra.RepositoryError('REMOTE_FAILED', 'x'), 'CLONE_FAILED'),
+                             (ValueError('exists'), 'CLONE_DESTINATION'), (OSError('boom'), 'CLONE_FAILED')):
+            with self.subTest(code=code), self.assertRaises(G.GiteaError) as caught:
+                R.demo_clone(self.root / 'x.git', ctx=(None, None, PORT, self.provider, self.cli),
+                             clone=mock.Mock(side_effect=raised))
+            self.assertEqual(caught.exception.code, code)
+
+
 @unittest.skipUnless(os.name == 'nt', 'the command line runs on Windows only')
 class CommandLine(unittest.TestCase):
     category = 'unit'
@@ -409,7 +591,7 @@ class CommandLine(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(R, 'demo_check', return_value=report), mock.patch.object(sys, 'stdout', out), \
                 mock.patch.object(sys, 'stderr', err):
-            self.assertEqual(R.main(['demo-verify']), 0)
+            self.assertEqual(R.main(['demo-verify', '--main', 'a' * 40]), 0)
         self.assertEqual(json.loads(out.getvalue()), report)
         self.assertIn('I7 no-exposure scan: clean', err.getvalue())
 
@@ -419,9 +601,20 @@ class CommandLine(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(R, 'demo_check', side_effect=leaking), mock.patch.object(sys, 'stdout', out), \
                 mock.patch.object(sys, 'stderr', err):
-            self.assertEqual(R.main(['demo-verify']), 1)
+            self.assertEqual(R.main(['demo-verify', '--main', 'a' * 40]), 1)
         self.assertEqual(out.getvalue(), '')
         self.assertIn('EXPOSURE_FOUND', err.getvalue())
+
+    def test_an_unexpected_error_exits_2_and_is_still_scanned(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(R, 'demo_check', side_effect=KeyError('has_actions')), \
+                mock.patch.object(sys, 'stdout', out), mock.patch.object(sys, 'stderr', err):
+            self.assertEqual(R.main(['demo-verify', '--main', 'a' * 40]), 2)
+        self.assertEqual(json.loads(out.getvalue())['status'], 'unverified')
+        self.assertIn('UNEXPECTED_ERROR', err.getvalue())
+        self.assertIn('I7 no-exposure scan: clean', err.getvalue())
+        with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit):
+            R.main(['demo-verify'])  # --main is required
 
 
 if __name__ == '__main__':
