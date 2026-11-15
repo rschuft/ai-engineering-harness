@@ -445,6 +445,64 @@ class DriverRun(unittest.TestCase):
         self.assertEqual((self.step(out, 3)['verdict'], self.step(out, '4a')['verdict']), ('PASS', 'FAIL'))
         self.assertEqual(self.step(out, '4a')['detail']['forbidden_flags'], ['--bare'])
 
+    def test_the_start_needs_the_adapter_and_the_cli(self):
+        """Review K1 (S1): an adapter alone is not the provider's start: (4a) is UNKNOWN at the ceiling."""
+        data = start_data()
+        data['processes'] = [p for p in data['processes'] if p['role'] == 'adapter']
+        self.guest.probe['start'] = data
+        ceilings = []
+
+        def at_the_ceiling(fetch, done, ceiling):     # the real wait would poll for NATIVE_START_CEILING_S
+            ceilings.append(ceiling)
+            value = fetch()
+            return value, done(value)
+        out = self.run_driver(start_wait=at_the_ceiling)
+        self.assertEqual(ceilings, [guest.NATIVE_START_CEILING_S])
+        self.assertEqual(self.step(out, '4a')['verdict'], 'UNKNOWN')
+        self.assertFalse(self.step(out, '4a')['detail']['seen_within_ceiling'])
+
+    def test_a_cli_started_after_the_sighting_is_judged_after_the_turn(self):
+        """Review K1 (S2): a CLI with --bare --mcp-config seen only in step (11)'s after-turn report is FAIL and a
+        stop."""
+        self.guest.probe['after']['processes'][1]['argv'] = ['/x/claude', '--bare', '--mcp-config', '{}']
+        out = self.run_driver()
+        self.assertEqual((self.step(out, '4a')['verdict'], self.step(out, 11)['verdict']), ('PASS', 'FAIL'))
+        self.assertIn(guest.NATIVE_STOPS['provider-after'], self.stops(out))
+        self.assertEqual(self.step(out, 11)['detail']['provider_after_the_turn']['forbidden_flags'],
+                         ['--bare', '--mcp-config'])
+        self.setUp()
+        self.guest.probe['after']['processes'][1]['names'] = NAMES + ['ANTHROPIC_API_KEY']
+        self.assertEqual(self.step(self.run_driver(), 11)['verdict'], 'FAIL')
+
+    def test_a_name_lookup_in_the_turn_is_unknown(self):
+        """Review F1-b: a name lookup refused once the prompt is sent is counted and UNKNOWN in (10) and (12b) (the
+        provider should resolve nothing itself); start-up lookups stay designed."""
+        orig, done = self.guest.facts, {'turn': False}
+
+        def facts():
+            if self.guest.sent and not done['turn']:
+                done['turn'] = True
+                self.guest.refuse(DNS)
+            return orig()
+        self.guest.facts = facts
+        out = self.run_driver()
+        turn = self.step(out, 10)['detail']['guards_during_the_turn']
+        self.assertEqual((self.step(out, 10)['verdict'], turn['name_lookups'], turn['lookups_designed']),
+                         ('UNKNOWN', 1, False))
+        window = self.step(out, '12b')
+        self.assertEqual((window['verdict'], window['detail']['from_the_prompt_to_the_teardown']['name_lookups']),
+                         ('UNKNOWN', 1))
+        self.assertNotIn(guest.NATIVE_STOPS['guest'], self.stops(out))
+
+    def test_the_sdks_literal_sentence_in_the_events(self):
+        """Review N-2: run 2's shape, the SystemPromptEvent holding the SDK's sentence once: (11b) PASS."""
+        self.guest.events[0].append({'id': 'e0', 'kind': 'SystemPromptEvent', 'dynamic_context': {
+            'text': '<CUSTOM_SECRETS> * Security: ' + guest.NATIVE_LITERAL_MARKER_SENTENCE}})
+        self.guest.probe['after']['transcript']['occurrences']['marker'] = 1
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 9)['detail']['mask_markers'], self.step(out, '11b')['verdict']), (1, 'PASS'))
+        self.assertEqual(self.step(out, '11b')['detail']['literal_markers_in_events'], 1)
+
     def test_the_start_is_judged_at_the_lazy_start(self):
         """Live run 2 (F2): no provider before the prompt is recorded at (3); (4a) judges it once it runs; a provider
         never seen is UNKNOWN with the probe's output kept."""
@@ -520,8 +578,9 @@ class DriverRun(unittest.TestCase):
         self.guest.facts = facts(*[DNS] * 19)
         out = self.run_driver()
         window = self.step(out, '12b')
-        self.assertEqual((window['verdict'], window['detail']['name_lookups'], window['detail']['container_rise']),
-                         ('PASS', 19, 19))
+        before = window['detail']['before_the_prompt']
+        self.assertEqual((window['verdict'], before['name_lookups'], before['container_rise']), ('PASS', 19, 19))
+        self.assertIn('off-link', window['detail']['off_link'])                  # review F1-a, disclosed
         self.assertNotIn('a refused', ' '.join(self.stops(out)))
         self.assertEqual(out['result'], 'PASS')
         for line, verdict, stop in ((DNS.replace('DPT=53', 'DPT=22').replace('UDP', 'TCP'), 'FAIL', 'guest'),
@@ -544,7 +603,8 @@ class DriverRun(unittest.TestCase):
             return orig()
         self.guest.facts = unlogged
         out = self.run_driver()
-        self.assertEqual((self.step(out, '12b')['verdict'], self.step(out, '12b')['detail']['unattributed']),
+        self.assertEqual((self.step(out, '12b')['verdict'],
+                          self.step(out, '12b')['detail']['before_the_prompt']['unattributed']),
                          ('UNKNOWN', 5))
         self.setUp()
         orig = self.guest.facts
@@ -774,10 +834,16 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(guest.native_mask_verdict(0, occ())[0], 'PASS')
         self.assertEqual(guest.native_mask_verdict(2, occ(token=2))[0], 'PASS')
         self.assertEqual(guest.native_mask_verdict(5, occ(token=1))[0], 'UNKNOWN')        # review N3 (P9)
-        self.assertEqual(guest.native_mask_verdict(1, occ(marker=1))[0], 'PASS')          # live run 2 (F3)
-        self.assertEqual(guest.native_mask_verdict(2, occ(marker=1))[0], 'UNKNOWN')
-        self.assertEqual(guest.native_mask_verdict(2, occ(marker=1, token=1))[0], 'PASS')
-        self.assertEqual(guest.native_mask_verdict(1, occ(marker=1, switch=1))[0], 'FAIL')
+        # review N-2: the SDK's literal sentence is counted in the events themselves; the reviewer's M cases (a
+        # literal marker in the transcript alone no longer attributes one in the events)
+        self.assertEqual(guest.native_mask_verdict(2, occ(marker=2))[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(1, occ(marker=3))[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(2, occ(switch=1, marker=5))[0], 'FAIL')
+        self.assertEqual(guest.native_mask_verdict(1, occ(marker=1), literal=1)[0], 'PASS')      # live run 2
+        self.assertEqual(guest.native_mask_verdict(2, occ(token=1), literal=1)[0], 'PASS')
+        self.assertEqual(guest.native_mask_verdict(2, occ(), literal=1)[0], 'UNKNOWN')
+        self.assertEqual(guest.native_mask_verdict(2, occ(switch=1), literal=1)[0], 'FAIL')
+        self.assertIn('<secret-hidden>', guest.NATIVE_LITERAL_MARKER_SENTENCE)
         self.assertEqual(guest.native_mask_verdict(1, occ(endpoint=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ(switch=1, token=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ())[0], 'UNKNOWN')

@@ -16867,6 +16867,14 @@ NATIVE_MODEL_BACKGROUND = 'claude-haiku-4-5-20251001'
 NATIVE_MODELS_RECORDED = ('claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-fable-5',
                           'claude-opus-4-8')
 NATIVE_MASK_MARKER = '<secret-hidden>'                 # the pinned SDK's mask (conversation/secret_registry.py)
+# The pinned SDK's own sentence holding the marker literally (openhands-sdk 1.60.1, sha256 f6efa8f8...eb6b,
+# context/prompts/sections/dynamic.py:152, the <CUSTOM_SECRETS> block sent with the first prompt and kept in the
+# SystemPromptEvent): each occurrence of it in the events is one literal marker, not a masking (review N-2).
+NATIVE_LITERAL_MARKER_SENTENCE = 'You will see `<secret-hidden>` instead of the actual secret value in the output.'
+NATIVE_OFF_LINK_NOTE = (
+    'disclosed (review F1-a): a direct attempt to an off-link address is answered by the guest\'s own routing (no '
+    'route) before the FORWARD chain, so neither guard counts it; nothing leaves the guest, by topology (no seed '
+    'change).')
 # The tunnel's refusals of a ClientHello to the admitted origin (provider_tunnel.py REFUSALS): the pinned CLI's TLS
 # stack tripping the tunnel's strictness, a stop the engineering manager decides on (E-05.10's carried item).
 NATIVE_HELLO_REFUSALS = ('TUNNEL_HELLO_FRAGMENTED', 'TUNNEL_HELLO_MALFORMED', 'TUNNEL_ECH_REFUSED',
@@ -16914,7 +16922,7 @@ NATIVE_QUALIFICATION_RULE = (
     'leads to the teardown and, when the conversation is present, the searches): 2xx, exactly one new container of the declared shape, the '
     'outer server listing exactly that conversation, the answer\'s acp_server claude-code and acp_model ' +
     NATIVE_MODEL_MAIN + ' when it names them; (3) before the turn the sets and the guards are read (the provider '
-    'starts lazily at the first prompt); (4a) once the prompt is sent, the provider seen within ' +
+    'starts lazily at the first prompt); (4a) once the prompt is sent, the adapter and the CLI both seen within ' +
     str(NATIVE_START_CEILING_S) + ' s, started from an empty per-conversation configuration directory (CLAUDE_CONFIG_DIR <persistence>' + NATIVE_CONFIG_SUFFIX + ' in '
     'every provider process, nothing in it older than the provider), with the four native names in its environment, '
     'no second authentication method and no CLAUDE_CODE_SIMPLE, HTTPS_PROXY the tunnel endpoint, the switches their '
@@ -16931,15 +16939,17 @@ NATIVE_QUALIFICATION_RULE = (
     'and the mask markers ' + NATIVE_MASK_MARKER + ' in them are counted; (10) the tunnel\'s log of this run shows '
     'every target, at least one admitted connection to the origin, no target but the origin carried (a stop), no '
     'ClientHello of the origin refused and no line suppressed (refused targets listed), and the container guard\'s '
-    'counters are judged as (12b) over the turn; (10a) the '
+    'counters are judged as (12b) over the turn, where a name lookup is counted and UNKNOWN; (10a) the '
     'tunnel\'s census passes after the turn; (11) inside the container, the token (read there from the provider\'s '
     'environment, its fingerprint the held one) is searched in memory, raw and encoded, in the configuration '
     'directory and every file changed since the container started, with valid positive controls, and found nowhere; '
     'no Owner credential file or host Claude configuration (' + ', '.join(NATIVE_OWNER_FILE_NAMES) + ') outside '
-    'the configuration directory; (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
+    'the configuration directory; the provider\'s processes after the turn judged again with the start checks (a '
+    'violation is a stop); (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
     'model outside the record (' + ', '.join(NATIVE_MODELS_RECORDED) + '); (11b) the masking: no marker in the '
-    'events, or every marker attributed, from the unmasked transcript, to a token occurrence only (a marker the '
-    'transcript cannot attribute (more markers than token and literal-marker occurrences) is UNKNOWN; one attributed '
+    'events but the SDK\'s own literal sentence (' + NATIVE_LITERAL_MARKER_SENTENCE + ', counted in the events), or '
+    'every other marker attributed, from the unmasked transcript, to a token occurrence (a marker the transcript '
+    'cannot attribute (more than its token occurrences) is UNKNOWN; one attributed '
     'to the tunnel '
     'endpoint or a switch value is FAIL); (11c) '
     'the Owner\'s credentials (' + ', '.join(NATIVE_OWNER_CREDENTIALS) + ') absent by name (no credential-like '
@@ -16952,7 +16962,8 @@ NATIVE_QUALIFICATION_RULE = (
     'to the teardown: the egress guard\'s refusal counters (iptables and ip6tables) rising is a direct connection '
     'leaving the container (a stop); the container guard\'s new refusals are attributed from its log lines '
     '(protocol, destination and port kept): UDP or TCP to the docker0 resolver on port 53 is the designed name-lookup '
-    'refusal (counted), any other is a stop, refusals beyond the logged lines are UNKNOWN; an unread counter is '
+    'refusal (counted) before the prompt and counted and UNKNOWN from step (3) on (the provider should resolve '
+    'nothing itself), any other is a stop, refusals beyond the logged lines are UNKNOWN; an unread counter is '
     'UNKNOWN; (13) E-05.9\'s outbound search over the redacted record and every '
     'Agent Server answer and container output of this run finds the token nowhere, with its positive controls; the '
     'record is redacted once and written redacted, a redaction being a stop. FAIL when a step observes a violation; otherwise UNKNOWN when a step is UNKNOWN. STOP (FAIL; '
@@ -16963,8 +16974,15 @@ NATIVE_QUALIFICATION_RULE = (
     'connection to any destination but the tunnel endpoint, or a direct connection attempt (a SYN_SENT row elsewhere, '
     'the guard\'s counters rising); a target other than the origin carried by the tunnel; a turn waiting for a confirmation; the tunnel\'s census not '
     'passing before the create or after the turn; the tunnel refusing the origin\'s ClientHello; a model identifier '
-    'outside the record. ' + NATIVE_PERMISSION_NOTE + ' ' + NATIVE_ENCRYPTED_STATE_NOTE)
+    'outside the record; a provider process after the turn outside the start conditions. ' + NATIVE_PERMISSION_NOTE +
+    ' ' + NATIVE_ENCRYPTED_STATE_NOTE + ' ' + NATIVE_OFF_LINK_NOTE)
+# The start checks that hold only at the start (judged at (4a)), left out when step (11) judges the processes again.
+NATIVE_START_ONLY = ('nothing in it older than the provider (an empty start)',
+                     'the provider is running (the adapter and the CLI)')
 NATIVE_STOPS = {
+    'provider-after': 'a provider process after the turn outside the start conditions (a forbidden flag, a second '
+                      'authentication method or CLAUDE_CODE_SIMPLE, the proxy or a switch, a name, the configuration '
+                      'directory)',
     'census-before': 'the tunnel\'s census did not pass before the create (no model call is made)',
     'census-after': 'the tunnel\'s census did not pass after the turn',
     'hello': 'the tunnel refused the pinned CLI\'s ClientHello to the origin (the engineering manager decides the fix)',
@@ -17286,8 +17304,9 @@ def native_start_verdict(data, names):
     """(verdict, checks) of the provider's start (step 3), from NATIVE_ATTEMPT_PROBE's start mode: the configuration
     directory per conversation and empty when the provider started, the environment's names, no --bare."""
     procs = data.get('processes') if isinstance(data.get('processes'), list) else []
-    if not procs or not any(p.get('role') == 'adapter' for p in procs):
-        return 'UNKNOWN', {'checks': {'the provider is running': False},
+    roles = {p.get('role') for p in procs if isinstance(p, dict)}
+    if not {'adapter', 'cli'} <= roles:      # review K1: both the adapter and the CLI, else UNKNOWN
+        return 'UNKNOWN', {'checks': {'the provider is running (the adapter and the CLI)': False},
                            'processes': [{k: p.get(k) for k in ('pid', 'role', 'exe', 'argv', 'names')} for p in procs],
                            'config_dirs': data.get('config_dirs'), 'config_exists': data.get('config_exists')}
     starts = [p.get('started') for p in procs if isinstance(p.get('started'), (int, float))]
@@ -17336,30 +17355,32 @@ def native_model_verdict(transcript):
     return ('PASS' if NATIVE_MODEL_MAIN in models else 'FAIL'), detail, []
 
 
-def native_mask_verdict(markers, transcript):
+def native_mask_verdict(markers, transcript, literal=0):
     """(verdict, detail) of the masking check (the engineering manager's ruling 3 of 2026-11-15): no marker in the
-    events PASS; markers attributed, from the unmasked transcript, to token occurrences or to literal markers it holds
-    (the SDK's own text; no more markers than those occurrences, review N3 and live run 2) PASS; to the tunnel endpoint or a switch value FAIL (the SDK's masking altered the
+    events PASS; LITERAL markers (the SDK's own sentence NATIVE_LITERAL_MARKER_SENTENCE, counted in the events,
+    review N-2) set aside, the remaining markers attributed, from the unmasked transcript, to token occurrences (no
+    more markers than token occurrences, review N3) PASS; to the tunnel endpoint or a switch value FAIL (the SDK's masking altered the
     agent's events); otherwise UNKNOWN."""
     occ = ((transcript or {}).get('occurrences') if isinstance(transcript, dict) else None) or {}
-    detail = {'markers_in_events': markers, 'transcript_occurrences': occ}
+    literal = literal if isinstance(literal, int) else 0
+    detail = {'markers_in_events': markers, 'literal_markers_in_events': literal, 'transcript_occurrences': occ}
     if not isinstance(markers, int):
         return 'UNKNOWN', dict(detail, reason='the events were not read')
-    if markers == 0:
-        return 'PASS', detail
+    remaining = max(markers - literal, 0)       # review N-2: the SDK's pinned sentence, counted in the events
+    detail['remaining_markers'] = remaining
+    if remaining == 0:
+        return 'PASS', dict(detail, reason='no marker but the SDK\'s own literal sentence' if markers else
+                            'no marker')
     if not occ:
         return 'UNKNOWN', dict(detail, reason='markers in the events and no transcript to attribute them')
     if occ.get('endpoint') or occ.get('switch'):
         return 'FAIL', dict(detail, reason='a marker stands for the tunnel endpoint or a switch value')
-    literal = occ.get('marker') if isinstance(occ.get('marker'), int) else 0
     token = occ.get('token') if isinstance(occ.get('token'), int) else 0
-    if markers <= token + literal:
-        # live run 2: a marker the CLI's unmasked transcript holds existed before any masking (the SDK's own
-        # <CUSTOM_SECRETS> text says "You will see `<secret-hidden>` ...", context/prompts/sections/dynamic.py:152)
-        return 'PASS', dict(detail, reason='every marker attributed: to a token occurrence or to the literal marker '
-                                           'the unmasked transcript holds (markers <= token + literal occurrences)')
-    return 'UNKNOWN', dict(detail, reason='the transcript\'s token and literal-marker occurrences do not account for '
-                                          'every marker')
+    if remaining <= token:
+        return 'PASS', dict(detail, reason='every other marker attributable to a token occurrence (remaining <= the '
+                                           'transcript\'s token occurrences)')
+    return 'UNKNOWN', dict(detail, reason='the transcript\'s token occurrences do not account for every marker '
+                                          'beyond the SDK\'s literal sentence')
 
 
 def native_guard_rejects(report):
@@ -17417,13 +17438,15 @@ def native_guard_snapshot(report):
             'egress_rejects': native_egress_rejects(report)}
 
 
-def native_guard_window(start, end, name_lookup):
+def native_guard_window(start, end, name_lookup, lookups_designed=True):
     """(verdict, detail, stops) of the guards between two snapshots (live run 2; the engineering manager's rulings
     superseding B1/R1): the egress guard's refusals rising is a direct connection leaving the container (FAIL and the
     stop 'direct'); the container guard's (INPUT) new refusals are attributed from its new log lines: UDP or TCP to
     NAME_LOOKUP (the docker0 resolver address, port 53) is the designed name-lookup refusal (counted, not a stop),
     any other attributed refusal is FAIL and the stop 'guest'; refusals beyond the logged lines (the LOG rule's rate
-    limit, or a tail of 20) are UNKNOWN; an unread counter is UNKNOWN."""
+    limit, or a tail of 20) are UNKNOWN; an unread counter is UNKNOWN. With LOOKUPS_DESIGNED false (the window once
+    the prompt is sent, review F1-b) a name lookup is counted and UNKNOWN: the provider should resolve nothing itself
+    with CLAUDE_CODE_PROXY_RESOLVES_HOSTS. """
     start, end = start or {}, end or {}
     egress = {'start': start.get('egress_rejects'), 'end': end.get('egress_rejects')}
     container = {'start': start.get('container_rejects'), 'end': end.get('container_rejects')}
@@ -17457,6 +17480,10 @@ def native_guard_window(start, end, name_lookup):
         stops.append('guest')
     if unattributed:
         unknown.append(f'{unattributed} container-guard refusal(s) beyond the logged lines')
+    detail['lookups_designed'] = lookups_designed
+    if lookups and not lookups_designed:
+        unknown.append(f'{len(lookups)} name lookup(s) once the prompt was sent: the provider should resolve nothing '
+                       'itself with CLAUDE_CODE_PROXY_RESOLVES_HOSTS')
     detail['unknown'] = unknown
     verdict = 'FAIL' if stops else 'UNKNOWN' if unknown else 'PASS'
     return verdict, detail, stops
@@ -17808,8 +17835,8 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
 
     def start_step():
         last, met = start_wait(lambda: attempt_probe('start'),
-                               lambda d: any(p.get('role') == 'adapter' for p in (d or {}).get('processes') or []
-                                             if isinstance(p, dict)), NATIVE_START_CEILING_S)
+                               lambda d: {'adapter', 'cli'} <= {p.get('role') for p in (d or {}).get('processes') or []
+                                                                if isinstance(p, dict)}, NATIVE_START_CEILING_S)
         verdict, detail = native_start_verdict(last or {}, cs.NATIVE_NAMES)
         detail['seen_within_ceiling'] = met
         return verdict, detail
@@ -17917,7 +17944,9 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
                 break
             if pages >= ACP_EVENT_PAGES:
                 return 'UNKNOWN', {'reason': f'more than {ACP_EVENT_PAGES} pages of events', 'events': len(items)}
-        memo['markers'] = json.dumps(items, sort_keys=True, default=str).count(NATIVE_MASK_MARKER)
+        text = json.dumps(items, sort_keys=True, default=str)
+        memo['markers'] = text.count(NATIVE_MASK_MARKER)
+        memo['literal_markers'] = text.count(NATIVE_LITERAL_MARKER_SENTENCE)
         kinds = {}
         for e in items:
             kinds[str(e.get('kind'))] = kinds.get(str(e.get('kind')), 0) + 1
@@ -17941,7 +17970,8 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         if detail['other_targets']:
             stop(NATIVE_STOPS['other-target'], targets=detail['other_targets'])
         detail['log'] = {'file': name_, 'from_line': memo['log_mark']}
-        _, guards, kinds = native_guard_window(memo.get('guard_before'), memo.get('guard_after'), name_lookup)
+        _, guards, kinds = native_guard_window(memo.get('guard_before'), memo.get('guard_after'), name_lookup,
+                                               lookups_designed=False)
         detail['guards_during_the_turn'] = guards
         for kind in kinds:
             stop(NATIVE_STOPS[kind], guards=guards, window='the turn')
@@ -17955,10 +17985,20 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         """The guards from the preconditions (before the create) to the teardown (live run 2; the engineering
         manager's rulings superseding B1/R1): the egress guard judges a direct connection leaving the container; the
         container guard's refusals are attributed from its log."""
-        verdict, detail, kinds = native_guard_window(memo.get('guard_start'), memo.get('guard_end'), name_lookup)
+        if memo.get('guard_before') is None:    # no prompt was sent: the whole span is the container's start-up
+            verdict, detail, kinds = native_guard_window(memo.get('guard_start'), memo.get('guard_end'), name_lookup)
+        else:
+            # review F1-b: name lookups before the prompt (the container's start-up) are designed and counted; from
+            # step (3) on they are counted and UNKNOWN
+            v1, d1, k1 = native_guard_window(memo.get('guard_start'), memo.get('guard_before'), name_lookup)
+            v2, d2, k2 = native_guard_window(memo.get('guard_before'), memo.get('guard_end'), name_lookup,
+                                             lookups_designed=False)
+            kinds = k1 + [k for k in k2 if k not in k1]
+            verdict = 'FAIL' if 'FAIL' in (v1, v2) else 'UNKNOWN' if 'UNKNOWN' in (v1, v2) else 'PASS'
+            detail = {'before_the_prompt': d1, 'from_the_prompt_to_the_teardown': d2}
         for kind in kinds:
             stop(NATIVE_STOPS[kind], guards=detail, window='preconditions to teardown')
-        detail.update(start=memo.get('guard_start'), end=memo.get('guard_end'))
+        detail.update(start=memo.get('guard_start'), end=memo.get('guard_end'), off_link=NATIVE_OFF_LINK_NOTE)
         return verdict, detail
 
     def tunnel_whole_run_step():
@@ -17999,6 +18039,15 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
             return 'FAIL', detail
         if data.get('token_fingerprint') not in (None, held.fingerprint):
             return 'FAIL', dict(detail, reason='the container holds another token than the one delivered')
+        # review K1: the provider's processes after the turn, judged again with the start checks (a CLI started after
+        # (4a)'s sighting is seen here); a violation is a stop
+        _, after = native_start_verdict(data, cs.NATIVE_NAMES)
+        violated = sorted(k for k, ok in (after.get('checks') or {}).items() if not ok and k not in NATIVE_START_ONLY)
+        detail['provider_after_the_turn'] = {k: after.get(k) for k in ('checks', 'forbidden_names', 'forbidden_flags',
+                                                                       'processes')}
+        if violated:
+            stop(NATIVE_STOPS['provider-after'], checks=violated)
+            return 'FAIL', detail
         if search.get('verdict') == 'not-found' and (search.get('controls') or {}).get('valid') is True and \
                 data.get('token_fingerprint') == held.fingerprint:
             return 'PASS', detail
@@ -18011,7 +18060,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         return verdict, detail
 
     def mask_step():
-        return native_mask_verdict(memo.get('markers'), memo.get('transcript'))
+        return native_mask_verdict(memo.get('markers'), memo.get('transcript'), memo.get('literal_markers'))
 
     def owner_name_step():
         names, files = memo.get('env_names'), memo.get('owner_files')

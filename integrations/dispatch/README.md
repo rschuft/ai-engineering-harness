@@ -1000,17 +1000,27 @@ or TCP to the docker0 resolver on port 53 (`daemon.json` `dns 172.17.0.1`) is th
 counted, not a stop; any other attributed refusal is a stop; refusals beyond the logged lines (the LOG rule's rate
 limit of 10 a minute after a burst of 20, or more than the 20 lines the facts reporter keeps) are UNKNOWN. Step (10)
 applies the same judgement over the turn. Run 2 saw 19 container-guard refusals during the container's start-up,
-before the provider existed; its record kept only the sum.
+before the provider existed; its record kept only the sum. Name lookups refused once the prompt is sent (from step
+(3) on: (10)'s window, and the second part of (12b)'s split) are counted and UNKNOWN, since the provider should resolve
+nothing itself with `CLAUDE_CODE_PROXY_RESOLVES_HOSTS`; start-up lookups before the prompt stay designed and counted
+(delta review F1-b). **Disclosed (F1-a):** a direct attempt to an off-link address is answered by the guest's own
+routing (no route) before the FORWARD chain, so neither guard counts it; nothing leaves the guest, by topology; the
+seed is unchanged.
 
 **The provider's lazy start** (live run 2): at the pins the ACP server starts on the first prompt (openhands-sdk 1.60.1
 `LocalConversation._ensure_agent_ready`, "one-time lazy initialization on the first send_message() or run() call"), so
-step (3) records the sets and the guards before the prompt and step (4a) judges the start conditions once the
-provider runs (bounded by `NATIVE_START_CEILING_S`).
+step (3) records the sets and the guards before the prompt and step (4a) judges the start conditions once both the
+adapter and the CLI run (bounded by `NATIVE_START_CEILING_S`; an adapter alone is UNKNOWN, delta review K1). Step
+(11) judges the provider's processes after the turn again with the same checks (no forbidden flag, `HTTPS_PROXY`, the
+switches, the four names, no second authentication method or `CLAUDE_CODE_SIMPLE`, the configuration directory): a
+CLI started after (4a)'s sighting is judged there, and a violation is a stop.
 
-**Literal markers** (live run 2): the SDK's own `<CUSTOM_SECRETS>` text says "You will see `<secret-hidden>` ..."
-(`context/prompts/sections/dynamic.py`), sent to the CLI with the first prompt and kept in the `SystemPromptEvent`;
-a marker the CLI's unmasked transcript holds existed before any masking, so (11b) attributes markers to token
-occurrences and to literal markers in the transcript.
+**Literal markers** (live run 2; delta review N-2): the SDK's own `<CUSTOM_SECRETS>` text says "You will see
+`<secret-hidden>` instead of the actual secret value in the output." (openhands-sdk 1.60.1,
+`context/prompts/sections/dynamic.py:152`), sent to the CLI with the first prompt and kept in the
+`SystemPromptEvent`. (11b) counts that sentence in the events themselves as literal markers; the remaining markers
+must be no more than the transcript's token occurrences; a tunnel endpoint or switch occurrence is FAIL; otherwise
+UNKNOWN.
 - N-c: an interrupt during the teardown's DELETE itself can leave the conversation; destroying the disposable guest
   removes it.
 - N-d: a create still starting when its presence is read after a lost answer may appear after a 404 DELETE;
