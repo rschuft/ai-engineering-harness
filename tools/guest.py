@@ -17974,41 +17974,26 @@ def read_owner_values(stream, act):
     return values
 
 
-def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_values=None, owner_value_act=None,
-                             channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
-                             turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None):
-    """native-qualification (plan leaf E-05.11; PREPARED, NOT RUN) under NATIVE_QUALIFICATION_RULE, fixed before any
-    run. ``owner_act`` names the Owner's act that covers reading and delivering the native token (OA-31 (b), (f));
-    the token is read by the dispatcher's read of its one entry, held in memory, sealed into every API call and never
-    recorded (its fingerprint only). ``owner_values`` ({credential id: value}, from standard input only, under
-    ``owner_value_act``) turn on the Owner credentials' value search; without them that part is UNKNOWN.
-    ``channels(record) -> (api, facts)``, ``provider`` (the credential provider), ``forward``, ``tunnel``
-    (``NativeTunnelView``), ``host_vantage(record, state_pid)`` and ``wait(fetch, done, ceiling)`` stand in for the
-    guest, the host's stores and the clock in tests."""
-    if prompt not in NATIVE_QUALIFICATION_PROMPTS:
-        raise Refused('REFUSED', f'--prompt: one of {sorted(NATIVE_QUALIFICATION_PROMPTS)}')
-    if not NATIVE_ACT.match(str(owner_act or '')):
-        raise Refused('REFUSED', '--owner-act: the label of the Owner\'s act that covers reading and delivering the '
-                      'native token (OA-31)')
-    if (owner_values is None) != (owner_value_act is None):
-        raise Refused('REFUSED', 'the Owner credentials\' values and --owner-credential-act go together')
-    if owner_values is not None and (sorted(owner_values) != sorted(NATIVE_OWNER_CREDENTIALS) or
-                                     not NATIVE_ACT.match(str(owner_value_act))):
-        raise Refused('REFUSED', f'the Owner credentials\' values: exactly {list(NATIVE_OWNER_CREDENTIALS)}')
+class NativeObserver:
+    """The native observer's state and steps (``native_observer``), as attributes."""
+
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+
+def native_observer(ctx, name, record, cid, *, prompt=None, owner_act=None, owner_values=None, owner_value_act=None,
+                    channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
+                    turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None, log_label='native-qualification'):
+    """E-05.11's verifier vantage on one native conversation CID of the running provisioned instance NAME (RECORD its
+    launch record), as ``native_qualification_run`` built it, unchanged in behaviour (D1 slice C extracted it so the D1
+    run reuses it): the sealed API channel (every call sealed with the native token once it is held, before that
+    with a fresh nonce; each answer kept as a surface of the run for the outbound search), the facts behind the
+    guest's one limiter, the tunnel's view and every step of NATIVE_QUALIFICATION_RULE as a closure, the record's
+    redaction, outbound search and withholding. Returns a NativeObserver whose attributes are those closures and the
+    run's state (``steps``, ``stop_conditions``, ``memo``, ``transport``; ``holder()`` and ``hold(token)`` for the
+    held native token). The arguments stand in for the guest, the host's stores and the clock in tests, as
+    ``native_qualification_run`` documents."""
     idir = ctx.instance_dir(name)
-    _, record = running_instance(ctx, name)
-    if not record.get('provisioning'):
-        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
-    if not inference_opted(record):
-        raise Refused('REFUSED', f'{name} was not created with create --provision --inference: the provider has '
-                      'no endpoint to reach')
-    out_file = None
-    if out_path:
-        out_file = Path(out_path).resolve()
-        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
-                inside(out_file, ctx.repo) or inside(out_file, idir):
-            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
-                          'directory, outside the checkout and the instance directory')
     profile = ctx.profile
     gt, cc, nt, nq = dispatch_transport(), containment(), native_token_module(), native_qualification()
     cs = nq.secrets_check
@@ -18022,7 +18007,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
     start_wait = start_wait or wait_until
     # the designed name lookup the container guard refuses: the docker0 resolver (daemon.json dns) on port 53
     name_lookup = (((inference_config(profile).get('daemon_json') or {}).get('dns') or [cs.TUNNEL_ADDRESS])[0], 53)
-    cid, hex_id = NATIVE_QUALIFICATION_CONVERSATION_ID, NATIVE_QUALIFICATION_CONVERSATION_ID.replace('-', '')
+    hex_id = cid.replace('-', '')
     collector = (Path(ctx.repo) / 'integrations' / 'dispatch' / 'conversation_containment.py').read_text(
         encoding='utf-8')
     search_source = (Path(ctx.repo) / 'integrations' / 'inference' / 'inference_key_search.py').read_text(
@@ -18178,7 +18163,7 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         except caught as exc:  # a lost answer is UNKNOWN, never PASS
             verdict, detail = 'UNKNOWN', {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}
         steps.append({'step': step, 'verdict': verdict, 'seconds': round(time.time() - s, 1), 'detail': detail})
-        log(f'native-qualification: {step}: {verdict}')
+        log(f'{log_label}: {step}: {verdict}')
 
     def preconditions():
         # review S1: everything that needs no token first; the token is read only after the census passes (1b)
@@ -18588,67 +18573,20 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
         return ('PASS' if ok else 'FAIL'), {'delete': answer.get('status'), 'containers_left': len(left),
                                             'outer_count_after': count.get('body')}
 
-    interrupted = False
-    try:
-        run('(1) preconditions: the opted-in guest, the forward to the tunnel, nothing created yet',
-            preconditions)
-        run('(1a) the tunnel\'s census before the create, and so before any model call; its log marked',
-            census_step('before'), needs=('ready',))
-        run('(1b) the native token read from its one entry (the dispatcher\'s read), after the census', token_step,
-            needs=('ready', 'census_ok'))
-        run('(2) the native qualification create, admitted and sent through the dispatcher\'s transport', create_step,
-            needs=('ready', 'census_ok', 'token'))
-        run('(3) before the turn: the sets, and the provider\'s start from an empty configuration directory',
-            before_step, needs=('created',))
-        run('(4) the fixed prompt sent', prompt_step, needs=('created', 'before'))
-        run('(4a) the provider\'s start at its lazy start: the empty configuration directory, the environment, no '
-            '--bare', start_step, needs=('sent',))
-        run('(5) containment while the turn runs: the container view, its connections, the guest-root view',
-            during_step, needs=('sent',))
-        run('(6) the job contract in the qualification conversation (the native token\'s name by shape)',
-            job_contract_step, needs=('sent',))
-        run('(7) the turn ends, with no interactive step', turn_step, needs=('sent',))
-        run('(8) containment after the turn, the network and the sets', after_step, needs=('sent', 'before'))
-        run('(9) the conversation\'s events: the delegation mechanisms (a) to (d), the mask markers', events_step,
-            needs=('sent',))
-        run('(10) the tunnel\'s log of this run: every target; the guard\'s counters', tunnel_log_step,
-            needs=('sent', 'log_name'))
-        run('(10a) the tunnel\'s census after the turn', census_step('after'), needs=('sent',))
-        run('(11) the native token searched for in the configuration directory and the container\'s files',
-            persisted_step, always=True, needs=('present',))
-        run('(11a) the model identifiers against the model record', model_step, needs=('sent',))
-        run('(11b) the masking check', mask_step, needs=('sent',))
-        run('(11c) the Owner\'s own credentials by name: the environments\' names and the files', owner_name_step,
-            always=True, needs=('present',))
-        run('(11d) the Owner\'s own credentials by value, in memory on the host, under the Owner\'s act',
-            owner_value_step, always=True, needs=('present',))
-    except BaseException:
-        interrupted = True       # an interrupt (Ctrl-C) or an unexpected error: the teardown, then the token released
-        raise
-    finally:
-        try:
-            run('(12) teardown: the conversation deleted, its container gone, no outer conversation left',
-                teardown_step, always=True, needs=('create_sent',))
-            run('(12a) the tunnel\'s log of the whole run, after the teardown', tunnel_whole_run_step, always=True,
-                needs=('create_sent', 'log_name', 'sent'))
-            run('(12b) the container guard\'s counters from the preconditions to the teardown', guard_window_step,
-                always=True, needs=('create_sent',))
-        except BaseException:
-            interrupted = True
-            raise
-        finally:
-            if interrupted and held is not None:
-                held.drop()
-    out = {'schema': NATIVE_QUALIFICATION_SCHEMA, 'operation': 'native-qualification', 'plan_leaf': 'E-05.11',
-           'labels': labels(profile), 'profile': profile['name'], 'instance': name, 'conversation': cid,
-           'rule': NATIVE_QUALIFICATION_RULE, 'prompt': {'name': prompt, 'text': NATIVE_QUALIFICATION_PROMPTS[prompt]},
-           'acp_model': nq.MODEL, 'owner_act': owner_act, 'owner_value_act': owner_value_act,
-           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
-           'transport_calls': transport.calls, 'token_echoes': memo['echoes'], 'steps': steps,
-           'stop_conditions': stop_conditions}
-    try:
-        # review S3: the record is redacted once and the redacted record is what is judged and written; a token or an
-        # Owner value found in the run's own text is a stop, never a reason to lose the record
+
+    def holder():
+        """The held native token (native_token.NativeToken), or None."""
+        return held
+
+    def hold(token_):
+        """Hold TOKEN_ (a NativeToken the caller's one read of the entry produced): the D1 run's token is the one the
+        dispatcher read at the create, never a second read (decision 0023 section 2.2)."""
+        nonlocal held
+        held = token_
+
+    def redact_record(out):
+        """Review S3: the record is redacted once and the redacted record is what is judged and written; a token or an
+        Owner value found in the run's own text is a stop, never a reason to lose the record."""
         if held is not None and held.open:
             label = f'<native token {held.fingerprint} redacted>'
             out = redact_secret(out, token(), label)
@@ -18662,7 +18600,13 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
             if count:
                 out['stop_conditions'].append({'stop': NATIVE_STOPS['owner'], 'redacted_from_record': label_,
                                                'occurrences': count})
-        steps, stop_conditions = out['steps'], out['stop_conditions']
+        return out
+
+    def outbound_step(out, not_covered,
+                      step="(13) E-05.9's outbound search over the record and every answer of this run"):
+        """E-05.9's outbound search over the (redacted) record OUT and every Agent Server answer and container output
+        of this run, with its positive controls; its step is appended to OUT, a FAIL is a stop. The step's verdict."""
+        steps_, stop_conditions_ = out['steps'], out['stop_conditions']
         if held is not None and held.open:
             ns = native_token_search_module()
             search = ns.new_search(token())
@@ -18675,35 +18619,147 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
                     'FAIL' if report['verdict'] == 'found' else 'UNKNOWN'
                 outbound = {'verdict': report['verdict'], 'search': key_search_summary(report),
                             'bundle_control': (report.get('bundle_control') or {}).get('valid'),
-                            'not_covered': 'no result bundle: the qualification has no repository content'}
+                            'not_covered': not_covered}
             except ns.SearchRefused as exc:
                 verdict, outbound = 'FAIL', {'refused': exc.code}
             if verdict == 'FAIL':
-                stop_conditions.append({'stop': 'a credential found in a recorded surface (the outbound search)'})
-            steps.append({'step': '(13) E-05.9\'s outbound search over the record and every answer of this run',
-                          'verdict': verdict, 'detail': outbound})
-        else:
-            steps.append({'step': '(13) E-05.9\'s outbound search over the record and every answer of this run',
-                          'verdict': 'UNKNOWN', 'skipped': 'no token was read'})
-        # an encoded copy left after the raw redaction: the details that hold it are withheld (the verdicts and the
-        # stops stay), so the record is still written
+                stop_conditions_.append({'stop': 'a credential found in a recorded surface (the outbound search)'})
+            steps_.append({'step': step, 'verdict': verdict, 'detail': outbound})
+            return verdict
+        steps_.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': 'no token was read'})
+        return 'UNKNOWN'
+
+    def withhold(out):
+        """An encoded copy left after the raw redaction: the details that hold it are withheld (the verdicts and the
+        stops stay), so the record is still written; a record that would still hold a credential is not written."""
         holders = []
         if held is not None and held.open:
             holders.append(native_token_search_module().new_search(token()))
         holders += [key_search().Search(value, prefix='') for value in (owner_values or {}).values()]
-        for entry in steps + stop_conditions:
+        for entry in out['steps'] + out['stop_conditions']:
             if any(h.holds(json.dumps(entry, sort_keys=True, default=str)) for h in holders):
                 for key in [k for k in entry if k not in ('step', 'verdict', 'stop')]:
                     entry[key] = '<withheld: it held an encoded copy of a credential>'
-                stop_conditions.append({'stop': NATIVE_STOPS['redacted'], 'withheld_from': entry.get('step') or
-                                        entry.get('stop')})
+                out['stop_conditions'].append({'stop': NATIVE_STOPS['redacted'], 'withheld_from': entry.get('step') or
+                                               entry.get('stop')})
         if any(h.holds(json.dumps(out, sort_keys=True, default=str)) for h in holders):
-            raise Refused('SECRET', 'the native-qualification record would hold a credential: not written')
-        out['result'] = custody_verdict(steps, stop_conditions)
-    finally:
+            raise Refused('SECRET', f'the {log_label} record would hold a credential: not written')
+
+    def release():
+        """The token released at the end of the run (the entry is unchanged); the run's surfaces dropped."""
         if held is not None:
-            held.drop()          # the token released at the end of the run; the entry is unchanged
+            held.drop()
         memo['surfaces'].clear()
+
+    return NativeObserver(**{k: v for k, v in locals().items() if k not in ('held', 'token_')})
+
+
+def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_values=None, owner_value_act=None,
+                             channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
+                             turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None):
+    """native-qualification (plan leaf E-05.11; PREPARED, NOT RUN) under NATIVE_QUALIFICATION_RULE, fixed before any
+    run. ``owner_act`` names the Owner's act that covers reading and delivering the native token (OA-31 (b), (f));
+    the token is read by the dispatcher's read of its one entry, held in memory, sealed into every API call and never
+    recorded (its fingerprint only). ``owner_values`` ({credential id: value}, from standard input only, under
+    ``owner_value_act``) turn on the Owner credentials' value search; without them that part is UNKNOWN.
+    ``channels(record) -> (api, facts)``, ``provider`` (the credential provider), ``forward``, ``tunnel``
+    (``NativeTunnelView``), ``host_vantage(record, state_pid)`` and ``wait(fetch, done, ceiling)`` stand in for the
+    guest, the host's stores and the clock in tests."""
+    if prompt not in NATIVE_QUALIFICATION_PROMPTS:
+        raise Refused('REFUSED', f'--prompt: one of {sorted(NATIVE_QUALIFICATION_PROMPTS)}')
+    if not NATIVE_ACT.match(str(owner_act or '')):
+        raise Refused('REFUSED', '--owner-act: the label of the Owner\'s act that covers reading and delivering the '
+                      'native token (OA-31)')
+    if (owner_values is None) != (owner_value_act is None):
+        raise Refused('REFUSED', 'the Owner credentials\' values and --owner-credential-act go together')
+    if owner_values is not None and (sorted(owner_values) != sorted(NATIVE_OWNER_CREDENTIALS) or
+                                     not NATIVE_ACT.match(str(owner_value_act))):
+        raise Refused('REFUSED', f'the Owner credentials\' values: exactly {list(NATIVE_OWNER_CREDENTIALS)}')
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    if not inference_opted(record):
+        raise Refused('REFUSED', f'{name} was not created with create --provision --inference: the provider has '
+                      'no endpoint to reach')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    obs = native_observer(ctx, name, record, NATIVE_QUALIFICATION_CONVERSATION_ID, prompt=prompt,
+                          owner_act=owner_act, owner_values=owner_values, owner_value_act=owner_value_act,
+                          channels=channels, provider=provider, forward=forward, tunnel=tunnel,
+                          host_vantage=host_vantage, wait=wait, turn_ceiling_s=turn_ceiling_s,
+                          start_wait=start_wait)
+    run = obs.run
+    interrupted = False
+    try:
+        run('(1) preconditions: the opted-in guest, the forward to the tunnel, nothing created yet',
+            obs.preconditions)
+        run('(1a) the tunnel\'s census before the create, and so before any model call; its log marked',
+            obs.census_step('before'), needs=('ready',))
+        run('(1b) the native token read from its one entry (the dispatcher\'s read), after the census',
+            obs.token_step, needs=('ready', 'census_ok'))
+        run('(2) the native qualification create, admitted and sent through the dispatcher\'s transport',
+            obs.create_step, needs=('ready', 'census_ok', 'token'))
+        run('(3) before the turn: the sets, and the provider\'s start from an empty configuration directory',
+            obs.before_step, needs=('created',))
+        run('(4) the fixed prompt sent', obs.prompt_step, needs=('created', 'before'))
+        run('(4a) the provider\'s start at its lazy start: the empty configuration directory, the environment, no '
+            '--bare', obs.start_step, needs=('sent',))
+        run('(5) containment while the turn runs: the container view, its connections, the guest-root view',
+            obs.during_step, needs=('sent',))
+        run('(6) the job contract in the qualification conversation (the native token\'s name by shape)',
+            obs.job_contract_step, needs=('sent',))
+        run('(7) the turn ends, with no interactive step', obs.turn_step, needs=('sent',))
+        run('(8) containment after the turn, the network and the sets', obs.after_step, needs=('sent', 'before'))
+        run('(9) the conversation\'s events: the delegation mechanisms (a) to (d), the mask markers',
+            obs.events_step, needs=('sent',))
+        run('(10) the tunnel\'s log of this run: every target; the guard\'s counters', obs.tunnel_log_step,
+            needs=('sent', 'log_name'))
+        run('(10a) the tunnel\'s census after the turn', obs.census_step('after'), needs=('sent',))
+        run('(11) the native token searched for in the configuration directory and the container\'s files',
+            obs.persisted_step, always=True, needs=('present',))
+        run('(11a) the model identifiers against the model record', obs.model_step, needs=('sent',))
+        run('(11b) the masking check', obs.mask_step, needs=('sent',))
+        run('(11c) the Owner\'s own credentials by name: the environments\' names and the files',
+            obs.owner_name_step, always=True, needs=('present',))
+        run('(11d) the Owner\'s own credentials by value, in memory on the host, under the Owner\'s act',
+            obs.owner_value_step, always=True, needs=('present',))
+    except BaseException:
+        interrupted = True       # an interrupt (Ctrl-C) or an unexpected error: the teardown, then the token released
+        raise
+    finally:
+        try:
+            run('(12) teardown: the conversation deleted, its container gone, no outer conversation left',
+                obs.teardown_step, always=True, needs=('create_sent',))
+            run('(12a) the tunnel\'s log of the whole run, after the teardown', obs.tunnel_whole_run_step,
+                always=True, needs=('create_sent', 'log_name', 'sent'))
+            run('(12b) the container guard\'s counters from the preconditions to the teardown',
+                obs.guard_window_step, always=True, needs=('create_sent',))
+        except BaseException:
+            interrupted = True
+            raise
+        finally:
+            if interrupted and obs.holder() is not None:
+                obs.holder().drop()
+    out = {'schema': NATIVE_QUALIFICATION_SCHEMA, 'operation': 'native-qualification', 'plan_leaf': 'E-05.11',
+           'labels': labels(obs.profile), 'profile': obs.profile['name'], 'instance': name, 'conversation': obs.cid,
+           'rule': NATIVE_QUALIFICATION_RULE, 'prompt': {'name': prompt, 'text': NATIVE_QUALIFICATION_PROMPTS[prompt]},
+           'acp_model': obs.nq.MODEL, 'owner_act': owner_act, 'owner_value_act': owner_value_act,
+           'started_at': obs.started, 'ended_at': utc_now(), 'seconds': round(time.time() - obs.t0, 1),
+           'transport_calls': obs.transport.calls, 'token_echoes': obs.memo['echoes'], 'steps': obs.steps,
+           'stop_conditions': obs.stop_conditions}
+    try:
+        out = obs.redact_record(out)
+        obs.outbound_step(out, 'no result bundle: the qualification has no repository content')
+        obs.withhold(out)
+        out['result'] = custody_verdict(out['steps'], out['stop_conditions'])
+    finally:
+        obs.release()
     out['record'] = write_record(idir, 'native-qualification', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
