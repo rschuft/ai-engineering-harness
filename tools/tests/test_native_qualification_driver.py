@@ -55,6 +55,16 @@ ORIGIN = 'api.anthropic.com:443'
 NAMES = sorted(['CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'CLAUDE_CODE_PROXY_RESOLVES_HOSTS',
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'OH_SECRET_KEY', 'PATH'])
 DNS = '2026-11-15T05:24:05+0000 guest kernel: aieh-container-guard: IN=docker0 OUT= SRC=172.17.0.2 DST=172.17.0.1 LEN=60 PROTO=UDP SPT=40001 DPT=53 LEN=40'
+# Live run 3's shapes (record run3\10-native-single.json, step (4a)): the adapter is node running the wrapper's script,
+# and the CLI is the Agent SDK's platform binary, whose path contains 'claude-agent-acp'.
+RUN3_CLI = ('/acp-node/lib/node_modules/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai/'
+            'claude-agent-sdk-linux-x64/claude')
+RUN3_ADAPTER_ARGV = ['node', '/acp-node/bin/claude-agent-acp']
+RUN3_CLI_ARGV = [RUN3_CLI, '--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json', '--model',
+                 'claude-sonnet-5', '--permission-prompt-tool', 'stdio', '--disallowedTools', 'AskUserQuestion',
+                 '--tools', 'default', '--setting-sources=user,project,local', '--permission-mode', 'default',
+                 '--allow-dangerously-skip-permissions', '--include-partial-messages',
+                 '--session-id=5e9f729d-2854-4746-8e29-ea0ef6ff25b1', '--replay-user-messages']
 NATIVE_SHAPED = {'CLAUDE_CODE_OAUTH_TOKEN': {'token': True, 'provider_key': False}}
 
 
@@ -461,6 +471,16 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(self.step(out, '4a')['verdict'], 'UNKNOWN')
         self.assertFalse(self.step(out, '4a')['detail']['seen_within_ceiling'])
 
+    def test_an_unseen_cli_after_the_turn_is_never_a_pass(self):
+        """Live run 3 (fail-open): step (11)'s re-check UNKNOWN (no CLI seen: run 3's two processes both taken for
+        adapters) makes (11) UNKNOWN, never PASS."""
+        self.guest.probe['after']['processes'] = [process(54, 'adapter', RUN3_ADAPTER_ARGV),
+                                                  process(73, 'adapter', RUN3_CLI_ARGV)]
+        out = self.run_driver()
+        step = self.step(out, 11)
+        self.assertEqual((step['verdict'], step['detail']['provider_after_the_turn']['verdict']), ('UNKNOWN', 'UNKNOWN'))
+        self.assertNotIn(guest.NATIVE_STOPS['provider-after'], self.stops(out))
+
     def test_a_cli_started_after_the_sighting_is_judged_after_the_turn(self):
         """Review K1 (S2): a CLI with --bare --mcp-config seen only in step (11)'s after-turn report is FAIL and a
         stop."""
@@ -617,6 +637,28 @@ class DriverRun(unittest.TestCase):
         out = self.run_driver()
         self.assertEqual(self.step(out, '12b')['verdict'], 'FAIL')
         self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+
+    def test_multicast_name_resolution_is_a_name_lookup(self):
+        """Live run 3: LLMNR and mDNS, IPv4 and IPv6, refused by the container guard are name lookups: designed before
+        the prompt (run 3's three 224.0.0.252:5355 lines), counted and UNKNOWN after it; other multicast is not."""
+        llmnr = DNS.replace('DST=172.17.0.1', 'DST=224.0.0.252').replace('DPT=53', 'DPT=5355')
+        snap = lambda c, log: {'container_rejects': c, 'log_count': len(log),
+                               'log_lines': [guest.guard_log_line(l) for l in log], 'egress_rejects': 0}
+        lookup = ('172.17.0.1', 53)
+        run3 = [DNS] * 16 + [llmnr] * 3
+        v, detail, stops = guest.native_guard_window(snap(1, [DNS]), snap(20, [DNS] + run3), lookup)
+        self.assertEqual((v, stops, detail['name_lookups'], detail['multicast_lookups'], detail['others']),
+                         ('PASS', [], 19, 3, []))
+        v, detail, _ = guest.native_guard_window(snap(1, [DNS]), snap(4, [DNS] + [llmnr] * 3), lookup,
+                                                 lookups_designed=False)
+        self.assertEqual((v, detail['name_lookups']), ('UNKNOWN', 3))
+        for dst, port, ok in (('224.0.0.251', 5353, True), ('ff02:0000:0000:0000:0000:0000:0001:0003', 5355, True),
+                              ('ff02::fb', 5353, True), ('224.0.0.252', 53, False), ('224.0.0.1', 5355, False),
+                              ('224.0.0.251', 5355, False)):
+            with self.subTest(dst=dst, port=port):
+                self.assertEqual(guest.native_name_lookup({'proto': 'UDP', 'dst': dst, 'dport': port}, lookup), ok)
+        self.assertFalse(guest.native_name_lookup({'proto': 'TCP', 'dst': '224.0.0.252', 'dport': 5355}, lookup))
+        self.assertFalse(guest.native_name_lookup({'proto': 'UDP', 'dst': 'not-an-address', 'dport': 5355}, lookup))
 
     def test_the_guard_window_in_isolation(self):
         snap = lambda c, log, e=0: {'container_rejects': c, 'log_count': len(log),
@@ -998,17 +1040,18 @@ class AttemptProbe(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-nqp-'))
         self.addCleanup(tg.remove_tree, self.tmp)
         proc, self.root, self.cfg = self.tmp / 'proc', self.tmp / 'root', self.tmp / 'cfg'
-        for d in (proc / '1', proc / '20', proc / '21', proc / '30', self.root / 'workspace', self.cfg / 'projects' / 'p'):
+        for d in (proc / '1', proc / '20', proc / '21', proc / '30', proc / '31', self.root / 'workspace', self.cfg / 'projects' / 'p'):
             d.mkdir(parents=True)
         (proc / 'stat').write_text('cpu 1 2 3\nbtime 1000\n')
         env = {'PATH': '/usr/bin', 'CLAUDE_CODE_OAUTH_TOKEN': TOKEN, 'HTTPS_PROXY': 'http://172.17.0.1:8090',
                'CLAUDE_CODE_PROXY_RESOLVES_HOSTS': 'tRuE', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': 'tRuE',
                'CLAUDE_CONFIG_DIR': str(self.cfg)}
         environ = b''.join(f'{k}={v}'.encode() + b'\0' for k, v in env.items())
-        for pid, argv in (('1', ['tini', '--', 'openhands-agent-server']), ('20', ['node', '/acp-node/bin/claude-agent-acp']),
-                          ('21', ['/x/claude', '--model', 'sonnet', TOKEN]), ('30', ['bash'])):
+        for pid, argv in (('1', ['tini', '--', 'openhands-agent-server']), ('20', RUN3_ADAPTER_ARGV),
+                          ('21', RUN3_CLI_ARGV + [TOKEN]), ('30', ['bash']),
+                          ('31', ['/usr/bin/git', 'init', '--bare'])):
             (proc / pid / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in argv) + b'\0')
-            (proc / pid / 'environ').write_bytes(environ if pid in ('20', '21') else b'PATH=/usr/bin\0')
+            (proc / pid / 'environ').write_bytes(environ if pid in ('20', '21', '31') else b'PATH=/usr/bin\0')
             (proc / pid / 'stat').write_text(f'{pid} (x) S ' + ' '.join(['0'] * 30))
         (self.cfg / '.claude.json').write_text('{}')
         records = [{'type': 'assistant', 'message': {'model': 'claude-sonnet-5'}},
@@ -1039,7 +1082,9 @@ class AttemptProbe(unittest.TestCase):
     def test_start(self):
         data = self.run_probe('start')
         roles = {p['pid']: p['role'] for p in data['processes']}
-        self.assertEqual(roles, {20: 'adapter', 21: 'cli'})
+        # live run 3: the CLI's path holds 'claude-agent-acp' and was taken for the adapter; the CLI is classified
+        # first, by its basename; a descendant holding the token (31) is neither
+        self.assertEqual(roles, {20: 'adapter', 21: 'cli', 31: 'descendant'})
         self.assertEqual(data['config_dirs'], [str(self.cfg)])
         self.assertIn('<token>', data['processes'][1]['argv'])
         self.assertTrue(all(p['proxy_is_endpoint'] and p['switches_declared'] for p in data['processes']))

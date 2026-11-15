@@ -16945,7 +16945,7 @@ NATIVE_QUALIFICATION_RULE = (
     'directory and every file changed since the container started, with valid positive controls, and found nowhere; '
     'no Owner credential file or host Claude configuration (' + ', '.join(NATIVE_OWNER_FILE_NAMES) + ') outside '
     'the configuration directory; the provider\'s processes after the turn judged again with the start checks (a '
-    'violation is a stop); (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
+    'violation is a stop, both not seen UNKNOWN); (11a) the CLI\'s transcript names the main model ' + NATIVE_MODEL_MAIN + ' and no '
     'model outside the record (' + ', '.join(NATIVE_MODELS_RECORDED) + '); (11b) the masking: no marker in the '
     'events but the SDK\'s own literal sentence (' + NATIVE_LITERAL_MARKER_SENTENCE + ', counted in the events), or '
     'every other marker attributed, from the unmasked transcript, to a token occurrence (a marker the transcript '
@@ -16961,7 +16961,9 @@ NATIVE_QUALIFICATION_RULE = (
     'log of the whole run, read after the teardown, judged as (10); (12b) from the preconditions, before the create, '
     'to the teardown: the egress guard\'s refusal counters (iptables and ip6tables) rising is a direct connection '
     'leaving the container (a stop); the container guard\'s new refusals are attributed from its log lines '
-    '(protocol, destination and port kept): UDP or TCP to the docker0 resolver on port 53 is the designed name-lookup '
+    '(protocol, destination and port kept): UDP or TCP to the docker0 resolver on port 53, or multicast name '
+    'resolution over UDP (LLMNR 224.0.0.252/ff02::1:3 port 5355, mDNS 224.0.0.251/ff02::fb port 5353), is the '
+    'designed name-lookup '
     'refusal (counted) before the prompt and counted and UNKNOWN from step (3) on (the provider should resolve '
     'nothing itself), any other is a stop, refusals beyond the logged lines are UNKNOWN; an unread counter is '
     'UNKNOWN; (13) E-05.9\'s outbound search over the redacted record and every '
@@ -16977,6 +16979,11 @@ NATIVE_QUALIFICATION_RULE = (
     'outside the record; a provider process after the turn outside the start conditions. ' + NATIVE_PERMISSION_NOTE +
     ' ' + NATIVE_ENCRYPTED_STATE_NOTE + ' ' + NATIVE_OFF_LINK_NOTE)
 # The start checks that hold only at the start (judged at (4a)), left out when step (11) judges the processes again.
+# The fields of a provider process the record keeps (enough to judge the start again offline).
+NATIVE_PROCESS_FIELDS = ('pid', 'role', 'exe', 'argv', 'names', 'started', 'config_dir', 'proxy_is_endpoint',
+                         'switches_declared')
+# Multicast name resolution the container guard refuses (live run 3): LLMNR and mDNS, IPv4 and IPv6.
+NATIVE_MULTICAST_LOOKUPS = (('224.0.0.252', 5355), ('224.0.0.251', 5353), ('ff02::1:3', 5355), ('ff02::fb', 5353))
 NATIVE_START_ONLY = ('nothing in it older than the provider (an empty start)',
                      'the provider is running (the adapter and the CLI)')
 NATIVE_STOPS = {
@@ -17048,8 +17055,12 @@ for d in sorted(os.listdir(PROC), key=lambda x: int(x) if x.isdigit() else 0):
         exe = None
     if spec['token_name'] not in env and not any('claude-agent-acp' in a for a in argv[:3]):
         continue
-    role = 'adapter' if any('claude-agent-acp' in a for a in argv[:3]) else \
-        'cli' if (exe or '').endswith('/claude') or (argv[:1] and argv[0].endswith('/claude')) else 'descendant'
+    # live run 3: the CLI first, by its basename (its path, .../claude-agent-acp/node_modules/.../claude, contains
+    # claude-agent-acp); the adapter is node running the claude-agent-acp script; anything else is a descendant
+    base = lambda s: str(s or '').rsplit('/', 1)[-1]
+    role = 'cli' if base(exe) == 'claude' or (argv[:1] and base(argv[0]) == 'claude') else \
+        'adapter' if len(argv) > 1 and base(argv[0]) == 'node' and argv[1].endswith('/claude-agent-acp') else \
+        'descendant'
     if token is None and env.get(spec['token_name']):
         token = env[spec['token_name']]
         proxy = env.get(spec['proxy_name'])
@@ -17307,8 +17318,9 @@ def native_start_verdict(data, names):
     roles = {p.get('role') for p in procs if isinstance(p, dict)}
     if not {'adapter', 'cli'} <= roles:      # review K1: both the adapter and the CLI, else UNKNOWN
         return 'UNKNOWN', {'checks': {'the provider is running (the adapter and the CLI)': False},
-                           'processes': [{k: p.get(k) for k in ('pid', 'role', 'exe', 'argv', 'names')} for p in procs],
-                           'config_dirs': data.get('config_dirs'), 'config_exists': data.get('config_exists')}
+                           'processes': [{k: p.get(k) for k in NATIVE_PROCESS_FIELDS} for p in procs],
+                           'config_dirs': data.get('config_dirs'), 'config_exists': data.get('config_exists'),
+                           'config_listing': (data.get('config_listing') or [])[:50]}
     starts = [p.get('started') for p in procs if isinstance(p.get('started'), (int, float))]
     first = min(starts) if starts else None
     listing = data.get('config_listing') if isinstance(data.get('config_listing'), list) else []
@@ -17336,7 +17348,7 @@ def native_start_verdict(data, names):
     }
     detail = {'checks': checks, 'config_dir': dirs, 'entries': len(listing), 'older_than_the_provider': older[:20],
               'forbidden_names': forbidden, 'forbidden_flags': flags,
-              'processes': [{k: p.get(k) for k in ('pid', 'role', 'exe', 'argv', 'names')} for p in procs]}
+              'processes': [{k: p.get(k) for k in NATIVE_PROCESS_FIELDS} for p in procs]}
     return ('PASS' if all(checks.values()) else 'FAIL'), detail
 
 
@@ -17438,6 +17450,20 @@ def native_guard_snapshot(report):
             'egress_rejects': native_egress_rejects(report)}
 
 
+def native_name_lookup(line, resolver):
+    """Whether a container-guard log line (guard_log_line) is a name lookup: UDP or TCP to RESOLVER (the docker0
+    resolver, port 53), or multicast name resolution over UDP (NATIVE_MULTICAST_LOOKUPS: LLMNR and mDNS, IPv4 and
+    IPv6; live run 3)."""
+    proto, dst, dport = line.get('proto'), line.get('dst'), line.get('dport')
+    if proto in ('UDP', 'TCP') and (dst, dport) == tuple(resolver):
+        return True
+    try:
+        dst = ipaddress.ip_address(str(dst)).compressed
+    except ValueError:
+        return False
+    return proto == 'UDP' and (dst, dport) in NATIVE_MULTICAST_LOOKUPS
+
+
 def native_guard_window(start, end, name_lookup, lookups_designed=True):
     """(verdict, detail, stops) of the guards between two snapshots (live run 2; the engineering manager's rulings
     superseding B1/R1): the egress guard's refusals rising is a direct connection leaving the container (FAIL and the
@@ -17471,11 +17497,12 @@ def native_guard_window(start, end, name_lookup, lookups_designed=True):
     else:
         logged = max(counts[1] - counts[0], 0)
         new = lines[-logged:] if 0 < logged <= len(lines) else (lines if logged else [])
-    lookups = [l for l in new if l.get('proto') in ('UDP', 'TCP') and l.get('dst') == name_lookup[0]
-               and l.get('dport') == name_lookup[1]]
+    lookups = [l for l in new if native_name_lookup(l, name_lookup)]
     others = [l for l in new if l not in lookups]
     unattributed = max(rise - len(new), 0) if isinstance(rise, int) else None
-    detail.update(container_rise=rise, name_lookups=len(lookups), others=others[:50], unattributed=unattributed)
+    detail.update(container_rise=rise, name_lookups=len(lookups),
+                  multicast_lookups=sum(1 for l in lookups if l.get('dport') != name_lookup[1]),
+                  others=others[:50], unattributed=unattributed)
     if others:
         stops.append('guest')
     if unattributed:
@@ -18041,13 +18068,16 @@ def native_qualification_run(ctx, name, prompt, owner_act, out_path=None, owner_
             return 'FAIL', dict(detail, reason='the container holds another token than the one delivered')
         # review K1: the provider's processes after the turn, judged again with the start checks (a CLI started after
         # (4a)'s sighting is seen here); a violation is a stop
-        _, after = native_start_verdict(data, cs.NATIVE_NAMES)
+        after_verdict, after = native_start_verdict(data, cs.NATIVE_NAMES)
         violated = sorted(k for k, ok in (after.get('checks') or {}).items() if not ok and k not in NATIVE_START_ONLY)
         detail['provider_after_the_turn'] = {k: after.get(k) for k in ('checks', 'forbidden_names', 'forbidden_flags',
                                                                        'processes')}
+        detail['provider_after_the_turn']['verdict'] = after_verdict
         if violated:
             stop(NATIVE_STOPS['provider-after'], checks=violated)
             return 'FAIL', detail
+        if after_verdict == 'UNKNOWN':      # live run 3: an unread re-check is never a PASS
+            return 'UNKNOWN', dict(detail, reason='the provider\'s processes after the turn were not both seen')
         if search.get('verdict') == 'not-found' and (search.get('controls') or {}).get('valid') is True and \
                 data.get('token_fingerprint') == held.fingerprint:
             return 'PASS', detail

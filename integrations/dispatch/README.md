@@ -1005,7 +1005,9 @@ before the provider existed; its record kept only the sum. Name lookups refused 
 nothing itself with `CLAUDE_CODE_PROXY_RESOLVES_HOSTS`; start-up lookups before the prompt stay designed and counted
 (delta review F1-b). **Disclosed (F1-a):** a direct attempt to an off-link address is answered by the guest's own
 routing (no route) before the FORWARD chain, so neither guard counts it; nothing leaves the guest, by topology; the
-seed is unchanged.
+seed is unchanged. Multicast name resolution the container guard refuses (LLMNR to `224.0.0.252` or `ff02::1:3` port
+5355, mDNS to `224.0.0.251` or `ff02::fb` port 5353, UDP) is a name lookup like the resolver's port 53 (live run 3: three
+LLMNR refusals during the container's start-up).
 
 **The provider's lazy start** (live run 2): at the pins the ACP server starts on the first prompt (openhands-sdk 1.60.1
 `LocalConversation._ensure_agent_ready`, "one-time lazy initialization on the first send_message() or run() call"), so
@@ -1013,7 +1015,10 @@ step (3) records the sets and the guards before the prompt and step (4a) judges 
 adapter and the CLI run (bounded by `NATIVE_START_CEILING_S`; an adapter alone is UNKNOWN, delta review K1). Step
 (11) judges the provider's processes after the turn again with the same checks (no forbidden flag, `HTTPS_PROXY`, the
 switches, the four names, no second authentication method or `CLAUDE_CODE_SIMPLE`, the configuration directory): a
-CLI started after (4a)'s sighting is judged there, and a violation is a stop.
+CLI started after (4a)'s sighting is judged there, and a violation is a stop; a re-check that does not see both the
+adapter and the CLI leaves (11) UNKNOWN, never PASS (live run 3). The roles (live run 3): the CLI is the process whose
+executable or `argv[0]` basename is `claude` (the Agent SDK's platform binary, whose path contains `claude-agent-acp`);
+the adapter is `node` running the `claude-agent-acp` script; any other process holding the token is a descendant.
 
 **Literal markers** (live run 2; delta review N-2): the SDK's own `<CUSTOM_SECRETS>` text says "You will see
 `<secret-hidden>` instead of the actual secret value in the output." (openhands-sdk 1.60.1,
@@ -1025,6 +1030,10 @@ UNKNOWN.
   removes it.
 - N-d: a create still starting when its presence is read after a lost answer may appear after a 404 DELETE;
   destroying the disposable guest removes it.
+- N-1: a timing skew between the facts reporter's counter read and its journal read can move one refusal across the
+  (10) window; (12b) spans from before the create and catches it.
+- N-3: an interrupt during the teardown's DELETE itself leaves the conversation; destroying the disposable guest
+  removes it.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
