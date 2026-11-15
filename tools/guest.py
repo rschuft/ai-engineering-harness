@@ -10977,6 +10977,19 @@ print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
 # file up to the size bound: each 43-character token is fingerprinted (aieh v1) and each
 # 40-hex token hashed (Gitea's sha256 prefix); file names are matched against the credential
 # file pattern. Control: the conversation's own session key is found in /proc/1/environ.
+JOB_SEARCHED_OUTER = 'outer (aieh v1)'
+JOB_SEARCHED_GITEA = 'gitea (sha256 prefix)'          # the labels searched (containment-probe's extract reads them)
+JOB_SEARCHED_GITEA_FINGERPRINTS = 'gitea fingerprints by label'
+
+
+def job_token_searched(outer, gitea):
+    """What job-access-probe's credentials step records it searched: the outer secrets' names, the Gitea token labels
+    and, since E-01.3.3's live run (2026-11-15: the custody probe could not tell from the labels alone which tokens
+    were searched), each label's fingerprint ({label: sha256:<16 hex>}; fingerprints only, never a value)."""
+    return {JOB_SEARCHED_OUTER: sorted(outer), JOB_SEARCHED_GITEA: sorted(gitea),
+            JOB_SEARCHED_GITEA_FINGERPRINTS: {label: gitea[label] for label in sorted(gitea)}}
+
+
 JOB_TOKEN_SCAN = r'''import base64, hashlib, json, os, re, stat, sys, time
 spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 aieh, gitea = set(spec['aieh']), set(spec['gitea'])
@@ -12288,8 +12301,7 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                 bool(data.get('control_found')) and data.get('files', 0) > 0
             ok_all = ok_all and good
             out[cid] = dict(data, hits=hits, ok=good)
-        return ok_all, {'searched': {'outer (aieh v1)': sorted(outer),
-                                     'gitea (sha256 prefix)': sorted(gitea)},
+        return ok_all, {'searched': job_token_searched(outer, gitea),
                         'size_bound_bytes': JOB_SCAN_MAX_BYTES, 'containers': out}
 
     def controls_step():
@@ -16056,21 +16068,40 @@ JOB_CREDENTIALS_STEP = 'credentials by name and fingerprint inside each job'
 
 def custody_container_verdict(job_record, token_fingerprints):
     """Step 3 from job-access-probe's record: its verdict, and its credentials step searched the two outer key
-    fingerprints and exactly the given bot token fingerprints, with no hit and no credential file in either
-    container."""
+    fingerprints and exactly step (5)'s delivered bot token fingerprints ``token_fingerprints`` ({role:
+    fingerprint}, the roles exactly builder and reviewer, the searched labels the same), with no hit and no
+    credential file in either container. A record that does not state the fingerprints it searched (one made before
+    E-01.3.3's live run of 2026-11-15) cannot show that: UNKNOWN, its ``incomplete`` saying why."""
     steps = [s for s in (job_record or {}).get('steps') or [] if s.get('step') == JOB_CREDENTIALS_STEP]
     if len(steps) != 1 or not isinstance(steps[0].get('detail'), dict) or 'ok' not in steps[0]:
         return 'UNKNOWN', {'reason': 'job-access-probe gave no credentials step'}
     detail = steps[0]['detail']
-    searched = detail.get('searched') or {}
+    searched = detail.get('searched') if isinstance(detail.get('searched'), dict) else {}
     containers = detail.get('containers') if isinstance(detail.get('containers'), dict) else {}
     hits = {cid: (c or {}).get('hits') for cid, c in containers.items() if (c or {}).get('hits')}
     files = {cid: (c or {}).get('credential_files') for cid, c in containers.items()
              if (c or {}).get('credential_files')}
+    delivered = dict(token_fingerprints) if isinstance(token_fingerprints, dict) else {}
+    labels = searched.get(JOB_SEARCHED_GITEA) if isinstance(searched.get(JOB_SEARCHED_GITEA), list) else []
+    by_label = searched.get(JOB_SEARCHED_GITEA_FINGERPRINTS)
+    incomplete = []
+    if len(searched.get(JOB_SEARCHED_OUTER) or []) != 2:
+        incomplete.append('the two outer secrets were not both searched')
+    if sorted(delivered) != sorted(role for role, _ in STAGE_BOTS.values()):
+        incomplete.append(f'step (5) delivered fingerprints for {sorted(delivered)}, not exactly builder and reviewer')
+    if sorted(map(str, labels)) != sorted(delivered):
+        incomplete.append(f'the Gitea labels searched are {sorted(map(str, labels))}, not {sorted(delivered)}')
+    if not isinstance(by_label, dict):
+        incomplete.append('the record does not state the Gitea fingerprints it searched (no '
+                          f'"{JOB_SEARCHED_GITEA_FINGERPRINTS}": a job-access-probe record made before E-01.3.3\'s '
+                          'live run)')
+    elif by_label != delivered:
+        incomplete.append("the Gitea fingerprints searched are not exactly step (5)'s delivered ones")
+    if len(containers) != 2:
+        incomplete.append(f'{len(containers)} containers searched, not 2')
     out = {'job_access_probe': (job_record or {}).get('result'), 'searched': searched, 'hits': hits,
-           'credential_files': files, 'containers': len(containers)}
-    complete = len(searched.get('outer (aieh v1)') or []) == 2 and \
-        sorted(searched.get('gitea (sha256 prefix)') or []) == sorted(token_fingerprints) and len(containers) == 2
+           'credential_files': files, 'containers': len(containers), 'incomplete': incomplete}
+    complete = not incomplete
     if hits or files:
         return 'FAIL', out
     if not complete or steps[0].get('ok') is not True:
@@ -16208,7 +16239,7 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
         fps = memo.get('fingerprints') or {}
         if sorted(fps) != ['builder', 'reviewer']:
             return 'UNKNOWN', {'reason': 'the bot token fingerprints of step 5 are missing'}
-        return custody_container_verdict(job_access_fn(fps), sorted(fps.values()))
+        return custody_container_verdict(job_access_fn(fps), dict(fps))
 
     def credential_step():
         routes, problems = load_routes(ctx)

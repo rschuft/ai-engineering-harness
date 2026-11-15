@@ -120,10 +120,12 @@ def inspect_record(**changes):
 
 
 def job_record(hits=None, result='PASS', gitea=None, ok=True):
+    """job-access-probe's record as its credentials step makes it: ``searched`` is built by the real step's own
+    function (guest.job_token_searched; ContractWithTheRealProbe ties it to a real run) from ``gitea``, the
+    {label: fingerprint} the probe was given (step (5)'s fingerprints by default)."""
     containers = {c: {'hits': (hits or {}).get(c, []), 'credential_files': [], 'ok': ok} for c in ('c1', 'c2')}
     return {'result': result, 'steps': [{'step': guest.JOB_CREDENTIALS_STEP, 'ok': ok, 'detail': {
-        'searched': {'outer (aieh v1)': ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0'],
-                     'gitea (sha256 prefix)': sorted(gitea if gitea is not None else FP.values())},
+        'searched': guest.job_token_searched(tg.OUTER_FP, dict(FP) if gitea is None else gitea),
         'containers': containers}}]}
 
 
@@ -201,7 +203,7 @@ class ProbeRun(unittest.TestCase):
 
         def job_access(fps):
             self.job_calls.append(fps)
-            return job if job is not None else job_record(gitea=sorted(fps.values()))
+            return job if job is not None else job_record(gitea=dict(fps))
         with mock.patch.object(guest, 'running_instance', side_effect=lambda c, n: (None, next(records))),                 mock.patch.object(guest, 'runtime_credential_spec', trimmed), \
                 mock.patch.object(guest, 'write_record', side_effect=lambda i, op, out: written.update({op: out})):
             out = guest.custody_probe(
@@ -331,12 +333,42 @@ class ProbeRun(unittest.TestCase):
     def test_a_fingerprint_hit_or_an_incomplete_search_in_a_container(self):
         out = self.run_probe(job=job_record(hits={'c2': [['/proc/1/environ', 'gitea:builder']]}))
         self.assertEqual((self.verdicts(out)[3], out['result']), ('FAIL', 'FAIL'))
-        out = self.run_probe(job=job_record(gitea=['sha256:' + '9' * 16]))
+        out = self.run_probe(job=job_record(gitea={'builder': FP['builder'], 'reviewer': 'sha256:' + '9' * 16}))
         self.assertEqual(self.verdicts(out)[3], 'UNKNOWN')
         out = self.run_probe(job=job_record(result='FAIL'))
         self.assertEqual(self.verdicts(out)[3], 'FAIL')
         out = self.run_probe(attempts=deliveries(fingerprints={'builder': FP['builder']}))
         self.assertEqual(self.verdicts(out)[3], 'UNKNOWN')
+
+    def test_step_three_needs_exactly_the_delivered_fingerprints_searched(self):
+        """E-01.3.3's live run (2026-11-15): job-access-probe recorded the searched Gitea LABELS only, and the step
+        compared them with the delivered fingerprints, so a clean run read UNKNOWN. Now the record states each
+        label's fingerprint and step (3) requires the labels exactly builder and reviewer and the fingerprints
+        exactly step (5)'s; a record without them (the live run's shape) is UNKNOWN with the reason, never PASS."""
+        self.assertEqual(guest.custody_container_verdict(job_record(), dict(FP))[0], 'PASS')
+        old = job_record()
+        del old['steps'][0]['detail']['searched'][guest.JOB_SEARCHED_GITEA_FINGERPRINTS]  # the live run's shape
+        verdict, detail = guest.custody_container_verdict(old, dict(FP))
+        self.assertEqual(verdict, 'UNKNOWN')
+        self.assertTrue(any('does not state the Gitea fingerprints' in r for r in detail['incomplete']), detail)
+        swapped = {'builder': FP['reviewer'], 'reviewer': FP['builder']}
+        for name, record, delivered in (
+                ('the fingerprints swapped between the roles', job_record(gitea=swapped), dict(FP)),
+                ('another reviewer fingerprint', job_record(gitea=dict(FP, reviewer='sha256:' + '9' * 16)), dict(FP)),
+                ('a third label searched', job_record(gitea=dict(FP, planner='sha256:' + '3' * 16)), dict(FP)),
+                ('one label searched', job_record(gitea={'builder': FP['builder']}), dict(FP)),
+                ('one role delivered', job_record(gitea={'builder': FP['builder']}), {'builder': FP['builder']}),
+                ('other role names', job_record(gitea={'implement': FP['builder'], 'review': FP['reviewer']}),
+                 {'implement': FP['builder'], 'review': FP['reviewer']}),
+                ('the delivered fingerprints as a list (the old call)', job_record(), sorted(FP.values()))):
+            with self.subTest(name):
+                verdict, detail = guest.custody_container_verdict(record, delivered)
+                self.assertEqual(verdict, 'UNKNOWN', detail)
+                self.assertTrue(detail['incomplete'])
+        # the probe passes step (5)'s fingerprints by role; the live run's shape makes the run UNKNOWN, not PASS
+        out = self.run_probe(job=old)
+        self.assertEqual((self.verdicts(out), out['result']), (['PASS', 'PASS', 'PASS', 'UNKNOWN', 'PASS'], 'UNKNOWN'))
+        self.assertEqual(self.job_calls, [FP])
 
     def test_deliveries_must_be_exactly_the_mapped_bots_with_fingerprints_only(self):
         wrong = deliveries()
@@ -387,6 +419,39 @@ class ProbeRun(unittest.TestCase):
         self.assertIsNone(guest.runtime_credential_of([CREDENTIAL]))
         self.assertEqual(guest.runtime_credential_of({'session_api_key': CREDENTIAL}), CREDENTIAL)
         self.assertIsNone(guest.inner_endpoint(PROFILE, {'containers': []}, CID))
+
+
+class ContractWithTheRealProbe(tg.TempState):
+    """The fakes above record what the real job-access-probe records: the real probe (test_guest's FakeJobGuest as
+    the guest; no guest, no ssh) is given step (5)'s two fingerprints as the custody probe gives them, and its
+    record is judged by step (3)'s verdict and compared with job_record's. Exposed by E-01.3.3's live run: the fakes
+    then recorded fingerprints where the real step recorded labels."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'job'
+        self.idir.mkdir(parents=True)
+        record = {'provisioning': {'image_id': tg.IMAGE_ID, 'local_tag': tg.LOCAL_TAG, 'egress_falsification': True},
+                  'ports': {'ssh': 40001, 'qmp': 40002}}
+        patcher = mock.patch.object(tg.guest, 'running_instance', lambda ctx, name: (self.idir, record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_real_record_is_what_step_three_reads(self):
+        fake = tg.FakeJobGuest()
+        real = tg.guest.job_access_probe(self.ctx(), 'job', channels=lambda rec: (fake.api, fake.facts),
+                                         ssh_fn=lambda rec: fake,
+                                         token_fingerprints=[f'{role}={fp}' for role, fp in sorted(FP.items())])
+        self.assertEqual(real['result'], 'PASS', json.dumps(real['steps'], default=str)[:2000])
+        self.assertEqual(sorted(fake.scan_specs[0]['gitea']), sorted(FP.values()))   # what it searched for
+        step, = [s for s in real['steps'] if s['step'] == guest.JOB_CREDENTIALS_STEP]
+        self.assertEqual(step['detail']['searched'], job_record()['steps'][0]['detail']['searched'])
+        self.assertEqual(step['detail']['searched'][guest.JOB_SEARCHED_GITEA_FINGERPRINTS], FP)
+        self.assertEqual(step['detail']['searched'][guest.JOB_SEARCHED_GITEA], ['builder', 'reviewer'])
+        verdict, detail = guest.custody_container_verdict(real, dict(FP))
+        self.assertEqual((verdict, detail['incomplete']), ('PASS', []))
+        # the containment probe's extract still reads the labels from the same field
+        self.assertEqual(tg.guest.JOB_SEARCHED_GITEA, 'gitea (sha256 prefix)')
 
 
 if __name__ == '__main__':
