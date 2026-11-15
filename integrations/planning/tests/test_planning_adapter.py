@@ -622,5 +622,85 @@ class RecordedCapture(RepoCase):
                          (False, [], 'ready'))
 
 
+OUTCOME_ID = '6a1f0e2d-3c4b-4a59-8d7e-0f1e2d3c4b5a'
+
+
+class OutcomeReference(RepoCase):
+    """A planned task names the outcome it serves (decision 0008 point 4; E-05.1): one more --ref after its
+    pointers, in the lineage objective reference's grammar, which the dispatch resolver reads."""
+
+    def plan_with(self, outcome, index=1):
+        plan = json.loads(json.dumps(self.plan))
+        plan['tasks'][index]['outcome'] = outcome
+        return plan
+
+    def test_the_outcome_grammar_is_the_lineage_objective_references(self):
+        lineage = load_lineage()
+        self.assertEqual(adapter.UUID, lineage.UUID)
+        texts = [f'outcome:{OUTCOME_ID}', f'outcome:{OUTCOME_ID}@{"a" * 40}', f'outcome:{OUTCOME_ID}@{"b" * 64}',
+                 f'outcome:{OUTCOME_ID.upper()}', f'outcome:{OUTCOME_ID}@{"a" * 39}', f'outcome:{OUTCOME_ID}@main',
+                 f'outcome:{OUTCOME_ID}\n', f'outcome: {OUTCOME_ID}', OUTCOME_ID, 'outcome:O1',
+                 f'outcome:{OUTCOME_ID}@{"A" * 40}']
+        for text in texts:
+            with self.subTest(text=text):
+                try:
+                    lineage.parse(text)
+                    parsed = isinstance(lineage.parse(text), lineage.ObjectiveRef)
+                except lineage.MalformedReference:
+                    parsed = False
+                self.assertEqual(bool(adapter.OUTCOME_REF_RE.fullmatch(text)), parsed)
+
+    def test_a_malformed_outcome_is_refused_before_anything_runs(self):
+        for outcome in ('', OUTCOME_ID, f'outcome:{OUTCOME_ID.upper()}', f'outcome:{OUTCOME_ID}\n',
+                        [f'outcome:{OUTCOME_ID}'], 7, f'outcome:{OUTCOME_ID}@abc'):
+            with self.subTest(outcome=outcome):
+                self.expect('OUTCOME_REF_INVALID', adapter.load_plan, self.plan_with(outcome))
+        self.assertEqual(self.backlog_argv(), [])
+
+    def test_the_outcome_is_the_tasks_last_reference(self):
+        outcome = f'outcome:{OUTCOME_ID}@{self.commit}'
+        result = adapter.create_tasks(self.git, self.backlog(), self.plan_with(outcome), self.commit)
+        first, second = result['tasks']
+        self.assertNotIn(outcome, first['references'])
+        self.assertEqual(second['references'][-1], outcome)
+        self.assertEqual([adapter.Pointer.parse(p).artifact for p in second['references'][:-1]],
+                         self.plan['tasks'][1]['artifacts'])
+        state = json.loads((self.repo / '.fake-backlog.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['tasks'][1]['references'], second['references'])
+        creates = [c for c in self.backlog_argv() if c[:2] == ['task', 'create']]
+        self.assertIn(f'--ref={outcome}', creates[1])
+        # Re-resolution reads the pointers only; the outcome is the lineage resolver's (and the dispatcher's).
+        report = adapter.resolve_tasks(self.git, self.backlog())
+        self.assertEqual([p['pointer'] for p in report[1]['pointers']], second['references'][:-1])
+        self.assertTrue(all(p['resolved'] for p in report[1]['pointers']))
+        # An unpinned reference is carried as given.
+        self.assertEqual(adapter.load_plan(self.plan_with(f'outcome:{OUTCOME_ID}'))['tasks'][1]['outcome'],
+                         f'outcome:{OUTCOME_ID}')
+
+    def test_a_pinned_outcome_names_a_commit_of_the_project(self):
+        self.expect('OUTCOME_REVISION_MISSING', adapter.create_tasks, self.git, self.backlog(),
+                    self.plan_with(f'outcome:{OUTCOME_ID}@{"1" * 40}'), self.commit)
+        self.assertFalse([c for c in self.backlog_argv() if c[:2] == ['task', 'create']])
+
+    def test_a_duplicate_compares_the_outcome_too(self):
+        outcome = f'outcome:{OUTCOME_ID}@{self.commit}'
+        adapter.create_tasks(self.git, self.backlog(), self.plan_with(outcome), self.commit)
+        self.expect('BACKLOG_DUPLICATE', adapter.create_tasks, self.git, self.backlog(), self.plan_with(outcome),
+                    self.commit)
+
+
+def load_lineage():
+    """integrations/lineage/lineage.py, loaded by path once; it loads this adapter by its module name
+    (planning_adapter), the one these tests imported."""
+    import importlib.util
+    module = sys.modules.get('lineage')
+    if module is None:
+        spec = importlib.util.spec_from_file_location('lineage', HERE.parents[1] / 'lineage' / 'lineage.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['lineage'] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -7375,5 +7375,170 @@ class HostPortRows(unittest.TestCase):
         with mock.patch.object(census, 'read_tables', side_effect=census.TablesUnavailable('no tables')):
             self.assertEqual(guest.host_port_rows(443), {'unavailable': 'no tables'})
 
+
+class FakeRepositoryTestsGuest(FakeAdmissionGuest):
+    """FakeAdmissionGuest whose conversation container runs repository_tests_command: it unpacks the content from
+    the command's text (as the container's python does) and answers as unittest does. ``faults``: tests_fail,
+    unpack_fails, refuse_create, leftover (a conversation already exists)."""
+
+    def __init__(self, **faults):
+        super().__init__(**faults)
+        self.unpacked = None
+        if faults.get('leftover'):
+            self.conversations['00000000-0000-4000-8000-0000000000aa'] = ('172.17.0.9', '32777')
+
+    def container_output(self, cid, command):
+        payload = command.split("printf %s '", 1)[1].split("'", 1)[0]
+        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload)), mode='r:gz') as tar:
+            self.unpacked = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
+        marker = guest.REPOSITORY_TESTS_MARKER
+        if self.faults.get('unpack_fails'):
+            return f'tarfile.ReadError: bad\n{marker}rc=1\n'
+        if self.faults.get('tests_fail'):
+            return (f'{marker}unpacked\nF\n' + '-' * 70 + '\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n'
+                    f'{marker}rc=1\n')
+        return f'{marker}unpacked\n.\n' + '-' * 70 + f'\nRan 1 test in 0.000s\n\nOK\n{marker}rc=0\n'
+
+    def api(self, requests):
+        if self.faults.get('refuse_create'):
+            for req in requests:
+                if req['method'] == 'POST' and req['path'] == '/api/conversations':
+                    return {'responses': [{'method': 'POST', 'path': req['path'], 'status': 422,
+                                           'body': {'detail': 'refused'}, 'seconds': 0.0}],
+                            'session_key_occurrences': 0}
+        return super().api(requests)
+
+
+class RepositoryTests(TempState):
+    """repository_tests (E-05.1) against FakeRepositoryTestsGuest: an authorized repository's branch (OA-22 (i)),
+    its content sent in the command's text, the tests' verdict, the one conversation deleted; the refusals before
+    anything reaches the guest. No guest."""
+    category = 'integration'
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'rt'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG}, 'ports': {'ssh': 40001}}
+        patcher = mock.patch.object(guest, 'running_instance', lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.repo = self.make_repo('aieh-d1-demo', 'https://gitea.example.invalid/demo/aieh-d1-demo.git')
+
+    def make_repo(self, directory, origin):
+        """A bare repository at DIRECTORY with one commit on main (pkg/__init__.py, tests/test_pkg.py) and ORIGIN as
+        its origin, written with Dulwich's object API (no git launched; decision 0014)."""
+        d = guest.repository_access.dulwich_modules()
+        objects, path = d.objects, self.tmp / directory
+        repo = d.repo.Repo.init_bare(str(path), mkdir=True, config=d.config.StackedConfig([]), default_branch=b'main')
+
+        def add(obj):
+            repo.object_store.add_object(obj)
+            return obj.id
+
+        def tree(entries):
+            made = objects.Tree()
+            for name, (mode, oid) in sorted(entries.items()):
+                made.add(name.encode(), mode, oid)
+            return add(made)
+        package = tree({'__init__.py': (0o100644, add(objects.Blob.from_string(b'VERSION = 1\r\n')))})
+        tests = tree({'test_pkg.py': (0o100644, add(objects.Blob.from_string(b'import unittest\n')))})
+        commit = objects.Commit()
+        commit.tree = tree({'pkg': (0o040000, package), 'tests': (0o040000, tests)})
+        commit.parents = []
+        commit.author = commit.committer = b'fixture <fixture@example.invalid>'
+        commit.author_time = commit.commit_time = 1762992000
+        commit.author_timezone = commit.commit_timezone = 0
+        commit.message = b'fixture\n'
+        add(commit)
+        repo.refs[b'refs/heads/main'] = commit.id
+        repo.refs.set_symbolic_ref(b'HEAD', b'refs/heads/main')
+        if origin:
+            config = repo.get_config()
+            config.set((b'remote', b'origin'), b'url', origin.encode('utf-8'))
+            config.write_to_path()
+        repo.close()
+        self.commit = commit.id.decode('ascii')
+        return path
+
+    def run_tests(self, repo=None, ref='main', **faults):
+        fake = FakeRepositoryTestsGuest(**faults)
+        out = guest.repository_tests(self.ctx(), 'rt', repo or self.repo, ref,
+                                     channels=lambda rec: (fake.api, fake.facts))
+        return out, fake
+
+    def test_the_tests_pass_in_one_disposable_conversation(self):
+        out, fake = self.run_tests()
+        self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
+        self.assertEqual([s['step'] for s in out['steps']],
+                         ['no conversation before the run', 'create one disposable conversation',
+                          'the tests, offline, in its container', 'delete the conversation'])
+        self.assertEqual(fake.conversations, {})
+        self.assertEqual(fake.unpacked, {'pkg/__init__.py': b'VERSION = 1\r\n',
+                                         'tests/test_pkg.py': b'import unittest\n'})
+        content = out['content']
+        self.assertEqual((content['repository'], content['authorized_by'], content['ref'], content['commit'],
+                          content['files']), ('aieh-d1-demo', 'OA-22 (i)', 'refs/heads/main', self.commit, 2))
+        tests = out['steps'][2]['detail']
+        self.assertEqual((tests['unpacked'], tests['exit_status'], tests['ran'], tests['verdict']),
+                         (True, 0, 'Ran 1 test in 0.000s', 'OK'))
+        self.assertEqual(tests['command'], 'python -m unittest discover -s tests')
+        creates = [c for c in fake.calls if c == ('POST', '/api/conversations')]
+        self.assertEqual(len(creates), 1)
+        self.assertTrue(Path(out['record']).is_file())
+
+    def test_failing_tests_fail_and_the_conversation_is_deleted(self):
+        for fault in ('tests_fail', 'unpack_fails'):
+            with self.subTest(fault=fault):
+                out, fake = self.run_tests(**{fault: True})
+                self.assertEqual(out['failed_steps'], ['the tests, offline, in its container'])
+                self.assertTrue(out['steps'][3]['ok'])
+                self.assertEqual(fake.conversations, {})
+        out, _ = self.run_tests(unpack_fails=True)
+        self.assertEqual((out['steps'][2]['detail']['unpacked'], out['steps'][2]['detail']['exit_status']),
+                         (False, 1))
+
+    def test_a_refused_create_and_a_leftover_conversation(self):
+        out, fake = self.run_tests(refuse_create=True)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['stop_conditions'][0]['condition'], 'create returned non-2xx (a refusal)')
+        self.assertIsNone(fake.unpacked)
+        out, fake = self.run_tests(leftover=True)
+        self.assertEqual(out['failed_steps'], ['no conversation before the run'])
+        self.assertIsNone(fake.unpacked)
+
+    def test_refused_before_the_guest(self):
+        other = self.make_repo('other', 'https://gitea.example.invalid/demo/other-repo.git')
+        named = self.make_repo('aieh-d1-demo-not', None)
+        for repo, ref, code in ((other, 'main', 'REPOSITORY_NOT_AUTHORIZED'),
+                                (named, 'main', 'REPOSITORY_NOT_AUTHORIZED'),
+                                (self.repo, 'v-none', 'REFUSED'), (self.repo, '-x', 'REFUSED'),
+                                (REPO, 'main', 'REFUSED'), (self.tmp / 'absent', 'main', 'REPOSITORY')):
+            with self.subTest(repo=repo.name, ref=ref):
+                fake = FakeRepositoryTestsGuest()
+                with self.assertRaises(guest.Refused) as caught:
+                    guest.repository_tests(self.ctx(), 'rt', repo, ref, channels=lambda rec: (fake.api, fake.facts))
+                self.assertEqual(caught.exception.code, code, caught.exception)
+                self.assertEqual(fake.calls, [])
+        self.record = {'ports': {'ssh': 40001}}
+        with self.assertRaises(guest.Refused):
+            guest.repository_tests(self.ctx(), 'rt', self.repo, 'main')
+
+    def test_the_repository_name_is_the_acceptance_recorder_s(self):
+        recorder = module_code.load('acceptance_recorder', REPO / 'integrations' / 'owner' / 'acceptance_recorder.py')
+        for url, root in (('https://x.invalid/demo/aieh-d1-demo.git', '/w/p'),
+                          ('https://x.invalid/aieh-d1-demo/', '/w'),
+                          ('git@x.invalid:demo/aieh-d1-demo.git', '/w'), (r'D:\repos\aieh-d1-demo', '/w'),
+                          (None, '/w/aieh-d1-demo'), ('https://x.invalid/.git', '/w/aieh-d1-demo'),
+                          ('https://x.invalid/demo/other.git', '/w/aieh-d1-demo')):
+            with self.subTest(url=url, root=root):
+                self.assertEqual(guest.repository_origin_name(url, root), recorder.repository_name(url, root))
+
+    def test_the_command_unpacks_with_the_data_filter_and_reports_the_status(self):
+        command = guest.repository_tests_command(b'\x1f\x8b')
+        self.assertIn('filter="data"', command)
+        self.assertIn(guest.REPOSITORY_TESTS_COMMAND + ' 2>&1; echo "AIEH-REPOSITORY-TESTS rc=$?"', command)
+        self.assertNotIn("'", guest.REPOSITORY_TESTS_UNPACK)
+
 if __name__ == '__main__':
     unittest.main()

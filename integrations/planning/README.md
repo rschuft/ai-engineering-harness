@@ -120,10 +120,21 @@ is kept at module level or for the next operation.
   "change": "<change-id>",
   "tasks": [
     {"key": "first", "title": "...", "description": "...", "artifacts": ["design.md"]},
-    {"key": "second", "title": "...", "artifacts": ["design.md", "specs/x/spec.md"], "depends_on": ["first"]}
+    {"key": "second", "title": "...", "artifacts": ["design.md", "specs/x/spec.md"], "depends_on": ["first"],
+     "outcome": "outcome:<uuid>@<commit>"}
   ]
 }
 ```
+
+`outcome` (optional, plan leaf E-05.1) names the outcome the task serves (decision 0008
+point 4: "a change that serves an existing outcome references it (... a Backlog --ref)"): one
+`outcome:<uuid>[@<commit>]` reference in the lineage objective reference's grammar, which the
+dispatch resolver reads from the task's references (`OUTCOME_REF_ABSENT` without one). It is
+passed as one more `--ref` after the task's pointers and read back with them. A malformed one is
+refused before anything runs (`OUTCOME_REF_INVALID`), and a pinned commit that the project does
+not have before any Backlog.md command (`OUTCOME_REVISION_MISSING`). `resolve` and the readiness
+read re-resolve the `openspec:` pointers only; the outcome resolves through the lineage objective
+resolver (`task lineage:resolve`).
 
 Tasks are created in order. `depends_on` names earlier keys only, so the plan is
 acyclic by construction; the adapter passes Backlog.md the ids it created. Any

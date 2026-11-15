@@ -15,6 +15,10 @@ pointer resolves in the project's own git repository, the one that holds both
 is missing, the artifact is missing at that commit, or its bytes differ from the
 digest.
 
+A planned task may also name the outcome it serves (``outcome``: one
+``outcome:<uuid>[@<commit>]`` reference, decision 0008 point 4), which becomes one more
+``--ref`` after its pointers; a pinned commit must be a commit of the project.
+
 What the adapter never does:
 
 - write Backlog.md's markdown files (only ``backlog task create``, ``task list
@@ -115,11 +119,19 @@ POINTER_RE = re.compile(
 CHANGE_ID_RE = re.compile(rf'^{CHANGE_ID}$')
 ARTIFACT_RE = re.compile(rf'^{ARTIFACT_PATH}$')
 TASK_ID_RE = re.compile(r'^[A-Za-z]+-[0-9]+(?:\.[0-9]+)*$')
+# The outcome a task serves (decision 0008 points 3 and 4: "a change that serves an existing outcome
+# references it (... a Backlog --ref)"): outcome:<uuid>[@<commit>], the lineage objective reference's
+# grammar (integrations/lineage/lineage.py ObjectiveRef, which loads this module and so cannot be loaded
+# here; a test holds the two grammars equal). The dispatch resolver reads it from the task's references
+# (OUTCOME_REF_ABSENT without it).
+OUTCOME_PREFIX = 'outcome:'
+UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+OUTCOME_REF_RE = re.compile(rf'^outcome:(?P<outcome>{UUID})(?:@(?P<revision>{COMMIT}))?$')
 # These grammars are checked with fullmatch: Python's $ also matches before a final newline,
 # so .match would accept a task id or a pointer followed by a newline.
 
 PLAN_KEYS = {'format', 'change', 'tasks'}
-TASK_KEYS = {'key', 'title', 'description', 'artifacts', 'depends_on'}
+TASK_KEYS = {'key', 'title', 'description', 'artifacts', 'depends_on', 'outcome'}
 # Status belongs to Backlog.md alone (blueprint #authority); a plan that tries to set
 # or carry one is refused, never silently dropped.
 STATUS_KEYS = {'status', 'state', 'done', 'completed', 'complete', 'checked', 'progress'}
@@ -942,6 +954,10 @@ def load_plan(data):
                 raise PlanningError('PLAN_DEPENDENCY_UNKNOWN',
                                     f'{where} ({key}) depends on {dep!r}, which is not an earlier '
                                     'task of this plan')
+        outcome = task.get('outcome')
+        if outcome is not None and not (isinstance(outcome, str) and OUTCOME_REF_RE.fullmatch(outcome)):
+            raise PlanningError('OUTCOME_REF_INVALID', f'{where} ({key}): the outcome must be one '
+                                f'outcome:<uuid>[@<commit>] reference (decision 0008): {outcome!r}')
         seen.append(key)
     return {'change': change, 'tasks': tasks}
 
@@ -1049,27 +1065,34 @@ def create_tasks(git, backlog, plan, revision, openspec=None):
         openspec_state = check_change(git, change, commit, openspec)
         planned = []
         for task in plan['tasks']:
-            pointers = [make_pointer(git, change, artifact, commit).text for artifact in task['artifacts']]
-            planned.append((task, pointers))
+            references = [make_pointer(git, change, artifact, commit).text for artifact in task['artifacts']]
+            if task.get('outcome') is not None:
+                # A pinned outcome reference names a revision of this repository: it must be one.
+                revision = OUTCOME_REF_RE.fullmatch(task['outcome'])['revision']
+                if revision is not None and git.commit(revision) != revision:
+                    raise PlanningError('OUTCOME_REVISION_MISSING', f'{task["key"]}: the repository has no '
+                                        f'commit {revision} (the outcome reference {task["outcome"]})')
+                references.append(task['outcome'])
+            planned.append((task, references))
     existing = backlog.list_tasks()
-    for task, pointers in planned:
+    for task, references in planned:
         for other in existing:
-            if other.get('title') == task['title'] and other.get('references') == pointers:
+            if other.get('title') == task['title'] and other.get('references') == references:
                 raise PlanningError('BACKLOG_DUPLICATE', f'{other["id"]} already maps {task["key"]} '
                                     f'from {change}@{commit}', task=other['id'])
     ids, created = {}, []
     try:
-        for task, pointers in planned:
+        for task, references in planned:
             deps = [ids[key] for key in task.get('depends_on', [])]
-            new_id = backlog.create(task['title'], task.get('description', ''), pointers, deps)
+            new_id = backlog.create(task['title'], task.get('description', ''), references, deps)
             ids[task['key']] = new_id
             created.append({'key': task['key'], 'id': new_id})
             view = backlog.view(new_id)
-            if view.get('title') != task['title'] or view.get('references') != pointers \
+            if view.get('title') != task['title'] or view.get('references') != references \
                     or [d.upper() for d in view.get('dependencies') or []] != [d.upper() for d in deps]:
                 raise PlanningError('BACKLOG_MISMATCH', f'{new_id} does not carry the title, references '
                                     'and dependencies the adapter gave it')
-            created[-1].update({'title': task['title'], 'references': pointers, 'dependencies': deps})
+            created[-1].update({'title': task['title'], 'references': references, 'dependencies': deps})
     except PlanningError as exc:
         exc.details['created'] = created
         raise

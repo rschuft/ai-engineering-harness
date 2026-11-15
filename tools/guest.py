@@ -94,6 +94,10 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                reopen (same id, state, events and mounts), with --restart a guest stop and
                start and a second reopen, then delete. API calls run as agent on the guest
                loopback with the session key read from its file; no LLM, no message.
+    repository-tests  E-05.1: the tests of one authorized repository's branch (OA-22 (i): the D1
+               demo repository only), offline in the pinned conversation image: its content
+               unpacked in one disposable conversation container, python -m unittest discover
+               -s tests run there, the conversation deleted; no LLM, no message, no secret.
     admission-probe, job-access-probe  the management API admission (S-01.3.1) and the
                job environment (S-01.3.2) from inside two disposable conversation
                containers; job-access-probe also runs the predeclared egress sweep of S-01.4
@@ -151,6 +155,8 @@ never defaulted, contract sections 4 and 11):
                                           [--restart] [--openapi FILE] [--canaries DIR] [--out FILE]
     python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE --name NAME
                                           [--sensitivity] [--token-fingerprint L=sha256:H] [--out FILE]
+    python -I -B tools/guest.py repository-tests --profile PROFILE --state-dir STATE --name NAME
+                                          --repo REPO --ref BRANCH [--out FILE]
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision --drill
     python -I -B tools/guest.py drill     --profile PROFILE --state-dir STATE --name NAME
                                           --kind fail-closed|stored-state|root-scan|f2-closed
@@ -10483,6 +10489,244 @@ def admission_probe(ctx, name, out_path=None, channels=None, ssh_fn=None):
     return out
 
 
+# ---------------------------------------------------------------- repository tests (E-05.1)
+
+REPOSITORY_TESTS_SCHEMA = 'ai-engineering-harness/profiles/repository-tests-record/v1'
+# The one disposable conversation of a repository-tests run (the fixture with this id).
+REPOSITORY_TESTS_CONVERSATION_ID = 'e0510000-0000-4000-8000-00000000e051'
+# The repositories whose content may enter a disposable guest for an offline test run in the pinned image, by the
+# name their origin gives (the acceptance recorder's rule: the origin URL's basename without .git, else the work
+# tree's directory), each with the Owner's act that authorizes it: the standing guest authorization excludes
+# repository content (decision 0003; OA-22 (i), approved 2026-11-14, expires at D1's acceptance).
+REPOSITORY_TESTS_AUTHORIZED = {'aieh-d1-demo': 'OA-22 (i)'}
+REPOSITORY_TESTS_COMMAND = 'python -m unittest discover -s tests'
+REPOSITORY_TESTS_DIR = '/workspace/aieh-repository-tests'
+REPOSITORY_TESTS_MARKER = 'AIEH-REPOSITORY-TESTS '
+REPOSITORY_TESTS_MAX_BYTES = 4 << 20   # the gzipped content, before base64
+REPOSITORY_TESTS_TIMEOUT_S = 600       # a ceiling on the run inside the container, not an expected duration
+REPOSITORY_TESTS_OUTPUT_CHARS = 8000   # the tail of the run's output kept in the record
+# Unpacks the content (base64 of a gzipped tar on standard input) into DIRECTORY with tarfile's data filter: no
+# absolute path, no path outside DIRECTORY, no link out of it, no device, no special mode.
+REPOSITORY_TESTS_UNPACK = ('import base64, io, sys, tarfile; '
+                           'tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.read())), mode="r:gz")'
+                           '.extractall(sys.argv[1], filter="data")')
+
+
+def repository_origin_name(url, root):
+    """The repository's name: the basename of its origin URL without ``.git``, or, without one, the basename of its
+    work tree ROOT (integrations/owner/acceptance_recorder.py ``repository_name``; a test holds them equal)."""
+    if url:
+        name = re.split(r'[/\\:]', url.rstrip('/\\'))[-1]
+        name = name[:-len('.git')] if name.endswith('.git') else name
+        if name:
+            return name
+    return Path(root).name
+
+
+def repository_tests_content(ctx, repo, ref):
+    """The content of the branch REF of the repository REPO for a repository-tests run: (summary, gzipped tar).
+    Read in process through the repository-access module (its export: blob bytes, no end-of-line conversion), from
+    a repository the run is authorized for (REPOSITORY_TESTS_AUTHORIZED), never this checkout or the state
+    directory."""
+    import tempfile
+    ra = repository_access
+    repo = Path(repo).resolve()
+    if inside(repo, ctx.state_dir) or inside(repo, ctx.repo) or inside(ctx.repo, repo):
+        raise Refused('REFUSED', f'{repo} is this checkout, holds it, or is inside the state directory')
+    if not isinstance(ref, str) or not ref or ref.startswith('-'):
+        raise Refused('REFUSED', f'{ref!r} is not a branch name')
+    try:
+        opened = ra.open_repository(repo, config='repository', work_tree=False)
+    except ra.CannotRun as exc:
+        raise Refused('REPOSITORY', f'{repo}: not a git repository; {exc.code}: {exc.message}') from None
+    except ra.RepositoryError as exc:
+        raise Refused('REPOSITORY', f'{repo}: {exc.code}: {exc.message}') from None
+    with opened, tempfile.TemporaryDirectory(prefix='aieh-repository-tests-') as export:
+        try:
+            full = opened.full_name(ref) or ''
+        except ra.RepositoryError as exc:
+            raise Refused('REFUSED', f'{ref!r} is not a branch name ({exc.code})') from None
+        if not re.fullmatch(r'refs/heads/[^\s]+', full):
+            raise Refused('REFUSED', f'{ref!r} is not a local branch (resolved to {full!r})')
+        try:
+            origin = opened._config().get((b'remote', b'origin'), b'url')
+        except KeyError:
+            origin = None
+        origin = origin.decode('utf-8', 'replace').strip() if isinstance(origin, bytes) else origin
+        name = repository_origin_name(origin, repo)
+        if name not in REPOSITORY_TESTS_AUTHORIZED:
+            raise Refused('REPOSITORY_NOT_AUTHORIZED', f'{name!r} is not a repository whose content may enter a '
+                          f'disposable guest (authorized: {sorted(REPOSITORY_TESTS_AUTHORIZED)})')
+        try:
+            commit = opened.commit(full)
+            if commit is None:
+                raise Refused('REPOSITORY', f'{full} names no commit')
+            counts = opened.export_tree(commit, '.', export)
+        except ra.RepositoryError as exc:
+            raise Refused('REPOSITORY', f'{repo}: {exc.code}: {exc.message}') from None
+        buffer, files = io.BytesIO(), []
+        with tarfile.open(fileobj=buffer, mode='w:gz', format=tarfile.PAX_FORMAT) as tar:
+            for path in sorted(p for p in Path(export).rglob('*') if p.is_file() and not p.is_symlink()):
+                rel = path.relative_to(export).as_posix()
+                info = tar.gettarinfo(str(path), arcname=rel)
+                info.uid = info.gid = 0
+                info.uname = info.gname = ''
+                info.mtime = 0
+                info.mode = 0o755 if info.mode & 0o111 else 0o644
+                with open(path, 'rb') as handle:
+                    tar.addfile(info, handle)
+                files.append(rel)
+        data = buffer.getvalue()
+    if len(data) > REPOSITORY_TESTS_MAX_BYTES:
+        raise Refused('BOUNDS', f'the content is {len(data)} bytes gzipped; at most {REPOSITORY_TESTS_MAX_BYTES}')
+    summary = {'repository': name, 'authorized_by': REPOSITORY_TESTS_AUTHORIZED[name], 'ref': full,
+               'commit': commit, 'files': len(files), 'export': counts, 'gzip_bytes': len(data),
+               'gzip_sha256': hashlib.sha256(data).hexdigest()}
+    return summary, data
+
+
+def repository_tests_command(content):
+    """The one command run in the conversation container: unpack CONTENT (gzipped tar bytes) into a new
+    directory of its workspace, then run the repository's tests there with what the pinned image contains, offline;
+    the markers report the unpacking and the tests' exit status."""
+    payload = base64.b64encode(content).decode('ascii')
+    directory = REPOSITORY_TESTS_DIR
+    return (f"rm -rf '{directory}' && mkdir -p '{directory}' && "
+            f"printf %s '{payload}' | python -c '{REPOSITORY_TESTS_UNPACK}' '{directory}' && "
+            f"cd '{directory}' && echo '{REPOSITORY_TESTS_MARKER}unpacked' && "
+            f"PYTHONDONTWRITEBYTECODE=1 {REPOSITORY_TESTS_COMMAND} 2>&1; "
+            f"echo \"{REPOSITORY_TESTS_MARKER}rc=$?\"")
+
+
+def repository_tests(ctx, name, repo, ref, out_path=None, channels=None):
+    """repository-tests (E-05.1) on a running provisioned instance: the tests of one authorized repository's branch
+    (REPOSITORY_TESTS_AUTHORIZED; OA-22 (i)) run offline in the pinned conversation image. One disposable
+    conversation is created from the pinned fixture (no LLM, no message, no secret); in its container the content,
+    sent in the command's text, is unpacked into a new workspace directory and ``python -m unittest discover -s
+    tests`` runs there; then the conversation is deleted. PASS when the one container is the declared one (the
+    pinned image, the job shape), the content unpacked, the tests exited 0 and reported OK, and no conversation or
+    container remains. The container's network is the job environment's, unchanged (no route out of the guest:
+    the egress guard); the run itself makes no request. ``channels(record) -> (api, facts)`` stands in for the guest
+    in tests."""
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    summary, content = repository_tests_content(ctx, repo, ref)
+    profile = ctx.profile
+    body, fixture_problems, _ = _fixture(ctx)
+    body = dict(body, conversation_id=REPOSITORY_TESTS_CONVERSATION_ID, tags={'aieh': 'e-05.1-repository-tests'})
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    api, facts = (channels or default_channels)(record)
+    facts = limited_facts(facts, profile, idir)
+    t0, started = time.time(), utc_now()
+    steps, failed, stop_conditions = [], [], []
+    state = {'created': []}
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError)
+
+    def run(step, func, always=False):
+        if (failed or stop_conditions) and not always:
+            steps.append({'step': step, 'skipped': 'an earlier step failed'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except caught as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        steps.append(entry)
+        log(f'repository-tests: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return detail
+
+    def call(*requests):
+        data = api(list(requests))
+        if data.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a response carried the session key '
+                          f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        return data['responses']
+
+    def trusted_step():
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        return _status_ok(count) and count.get('body') == 0, {
+            'count': {'status': count.get('status'), 'body': count.get('body')}}
+
+    def create_step():
+        response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body, 'timeout': 600})
+        if not _status_ok(response):
+            stop_conditions.append({'condition': 'create returned non-2xx (a refusal)', 'response': response})
+            return False, {'status': response.get('status')}
+        state['created'].append(body['conversation_id'])
+        view, ok = conversation_containers_view(profile, record, facts())
+        return ok and view.get('count') == 1 and not fixture_problems, {
+            'status': response.get('status'), 'seconds': response.get('seconds'), 'containers': view,
+            'fixture_problems': fixture_problems}
+
+    def tests_step():
+        response, = call({'method': 'POST',
+                          'path': f'/api/conversations/{body["conversation_id"]}/bash/execute_bash_command',
+                          'json': {'command': repository_tests_command(content), 'cwd': '/workspace',
+                                   'timeout': REPOSITORY_TESTS_TIMEOUT_S},
+                          'timeout': REPOSITORY_TESTS_TIMEOUT_S + 60})
+        answer = response.get('body') if isinstance(response.get('body'), dict) else {}
+        if not _status_ok(response) or answer.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run: {json.dumps(response)[:400]}')
+        output = (answer.get('stdout') or '') + (answer.get('stderr') or '')
+        lines = output.splitlines()
+        unpacked = f'{REPOSITORY_TESTS_MARKER}unpacked' in lines
+        rcs = [line[len(REPOSITORY_TESTS_MARKER) + 3:] for line in lines
+               if line.startswith(REPOSITORY_TESTS_MARKER + 'rc=')]
+        rc = int(rcs[-1]) if rcs and rcs[-1].isdigit() else None
+        ran = [line for line in lines if re.fullmatch(r'Ran [0-9]+ tests? in [0-9.]+s', line)]
+        verdict = [line for line in lines if re.fullmatch(r'(OK|FAILED)( \(.*\))?', line)]
+        ok = unpacked and rc == 0 and bool(ran) and bool(verdict) and verdict[-1].startswith('OK')
+        return ok, {'command': REPOSITORY_TESTS_COMMAND, 'directory': REPOSITORY_TESTS_DIR, 'unpacked': unpacked,
+                    'exit_status': rc, 'ran': ran[-1] if ran else None, 'verdict': verdict[-1] if verdict else None,
+                    'shell_exit_code': answer.get('exit_code'),
+                    'output_tail': output[-REPOSITORY_TESTS_OUTPUT_CHARS:]}
+
+    def delete_step():
+        out = {}
+        for cid in list(state['created']):
+            response, = call({'method': 'DELETE', 'path': f'/api/conversations/{cid}', 'timeout': 300})
+            out[cid] = response.get('status')
+            if _status_ok(response):
+                state['created'].remove(cid)
+        view, ok = conversation_containers_view(profile, record, facts())
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        return not state['created'] and ok and view.get('count') == 0 and count.get('body') == 0, {
+            'delete': out, 'containers_after': view.get('count'), 'count_after': count.get('body')}
+
+    run('no conversation before the run', trusted_step)
+    run('create one disposable conversation', create_step)
+    run('the tests, offline, in its container', tests_step)
+    run('delete the conversation', delete_step, always=bool(state['created']))
+    out = {'schema': REPOSITORY_TESTS_SCHEMA, 'operation': 'repository-tests', 'labels': labels(profile),
+           'profile': profile['name'], 'instance': name, 'content': summary,
+           'conversation': body['conversation_id'], 'started_at': started, 'ended_at': utc_now(),
+           'seconds': round(time.time() - t0, 1),
+           'result': 'PASS' if not failed and not stop_conditions else 'FAIL',
+           'failed_steps': failed, 'stop_conditions': stop_conditions, 'steps': steps}
+    out['record'] = write_record(idir, 'repository-tests', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 # ---------------------------------------------------------------- job daemon and management access (S-01.3.2)
 
 JOB_PROBE_SCHEMA = 'ai-engineering-harness/profiles/job-access-probe-record/v1'
@@ -18440,7 +18684,7 @@ def main(argv=None):
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
                'job-access-probe', 'containment-probe', 'drill', 'image-inspect',
-               'inference-forward', 'acp-qualification', 'native-qualification'):
+               'inference-forward', 'acp-qualification', 'native-qualification', 'repository-tests'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -18585,6 +18829,10 @@ def main(argv=None):
             p.add_argument('--bundle-name', help='file name in the guest exchange directory')
         if op == 'exchange-pull':
             p.add_argument('--file', required=True, help='file name in the guest exchange directory')
+        if op == 'repository-tests':
+            p.add_argument('--repo', required=True, help='a clone of an authorized repository (OA-22 (i))')
+            p.add_argument('--ref', required=True, help='one local branch')
+            p.add_argument('--out', help='also write the record to this new file')
         if op == 'create':
             p.add_argument('--egress-falsification', action='store_true',
                            help='S-01.4 fix-forward, with --provision: let job-access-probe add a '
@@ -18714,6 +18962,8 @@ def main(argv=None):
             values = read_owner_values(sys.stdin, args.owner_credential_act) if args.owner_credential_stdin else None
             result = native_qualification_run(ctx, args.name, args.prompt, args.owner_act, out_path=args.out,
                                               owner_values=values, owner_value_act=args.owner_credential_act)
+        elif op == 'repository-tests':
+            result = repository_tests(ctx, args.name, args.repo, args.ref, args.out)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
                                        args.sensitivity,
@@ -18733,7 +18983,7 @@ def main(argv=None):
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
                                    'admission-probe', 'job-access-probe', 'containment-probe',
-                                   'drill', 'acp-qualification', 'native-qualification'):
+                                   'drill', 'acp-qualification', 'native-qualification', 'repository-tests'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \

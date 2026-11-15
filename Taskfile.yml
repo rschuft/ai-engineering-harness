@@ -680,6 +680,15 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
 
+  gitea:demo:
+    desc: "The D1 demonstration repository (plan leaf E-05.1; <tools python> -I -B integrations/gitea/demo_repository.py <command>): pass -- files | seed --project CLONE --identity 'Name <email>' | place --project CLONE --identity 'Name <email>' | verify-placement --project CLONE --commit FULL | statement --out FILE | plan --outcome REF --out FILE; seed and place each make one commit in a clone of aieh-d1-demo (never this checkout), in process; the others read only or write one new file"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/demo_repository.py {{.CLI_ARGS}}'
+
   gitea:protection-check:
     desc: "The protection check of decision 0012 point 6 (Owner decision OA-16; python -I -B integrations/gitea/protection_check.py <command>): pass -- verify OWNER/NAME [--base BRANCH] to read the admitted repository's protection as the read-only protection auditor (its Credential Manager entry, in memory) and print the verdict; exit 0 verified, 1 drift, 2 unverified or refused"
     cmds:
@@ -981,6 +990,17 @@ tasks:
       vars: [PROFILE, STATE_DIR, NAME]
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
+  guest:repository-tests:
+    desc: "E-05.1: the tests of one authorized repository's branch (OA-22 (i): the D1 demo repository only) offline in the pinned conversation image on a running provisioned guest: one disposable conversation of the pinned fixture (no LLM, no message, no secret), the branch's content unpacked in its container, python -m unittest discover -s tests run there, the conversation deleted; exit 0 only on PASS (<tools python> -I -B tools/guest.py repository-tests --profile PROFILE --state-dir STATE_DIR --name NAME --repo REPO --ref REF [-- --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, REPO, REF]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py repository-tests --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --repo "{{.REPO}}" --ref "{{.REF}}" {{.CLI_ARGS}}'
 
   guest:acp-qualification:
     desc: "ACP qualification driver (S-03.3 slice 5; PREPARED, NOT RUN: every live step is an Owner act) on a running guest created with create --provision --inference, the forward held: reads one attempt token on standard input (inference_control.py issue --conversation-id a0333c00-0000-4000-8000-0000000ac0d1 ... | this target), admits and sends the pinned qualification create through the dispatcher's transport, takes the broker's live census (S-03.2) before any model call and after the call, sends one fixed prompt, observes the conversation container while the turn runs and after it (processes, connections, the job contract), reads the events and the sets of containers and conversations, searches for the provider key (off by default), revokes the token and deletes the conversation, under the decision rule fixed before any run; exit 0 only on PASS (python -I -B tools/guest.py acp-qualification --profile PROFILE --state-dir STATE_DIR --name NAME --attempt-token-stdin --prompt single|delegated --acp-model MODEL [-- --key-search synthetic --provider-key-fingerprint sha256:HEX16 | --key-search real --real-key-act ACT --out FILE])"
