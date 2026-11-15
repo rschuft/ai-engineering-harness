@@ -16455,8 +16455,9 @@ ACP_ASSUMED = {
                '<prompt>}], "run": true} sends the prompt and starts the turn (event_router.py send_message, '
                'SendMessageRequest role, content, run: confirmed, ' + ACP_SHAPES_SOURCE + '); the outer server '
                'proxies it to the inner server (routes.json POST /api/conversations/{conversation_id}/{tail}, '
-               'dispatcher value "validation": not part of that read). Disclosed: when starting the run answers 429 '
-               'the message is already saved and the server\'s documented recovery is to retry POST '
+               'not part of that read; dispatcher value "validation" when this driver was built, "allowed" for the '
+               'tails events and bash/execute_bash_command since D1 slice A1). Disclosed: when starting the run '
+               'answers 429 the message is already saved and the server\'s documented recovery is to retry POST '
                '/api/conversations/{id}/run; this driver sends every request once and retries nothing, so a 429 is '
                'step (4) FAIL with its status recorded and the saved message is deleted with the conversation',
     'status': 'GET /api/conversations/{id} answers execution_status, one of ' + ', '.join(ACP_STATUS_VALUES) +
