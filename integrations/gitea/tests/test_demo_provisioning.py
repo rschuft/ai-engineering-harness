@@ -54,15 +54,16 @@ REPO_PATH = f'/repos/{DEMO}'
 
 class DemoGitea:
     """The site administrator's view of the demo organization and repository. ``fail[(method, path)] = status``
-    answers that request so; ``ignore`` names settings a PATCH does not apply; ``admin_tokens`` the administrator's
-    tokens; ``push_fails`` makes the push raise."""
+    answers that request so; ``after_push[(method, path)]`` is a list of statuses answered, one per request, once main
+    exists (Gitea 28.3.0's transient 500 right after a push); ``ignore`` names settings a PATCH does not apply;
+    ``admin_tokens`` the administrator's tokens; ``push_fails`` makes the push raise."""
 
     def __init__(self):
         self.orgs, self.repo, self.main, self.commits = {}, None, None, {}
         self.rules, self.collaborators, self.keys, self.pulls = [], {}, [], []
         self.teams = [PF.team_view('Owners', 'owner')]
         self.requests, self.pushes, self.admin_tokens = [], [], []
-        self.fail, self.ignore, self.push_fails = {}, set(), None
+        self.fail, self.ignore, self.push_fails, self.after_push = {}, set(), None, {}
         self.org_members, self.org_teams = [], [PF.team_view('Owners', 'owner', 1)]
         self.no_total = set()  # list routes answered without X-Total-Count
 
@@ -127,6 +128,8 @@ class DemoGitea:
             return self.reply(401, {'message': 'unauthorized'})
         if (method, route) in self.fail:
             return self.reply(self.fail[(method, route)], {'message': 'a fault of the fake'})
+        if self.main is not None and self.after_push.get((method, route)):
+            return self.reply(self.after_push[(method, route)].pop(0), {'message': 'a panic of the fake'})
         return self.admin(method, route, json.loads(body) if body else None)
 
     def admin(self, method, route, data):
@@ -256,7 +259,8 @@ class TheAct(Act):
                                               'collaborators': {}}])
         self.assertEqual(self.gitea.main, self.commits['C3'])
         self.assertEqual(report['window']['pushed'], self.commits['C3'])
-        self.assertEqual(report['push'], {'ref': 'refs/heads/main', 'old': None, 'new': self.commits['C3']})
+        self.assertEqual(report['push'], {'ref': 'refs/heads/main', 'old': None, 'new': self.commits['C3'],
+                                          'branch_reads': [200]})
         self.assertLessEqual(report['window']['opened'], report['window']['closed'])
         self.assertEqual(report['window']['pushed_by'], G.SITE_ADMIN)
         self.assertEqual(report['sequence'], self.commits)
@@ -359,6 +363,83 @@ class TheAct(Act):
         error = self.stopped('READBACK_DIFFERENT')
         self.assertIn('has_actions', error.detail)
         self.assertEqual(self.gitea.writes()[-1], ('POST', f'{REPO_PATH}/branch_protections'))
+
+
+class TheFirstReadAfterThePush(Act):
+    """Fix-forward, exposed by E-05.1's live run (2026-11-15): Gitea 28.3.0 answered the act's first branch read
+    after its push with HTTP 500 (a panic in its post-receive processing) and the same read succeeded 20 s later.
+    That read is read again on 500 only, with a doubling backoff within a bounded number of reads and a total
+    ceiling, then fails closed as before. The clock and the wait are stand-ins: nothing sleeps."""
+
+    BRANCH = ('GET', f'{REPO_PATH}/branches/main')
+
+    def setUp(self):
+        super().setUp()
+        self.now, self.waits = 1000.0, []
+
+        def wait(seconds):
+            self.waits.append(seconds)
+            self.now += seconds
+        for name, value in (('POST_PUSH_CLOCK', lambda: self.now), ('POST_PUSH_WAIT', wait)):
+            patcher = mock.patch.object(R, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def reads(self):
+        """The branch reads after the push (the one before it must answer 404)."""
+        push = next((n for n, r in enumerate(self.gitea.requests) if r['method'] == 'PUSH'), len(self.gitea.requests))
+        return [r for r in self.gitea.requests[push:] if (r['method'], r['path']) == self.BRANCH]
+
+    def test_a_transient_500_is_read_again_and_the_act_completes(self):
+        self.gitea.after_push[self.BRANCH] = [500, 500, 500]
+        report = self.run_act()
+        self.assertEqual(report['state'], 'created')
+        self.assertEqual(report['push']['branch_reads'], [500, 500, 500, 200])
+        self.assertEqual(self.waits, [0.5, 1.0, 2.0])
+        # nothing but the reads between the push and the settings; every write once, in order
+        writes = self.gitea.writes()
+        self.assertEqual(writes.count(('PUSH', 'refs/heads/main:refs/heads/main')), 1)
+        push = next(n for n, r in enumerate(self.gitea.requests) if r['method'] == 'PUSH')
+        patch = next(n for n, r in enumerate(self.gitea.requests) if r['method'] == 'PATCH')
+        self.assertEqual([(r['method'], r['path']) for r in self.gitea.requests[push + 1:patch]], [self.BRANCH] * 4)
+        self.assertEqual(report['verification']['status'], 'verified')
+
+    def test_a_500_that_lasts_past_the_ceiling_fails_closed_as_before(self):
+        self.gitea.after_push[self.BRANCH] = [500] * 100
+        error = self.stopped('API_UNEXPECTED')
+        self.assertIn('HTTP 500', error.detail)
+        self.assertEqual(self.gitea.writes()[-1], ('PUSH', 'refs/heads/main:refs/heads/main'))
+        self.assertTrue(error.report['stopped']['window_open'])
+        self.assertLessEqual(sum(self.waits), R.POST_PUSH_CEILING_S)
+        self.assertLessEqual(max(self.waits), R.POST_PUSH_MAX_WAIT_S)
+        self.assertEqual(len(self.reads()), len(error.report['push']['branch_reads']))
+        self.assertLessEqual(len(self.reads()), R.POST_PUSH_MAX_READS)
+        self.assertEqual(set(error.report['push']['branch_reads']), {500})
+
+    def test_the_reads_are_bounded_when_the_clock_does_not_move(self):
+        with mock.patch.object(R, 'POST_PUSH_WAIT', self.waits.append):
+            self.gitea.after_push[self.BRANCH] = [500] * 100
+            error = self.stopped('API_UNEXPECTED')
+        self.assertEqual(len(self.reads()), R.POST_PUSH_MAX_READS)
+        self.assertEqual(len(self.waits), R.POST_PUSH_MAX_READS - 1)
+        self.assertEqual(error.report['push']['branch_reads'], [500] * R.POST_PUSH_MAX_READS)
+
+    def test_any_other_answer_is_not_read_again(self):
+        for status in (404, 502, 401):
+            with self.subTest(status=status):
+                self.setUp()
+                self.gitea.after_push[self.BRANCH] = [status]
+                error = self.stopped('API_UNEXPECTED')
+                self.assertEqual((len(self.reads()), self.waits), (1, []))
+                self.assertEqual(error.report['push']['branch_reads'], [status])
+
+    def test_the_read_before_the_push_is_not_read_again(self):
+        self.gitea.fail[self.BRANCH] = 500
+        error = self.stopped('MAIN_NOT_EMPTY')
+        self.assertEqual(([r for r in self.gitea.requests if (r['method'], r['path']) == self.BRANCH], self.waits),
+                         ([{'method': 'GET', 'path': self.BRANCH[1], 'auth': 'basic'}], []))
+        self.assertEqual(self.gitea.pushes, [])
+        self.assertNotIn('push', error.report)
 
 
 class Verifier(Act):

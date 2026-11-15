@@ -403,7 +403,11 @@ organization without the repository, or a repository in any other state, is refu
 private organization; the empty repository (no auto-init); the push of the clone's `main` to `main` over smart HTTP
 through the repository-access module (it must then read C3; the window in which `main` takes a push opens here,
 with no collaborator and no rule yet, so only the site administrator can push); the settings; the collaborators; the
-three rules (the window closes with the last). The report names the window's start, its end and the pushed commit.
+three rules (the window closes with the last). The first read of `main` after the push is read again while Gitea
+answers HTTP 500, which Gitea 28.3.0 did once in E-05.1's live run (a panic in its post-receive processing; the same
+read succeeded 20 s later): a doubling backoff from 0.5 s to 8 s, at most 12 reads within 60 s (`read_after_push`,
+`POST_PUSH_*`); any other answer, or a 500 that lasts, stops the act fail-closed as before, and the report's
+`push.branch_reads` lists every answer. The report names the window's start, its end and the pushed commit.
 Then the read-back (`demo_verify`, with `main` at C3; `READBACK_DIFFERENT`), no pull request, and no administrator
 token afterwards. Before the first write it also checks the push's own preconditions on the clone (no client hook,
 which the repository module refuses to push past; `refs/heads/main` at C3): `CLONE_NOT_PUSHABLE`, nothing sent.

@@ -67,6 +67,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import types
 import urllib.parse
 from pathlib import Path
@@ -1218,6 +1219,33 @@ def _demo_push(clone, url, refspec, credential):
         return repo.push(url, refspec, credential)
 
 
+# The act's first read of the branch after its own push (fix-forward, exposed by E-05.1's live run of 2026-11-15):
+# Gitea 28.3.0 answered it with HTTP 500 (a nil-pointer panic during its post-receive processing) and the same read
+# succeeded 20 s later. Only a 500 is read again, after a doubling backoff from POST_PUSH_FIRST_WAIT_S up to
+# POST_PUSH_MAX_WAIT_S, while the reads stay within POST_PUSH_MAX_READS and the total within POST_PUSH_CEILING_S; any
+# other answer, or the last 500, is returned as read (the act then fails closed as before).
+POST_PUSH_FIRST_WAIT_S = 0.5
+POST_PUSH_MAX_WAIT_S = 8.0
+POST_PUSH_CEILING_S = 60.0
+POST_PUSH_MAX_READS = 12
+POST_PUSH_CLOCK = time.monotonic   # stand-ins for tests
+POST_PUSH_WAIT = time.sleep
+
+
+def read_after_push(api, path: str):
+    """GET PATH right after the act's own push, read again only while Gitea answers 500 (see POST_PUSH_*): (status,
+    payload, the statuses of every read in order)."""
+    statuses, wait, start = [], POST_PUSH_FIRST_WAIT_S, POST_PUSH_CLOCK()
+    while True:
+        status, payload = api.call('GET', path)
+        statuses.append(status)
+        left = start + POST_PUSH_CEILING_S - POST_PUSH_CLOCK()
+        if status != 500 or len(statuses) >= POST_PUSH_MAX_READS or left <= 0:
+            return status, payload, statuses
+        POST_PUSH_WAIT(min(wait, left))
+        wait = min(wait * 2, POST_PUSH_MAX_WAIT_S)
+
+
 def demo_push_preconditions(clone, tip) -> dict:
     """The push's own preconditions, checked before the act's first write (the repository module checks them again
     when it pushes): the clone opens, has no client hook git would run (HOOKS_UNSUPPORTED: the module runs none, so
@@ -1253,7 +1281,8 @@ def demo_repository(owner_act=None, clone=None, provider=None, run: Callable = s
     main holds other commits), never adopted or overwritten, unless RESUME (below). Otherwise, in order: the private
     organization; the empty repository (no auto-init; default branch main); the push of the clone's main (C0 to C3)
     to main, which must then be C3 (MAIN_NOT_EMPTY if Gitea's main already exists); the settings; the collaborators;
-    the three rules.
+    the three rules. The first read of main after the push is read again while Gitea answers 500 (read_after_push;
+    the report's ``push.branch_reads`` lists every answer), then fails closed as any other unexpected answer.
 
     The window: from the push, main takes a push from the site administrator; from the first collaborator until the
     last rule, also from the write collaborators. The report's ``window`` says so while it is ``open`` (``pushes_main``
@@ -1441,7 +1470,7 @@ def _demo_act(report, writes, clone, provider, port, http, cli, push, resume):
         entry['status'] = 'pushed'
         report['push'] = {'ref': getattr(update, 'name', None), 'old': getattr(update, 'old', None),
                           'new': getattr(update, 'new', None)}
-        status, branch = api.call('GET', f'{repo}/branches/{declared["base"]}')
+        status, branch, report['push']['branch_reads'] = read_after_push(api, f'{repo}/branches/{declared["base"]}')
         require(status, 200, f'GET {repo}/branches/{declared["base"]}', branch)
         if (branch.get('commit') or {}).get('id') != tip:
             raise GiteaError('PUSH_UNEXPECTED', f'main reads {(branch.get("commit") or {}).get("id")!r} after the '
