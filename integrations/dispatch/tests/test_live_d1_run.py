@@ -14,8 +14,10 @@ read must hold the attempt's token.
 """
 from pathlib import Path
 import importlib.util
+import hashlib
+import shutil
 import sys
-import types
+import tempfile
 import unittest
 from unittest import mock
 
@@ -93,14 +95,33 @@ class Dispatch(Fixture):
         self.assertEqual(dispatcher.delete(result['operation_key'], transport), 200)
         self.assertEqual(calls, [('DELETE', f'/api/conversations/{result["conversation_id"]}', None)])
 
+    def base(self, extra=None):
+        tar = _load('test_attempt_run', HERE / 'test_attempt_run.py')
+        resolved = self.resolve_d1(self.manifest)
+        change = LD.AR._design(resolved)['change']
+        path = Path(tempfile.mkdtemp(prefix='aieh-d1-base-'))
+        self.addCleanup(shutil.rmtree, path, True)
+        commits = tar.make_repository(path / 'demo', tar.demo_trees(resolved.work_id, change, extra))
+        return LD.AR.read_base(path / 'demo', repository=resolved.repository, design_commit=commits['C2'])
+
     def test_the_preparation_checks_the_expected_inputs(self):
         dispatcher = self.dispatcher()
-        base = types.SimpleNamespace(summary=lambda: {'commit': 'c' * 40}, commit='c' * 40)
-        with mock.patch.object(LD.AR, 'read_base', return_value=base) as read_base:
+        with mock.patch.object(LD.AR, 'read_base', return_value=self.base()) as read_base:
             prepared = dispatcher.prepare()
             self.assertEqual(prepared['verdict'], 'PASS', prepared['checks'])
+            self.assertLess(prepared['command_bytes']['result'], LD.ARG_LIMIT)
             dispatcher.expected['policy_digest'] = 'sha256:' + '0' * 64
             self.assertEqual(dispatcher.prepare()['verdict'], 'FAIL')
+        # a base whose RESULT command would not fit one argument of /bin/sh -c (its bundle in the command, hex twice)
+        noise, block = {}, b'noise'
+        for n in range(1536):                                     # about 48 KiB that does not compress
+            block = hashlib.sha256(block).digest()
+            noise[f'big/{n // 512}.bin'] = noise.get(f'big/{n // 512}.bin', b'') + block
+        dispatcher.expected['policy_digest'] = prepared['seen']['policy_digest']
+        with mock.patch.object(LD.AR, 'read_base', return_value=self.base(noise)):
+            big = dispatcher.prepare()
+        self.assertEqual(big['verdict'], 'FAIL')
+        self.assertFalse(big['checks']['the SEED and RESULT commands fit one argument'], big['command_bytes'])
         self.assertEqual(read_base.call_args.kwargs['repository'], prepared['repository'])
         self.assertEqual(prepared['conversation_id'], store_mod.conversation_id_for(prepared['operation_key']))
         self.assertEqual(self.store.attempts(), [])                   # read only: nothing reserved

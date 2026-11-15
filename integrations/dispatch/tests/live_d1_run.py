@@ -31,11 +31,13 @@ import argparse
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 ACTOR = 'd1-run'
+ARG_LIMIT = 131072        # Linux MAX_ARG_STRLEN: one argument of /bin/sh -c
 
 
 def _load(name, path):
@@ -140,13 +142,25 @@ class D1Dispatcher:
         seen = {'manifest_version': manifest.version, 'manifest_sha256': manifest.sha256,
                 'policy_digest': resolved.policy_digest}
         checks = {k: seen[k] == self.expected.get(k) for k in seen}
+        sizes = self.command_sizes(resolved)
+        checks['the SEED and RESULT commands fit one argument'] = max(sizes['seed'], sizes['result']) < ARG_LIMIT
         return {'verdict': 'PASS' if all(checks.values()) else 'FAIL', 'checks': checks, 'seen': seen,
                 'expected': dict(self.expected), 'work': resolved.work_id, 'repository': resolved.repository,
                 'stage': resolved.stage, 'ordinal': resolved.ordinal, 'design_revision': resolved.design_revision,
                 'profile_digest': resolved.profile_digest, 'agent_manifest_digest': resolved.agent_manifest_digest,
                 'operation_key': resolved.attempt_identity().operation_key,
                 'conversation_id': store.conversation_id_for(resolved.attempt_identity().operation_key),
-                'base_summary': self.base.summary(), 'base': self.base}
+                'base_summary': self.base.summary(), 'command_bytes': sizes, 'base': self.base}
+
+    def command_sizes(self, resolved) -> dict:
+        """The bytes of the SEED and RESULT commands this base makes (the message and the attempt id of the planned
+        attempt; the time's digits as now's): the Agent Server runs a command as /bin/sh -c <command>, one argument of
+        at most ARG_LIMIT bytes (openhands-agent-server 1.60.1 bash_service.py, create_subprocess_shell)."""
+        attempt = store.attempt_id_for(resolved.attempt_identity().operation_key)
+        message = AR.commit_message(resolved, self.base, attempt)
+        result = AR.build_result(self.base, attempt_id=attempt, message=message, when=int(time.time()))
+        return {'seed': len(AR.build_seed(self.base).command.encode('utf-8')),
+                'result': len(result.command.encode('utf-8')), 'limit': ARG_LIMIT}
 
     def dispatch(self, transport, on_token) -> dict:
         """(2): ``dispatch_inputs.dispatch`` under the manifest loaded now, for this dispatch, with the decision
