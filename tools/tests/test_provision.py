@@ -1751,6 +1751,25 @@ class ProvisionOperation(ManifestFixture):
                                                      manifest_sha256='0' * 64))
         self.refused('STAGED_MISMATCH', record=record)
 
+    def test_a_guest_created_with_the_inference_composition_provisions(self):
+        """Exposed by E-05.10's live run: provision recomputes the manifest with the inference composition the
+        guest was created with (its provisioning and launch records), so it equals the seeded one."""
+        self.built = guest.build_provision_manifest(self.ctx(), inference=True)
+        self.assertTrue(self.built['record']['inference'])
+        record = dict(self.record, provisioning=dict(self.built['record']),
+                      inference={'composition': 'inference', 'status': 'planned'})
+        result, _ = self.run_provision(record=record)
+        self.assertEqual(result['result'], 'provisioned', result['checks'])
+
+    def test_records_that_disagree_on_the_inference_composition_refuse(self):
+        composed = guest.build_provision_manifest(self.ctx(), inference=True)
+        for provisioning, launch in ((composed['record'], {}),
+                                     (self.built['record'],
+                                      {'inference': {'composition': 'inference', 'status': 'planned'}})):
+            record = dict(self.record, provisioning=dict(provisioning), **launch)
+            error = self.refused('STAGED_MISMATCH', record=record)
+            self.assertIn('disagree on the inference composition', str(error))
+
     def test_single_use_and_armed_trigger(self):
         (self.guest_root / 'var/lib/aieh/provision').mkdir(parents=True)
         (self.guest_root / 'var/lib/aieh/provision/RESULT.json').write_text('{}')

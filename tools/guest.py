@@ -8860,7 +8860,14 @@ def provision(ctx, name):
                       'manifest and its root step is inert')
     conf = provisioning_config(ctx.profile)
     up, root = conf['upload'], conf['root_step']
-    manifest = build_provision_manifest(ctx, prov.get('egress_falsification') is True)
+    # The inference composition (decision 0015) as create declared it, read from the guest's own records only,
+    # never probed: the provisioning record's flag (written from create's manifest) and the launch record's
+    # inference block must agree, and the manifest is recomputed with it (exposed by E-05.10's live run).
+    inference = prov.get('inference') is True
+    if inference != inference_opted(record):
+        raise Refused('STAGED_MISMATCH', f'{name}: the provisioning record (inference {inference}) and the launch '
+                      f'record (inference {inference_opted(record)}) disagree on the inference composition')
+    manifest = build_provision_manifest(ctx, prov.get('egress_falsification') is True, inference)
     if manifest['sha256'] != prov.get('manifest_sha256'):
         raise Refused('STAGED_MISMATCH', f'the stage now gives manifest {manifest["sha256"]}; '
                       f'{name} was seeded with {prov.get("manifest_sha256")}')
