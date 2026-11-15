@@ -33,14 +33,39 @@ never a body, a key or an answer. Standard library only; it imports nothing of `
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
 import secrets
+import sys
 import time
+from pathlib import Path
 
 CALL_TIMEOUT_S = 600  # the per-request ceiling inside the guest (a create can take minutes)
-# A secret GuestApi's sealed form takes (tools/guest.py SEALED_SECRET): one URL-safe word of 16 to 128 characters.
-SEALABLE = re.compile(r'[A-Za-z0-9_-]{16,128}')
+
+
+def _native_token():
+    """integrations/dispatch/native_token.py (standard library only), the native token's grammar: its length bound is
+    the sealed word's (E-05.11 review item 4)."""
+    name = 'aieh_dispatch_native_token'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / 'native_token.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return module
+
+
+# A secret GuestApi's sealed form takes (tools/guest.py SEALED_SECRET): one URL-safe word of 16 characters up to the
+# native token's longest (native_token.TOKEN_LENGTH, 512; a broker attempt token is 52), so that on the D1 path on the
+# native profile the token itself is sealed and redacted from the answer, never a nonce in its place (E-05.11 review
+# item 4; before, a native token longer than 128 characters was sealed with a nonce and its echo not redacted).
+SEALABLE = re.compile(r'[A-Za-z0-9_-]{16,%d}' % _native_token().TOKEN_LENGTH[1])
 # The declared custody of the management key that this transport requires, with the login put in.
 CUSTODY_FIELDS = ('owner', 'group', 'mode', 'guest_dir_owner', 'guest_dir_group', 'guest_dir_mode')
 
@@ -64,8 +89,9 @@ def body_sha256(body) -> str | None:
 
 def sealed_secret(body: dict) -> str:
     """The secret a sealed call of BODY redacts from its answer: the one value of ``body['secrets']`` that is a
-    single URL-safe word of 16 to 128 characters (an attempt token; the endpoint is a URL), else a fresh nonce
-    (the call is sealed all the same)."""
+    single URL-safe word (SEALABLE: an attempt token, or on the native profile the native token, up to 512 characters;
+    the endpoint is a URL and the switches' spelling is shorter than 16), else a fresh nonce (the call is sealed all
+    the same)."""
     secrets_block = body.get('secrets')
     values = [source.get('value') for source in (secrets_block.values() if isinstance(secrets_block, dict) else ())
               if isinstance(source, dict)]

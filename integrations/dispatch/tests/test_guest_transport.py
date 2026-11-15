@@ -451,6 +451,32 @@ class SealedSecretsTests(unittest.TestCase):
                 live('POST', '/api/conversations', {'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})
         self.assertIn(needles({'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})[3], str(plain.exception))
 
+    def test_a_long_native_token_is_sealed_itself(self):
+        """E-05.11 review item 4: on the D1 path on the native profile the native token, up to its grammar's 512
+        characters (native_token.TOKEN_LENGTH, the one source), is the sealed secret, never a nonce; the switches and
+        the endpoint are not words of the seal."""
+        ns = _load('native_support', HERE / 'native_support.py')
+        nt = gt._native_token()
+        self.assertEqual(gt.SEALABLE.pattern, r'[A-Za-z0-9_-]{16,%d}' % nt.TOKEN_LENGTH[1])
+        for length in (129, 300, 512):
+            token = ns.token(f'long native token {length}', length)
+            self.assertTrue(nt.is_token(token))
+            body = {'conversation_id': cc.CONVERSATION, 'secrets': {
+                'CLAUDE_CODE_OAUTH_TOKEN': {'kind': 'StaticSecret', 'value': token},
+                'HTTPS_PROXY': {'kind': 'StaticSecret', 'value': 'http://172.17.0.1:8090'},
+                'CLAUDE_CODE_PROXY_RESOLVES_HOSTS': {'kind': 'StaticSecret', 'value': 'tRuE'},
+                'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': {'kind': 'StaticSecret', 'value': 'tRuE'}}}
+            self.assertEqual(gt.sealed_secret(body), token)
+            seen = []
+            t = transport(lambda requests, timeout=900, secret=None: seen.append(secret) or answer(201, {}))
+            t('POST', '/api/conversations', body)
+            self.assertEqual(seen, [token])
+            # the real GuestApi's sealed probe takes it (SEALED_SECRET, one whole word up to 512)
+            self.assertIn(repr(token), guest.sealed_api_probe('e30=', token))
+        for bad in ('x' * 513, 'x' * 20 + '\n', 'x' * 15):
+            with self.assertRaises(guest.Refused):
+                guest.sealed_api_probe('e30=', bad)
+
     def test_the_sealed_secret_is_the_token_or_a_nonce(self):
         self.assertEqual(gt.sealed_secret(SECRET_BODY), TOKEN)
         two = copy.deepcopy(SECRET_BODY)

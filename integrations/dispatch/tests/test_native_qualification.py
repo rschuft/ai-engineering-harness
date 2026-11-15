@@ -233,6 +233,37 @@ class OwnRefusals(Base):
         self.refused('BODY_NOT_FIXTURE', self.altered(lambda b: b.pop('container')))
 
 
+class ReviewProbes(Base):
+    """The independent review's admission probes (E-05.11 fix round), kept as a regression: every member that could
+    slip a fifth secret, MCP, another command, a relocated configuration directory or another model is refused."""
+
+    def test_each_probe_is_refused_with_its_code(self):
+        other = NS.token('another review token')
+        cases = [
+            ('NATIVE_SECRET_NAMES', lambda b: b['secrets'].update(GH_TOKEN={'kind': 'StaticSecret', 'value': 'x' * 20})),
+            ('BODY_NOT_FIXTURE', lambda b: b['agent_settings'].update(agent_context=None)),
+            ('BODY_NOT_FIXTURE', lambda b: b['agent_settings'].update(acp_file_secrets=[])),
+            ('NATIVE_MCP_FORBIDDEN', lambda b: b['container'].update(mcpServers={})),
+            ('NATIVE_ACP_COMMAND_NOT_PINNED', lambda b: b['agent_settings'].update(acp_args=['--mcp-config', '{}'])),
+            ('NATIVE_ACP_COMMAND_NOT_PINNED', lambda b: b['agent_settings'].update(
+                acp_command=['claude-agent-acp', '--x'])),
+            ('NATIVE_CONFIG_DIR_RELOCATED', lambda b: b['container'].update(
+                environment={'CLAUDE_CONFIG_DIR': '/tmp/c'})),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', lambda b: b['agent_settings'].update(acp_fallback_model='claude-opus-5')),
+            ('WORKSPACE_NOT_FIXTURE', lambda b: b['workspace'].update(env={'A': 'b'})),
+            ('BODY_NOT_FIXTURE', lambda b: b.update(autotitle=0)),
+            ('SECRETS_ENCRYPTED', lambda b: b.update(secrets_encrypted=0)),
+            ('NATIVE_SWITCH_NOT_DECLARED', lambda b: b['secrets']['CLAUDE_CODE_PROXY_RESOLVES_HOSTS'].update(
+                value='true')),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', lambda b: b['agent_settings'].update(
+                acp_session_mode='bypassPermissions')),
+            ('NATIVE_TOKEN_NOT_HELD', lambda b: b['secrets']['CLAUDE_CODE_OAUTH_TOKEN'].update(value=other)),
+        ]
+        for code, change in cases:
+            with self.subTest(code=code):
+                self.refused(code, self.altered(change), held=NT.fingerprint(TOKEN))
+
+
 class Pin(Base):
     def test_drift_and_shape(self):
         raw = (REPO / nq.FIXTURE_PATH).read_bytes()

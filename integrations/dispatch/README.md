@@ -977,7 +977,8 @@ secrets and agent blocks are checked first by the check shared with the D1 stage
 built at run time and the checked-in profile: the positive control (the model the record's primary; the run shape
 the D1 template's but for the tag and the model); a real stage refuses it (the D1 template check, the stage body
 check also with the native secrets admitted, the artifact reader); the one shared check with this module's type and
-codes; each own refusal on its own fact, no detail repeating the token; the pin.
+codes; each own refusal on its own fact, no detail repeating the token; the independent review's admission probes
+(`ReviewProbes`); the pin.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 

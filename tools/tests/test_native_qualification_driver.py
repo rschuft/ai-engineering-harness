@@ -119,6 +119,7 @@ class FakeGuest:
                       'capture': {'mode': 'capture', 'capture': capture({'proc/20/environ': b'PATH=/usr/bin\0'})}}
         self.probe_specs = []
         self.rejects = 3
+        self.seals, self.nonces = [], []
 
     def facts(self):
         container = tg.conversation_container(hex_id=HEX)
@@ -185,8 +186,14 @@ class FakeGuest:
         raise AssertionError('an unexpected script')
 
     def api(self, requests, timeout=900, secret=None):
-        self.test.assertEqual(secret, TOKEN)            # every call is sealed with the native token
+        # every call is sealed: with the native token once it is held, before that with a fresh nonce (review S1)
+        self.test.assertRegex(secret, r'^[A-Za-z0-9_-]{16,512}$')
         (request,) = requests
+        self.seals.append((request['method'], request['path'], secret == TOKEN))
+        if secret != TOKEN:
+            self.nonces.append(secret)
+        if request['method'] == 'POST' and request['path'] == '/api/conversations':
+            self.test.assertEqual(secret, TOKEN)
         status, body = self.answer(request['method'], request['path'], request.get('json'))
         text = json.dumps(body)
         sealed = text.count(secret)
@@ -206,6 +213,7 @@ class FakeTunnel:
                           log_line(event='connection', conn=7, target=ORIGIN, decision='admitted', reason=None,
                                    end='client-closed', bytes_up=5000, bytes_down=9000)]
         self.census_calls = []
+        self.late_lines = []          # lines the tunnel logs after step (10)'s read, seen by (12a)
 
     def census(self):
         verdict = self.census_verdicts.pop(0)
@@ -213,7 +221,8 @@ class FakeTunnel:
         return {'format': 'aieh-provider-tunnel-census/1', 'verdict': verdict, 'violations': []}
 
     def log_lines(self):
-        lines = self.base + (self.run_lines if self.guest.sent else [])
+        torn_down = ('DELETE', f'/api/conversations/{CID}') in self.guest.calls
+        lines = self.base + (self.run_lines if self.guest.sent else []) + (self.late_lines if torn_down else [])
         return (self.name_after or self.name) if self.guest.sent else self.name, lines
 
 
@@ -274,19 +283,34 @@ class DriverRun(unittest.TestCase):
     def test_the_rule_passes_on_a_guest_that_holds_it(self):
         out = self.run_driver()
         self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
-        self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)', '(8)',
-                                                    '(9)', '(10)', '(10a)', '(11)', '(11a)', '(11b)', '(11c)', '(11d)',
-                                                    '(12)', '(13)'])
+        self.assertEqual(list(self.verdicts(out)), ['(1)', '(1a)', '(1b)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)',
+                                                    '(8)', '(9)', '(10)', '(10a)', '(11)', '(11a)', '(11b)', '(11c)',
+                                                    '(11d)', '(12)', '(12a)', '(13)'])
         (before, _), (after, _) = self.tunnel.census_calls
         self.assertNotIn(('POST', '/api/conversations'), before)            # before the create: no model call
         self.assertIn(('POST', f'/api/conversations/{CID}/events'), after)
         self.assertEqual(self.provider.reads, [NT.ENTRY])                     # the dispatcher's read, once
+        create = self.guest.seals.index(('POST', '/api/conversations', True))
+        self.assertEqual(self.guest.seals[0], ('GET', '/api/conversations/count', False))    # a nonce before (1b)
+        self.assertTrue(all(sealed for _, _, sealed in self.guest.seals[create:]))
+        self.assertEqual(self.step(out, '12a')['verdict'], 'PASS')
+        [entry] = [c for c in out['transport_calls'] if c['path'] == '/api/conversations']
+        self.assertIsNone(entry['body_sha256'])                                # review N4: no digest of the body
+        self.assertEqual(self.step(out, 2)['detail']['fixture_sha256'], guest.native_qualification().FIXTURE_SHA256)
         self.assertEqual(out['native_token']['fingerprint'], FP)
         self.assertEqual(self.step(out, 10)['detail']['admitted_to_origin'], 1)
         self.assertEqual(self.step(out, 13)['detail']['verdict'], 'not-found')
         self.assertEqual(self.guest.env_specs[0]['attempt_token']['names'], ['CLAUDE_CODE_OAUTH_TOKEN'])
         self.assertEqual([s['mode'] for s in self.guest.probe_specs], ['start', 'after', 'capture'])
         self.assertEqual(self.step(out, 11)['detail']['transcript']['sidechain_records'], 0)
+
+    def test_a_fresh_nonce_seals_every_call_before_the_token(self):
+        self.run_driver()
+        first = list(self.guest.nonces)
+        self.setUp()
+        self.run_driver()
+        self.assertEqual((len(first), len(self.guest.nonces)), (1, 1))
+        self.assertNotEqual(first, self.guest.nonces)
 
     def test_without_the_owners_values_that_part_is_unknown_with_its_reason(self):
         out = self.run_driver(owner=False)
@@ -297,12 +321,11 @@ class DriverRun(unittest.TestCase):
         self.assertNotIn('capture', [s['mode'] for s in self.guest.probe_specs])
 
     def test_preconditions(self):
+        """Review S1 (P3): a precondition that fails reads no entry, makes no census and seals no call with a token."""
         for change, check in (
                 (lambda: self.session.update(ports={'broker': '127.0.0.1:18432'}), 'the forward targets the provider tunnel'),
-                (lambda: setattr(self, 'provider', NS.ObservedProvider({})),
-                 'the native token is read from its one entry (the dispatcher\'s read)'),
-                (lambda: setattr(self, 'provider', NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, 'sk-ant-api03-' + 'k' * 50)})),
-                 'the native token is read from its one entry (the dispatcher\'s read)')):
+                (lambda: setattr(self, 'session', None), 'the forward targets the provider tunnel'),
+                (lambda: setattr(self.guest, 'created', True), 'the outer server holds no conversation')):
             with self.subTest(check=check):
                 self.setUp()
                 change()
@@ -311,6 +334,28 @@ class DriverRun(unittest.TestCase):
                 self.assertFalse(self.step(out, 1)['detail']['checks'][check])
                 self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
                 self.assertEqual(self.tunnel.census_calls, [])
+                self.assertEqual(self.provider.reads, [])
+                self.assertFalse(any(sealed for _, _, sealed in self.guest.seals))
+        self.setUp()
+        out = self.run_driver(owner=False, forward=types.SimpleNamespace(status=lambda: {'held': False, 'session': None}))
+        self.assertEqual((self.provider.reads, self.guest.seals), ([], []))   # P3: not even the count is asked
+
+    def test_the_token_is_read_after_the_census_and_only_then(self):
+        for provider, code in ((NS.ObservedProvider({}), 'NATIVE_TOKEN_MISSING'),
+                               (NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, 'sk-ant-api03-' + 'k' * 50)}),
+                                'NATIVE_TOKEN_NOT_SHAPED')):
+            with self.subTest(code=code):
+                self.setUp()
+                self.provider = provider
+                out = self.run_driver(owner=False)
+                self.assertEqual((self.step(out, '1b')['verdict'], self.step(out, '1b')['detail']['refused']),
+                                 ('FAIL', code))
+                self.assertEqual(len(self.tunnel.census_calls), 1)            # the census came first
+                self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+        self.setUp()
+        self.tunnel.census_verdicts = ['FAIL']
+        self.run_driver(owner=False)
+        self.assertEqual(self.provider.reads, [])                             # no read after a failed census
 
     def test_the_census_before_the_create_is_a_stop_and_no_model_call(self):
         self.tunnel.census_verdicts = ['UNKNOWN']
@@ -318,7 +363,8 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(out['result'], 'FAIL')
         self.assertIn(guest.NATIVE_STOPS['census-before'], self.stops(out))
         self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
-        self.assertEqual(self.step(out, 13)['verdict'], 'PASS')            # the outbound search still runs
+        self.assertEqual(self.provider.reads, [])                          # no token read (review S1)
+        self.assertEqual(self.step(out, 13)['skipped'], 'no token was read')
 
     def test_an_unreadable_tunnel_log_before_the_create_creates_nothing(self):
         def unreadable():
@@ -327,6 +373,7 @@ class DriverRun(unittest.TestCase):
         out = self.run_driver()
         self.assertEqual(self.step(out, '1a')['verdict'], 'UNKNOWN')
         self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+        self.assertEqual(self.provider.reads, [])                 # no token without the census and its log mark
 
     def test_an_admission_refusal_sends_nothing(self):
         with mock.patch.object(guest.native_qualification(), 'FIXTURE_SHA256', '0' * 64):
@@ -354,6 +401,8 @@ class DriverRun(unittest.TestCase):
                                             d['processes'][1].update(config_dir='/var/lib/other/.claude'),
                                             d.update(config_dirs=['/var/lib/other/.claude'])),
             'the proxy': lambda d: d['processes'][0].update(proxy_is_endpoint=False),
+            'the CLI\'s proxy (review N8)': lambda d: d['processes'][1].update(proxy_is_endpoint=False),
+            'a CLI switch (review N8)': lambda d: d['processes'][1].update(switches_declared=False),
             'a switch': lambda d: d['processes'][0].update(switches_declared=False),
             'a missing name': lambda d: d['processes'][0].update(names=[n for n in NAMES if n != 'HTTPS_PROXY']),
         }
@@ -390,6 +439,121 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(self.step(out, '11c')['verdict'], 'FAIL')
         self.assertIn(guest.NATIVE_STOPS['owner'], self.stops(out))
 
+    def test_a_direct_connection_attempt_is_a_stop(self):
+        """Review B1 (P1, P1b): the guard's refusal counters rising during the turn, and a SYN_SENT row to any
+        destination but the tunnel endpoint, are each a stop; counters that cannot be read leave (10) UNKNOWN."""
+        orig = self.guest.facts
+
+        def facts():
+            report = orig()
+            if self.guest.sent:
+                report['admission']['iptables'][0]['packets'] = 50
+            return report
+        self.guest.facts = facts
+        out = self.run_driver()
+        self.assertEqual((out['result'], self.step(out, 10)['verdict']), ('FAIL', 'FAIL'))
+        self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+        self.setUp()
+        syn = tcc.tcp_row('020011AC:C352', '01010101:01BB', '02', 6004)       # SYN_SENT to 1.1.1.1:443
+        self.guest.during = aq.snapshot(rows=[aq.TO_ENDPOINT, syn])
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 5)['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['direct'], self.stops(out))
+        self.setUp()
+        self.guest.rejects = 3          # unchanged counters: PASS (the control)
+        self.assertEqual(self.step(self.run_driver(), 10)['verdict'], 'PASS')
+
+    def test_a_lost_or_refused_create_answer_still_tears_down_and_searches(self):
+        """Review S2 (P4): the create marked sent before the call; a 504 after the conversation was made, or a lost
+        answer, still leads to the teardown and the persisted-token search."""
+        answer = self.guest.answer
+
+        def lossy(method, path, body):
+            if method == 'POST' and path == '/api/conversations':
+                answer(method, path, body)
+                self.guest.created = True
+                return 504, {'detail': 'gateway timeout'}
+            return answer(method, path, body)
+        self.guest.answer = lossy
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 2)['verdict'], 'FAIL')
+        self.assertTrue(self.step(out, 2)['detail']['present'])
+        self.assertIn(('DELETE', f'/api/conversations/{CID}'), self.guest.calls)
+        self.assertFalse(self.guest.created)
+        self.assertNotIn('skipped', self.step(out, 11))                         # the search ran
+        self.setUp()
+
+        def lost(method, path, body):
+            if method == 'POST' and path == '/api/conversations':
+                raise OSError('the answer was lost')
+            return self.guest.__class__.answer(self.guest, method, path, body)
+        self.guest.answer = lost
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 2)['detail']['error'], 'OSError')
+        self.assertFalse(self.step(out, 2)['detail']['present'])
+        self.assertIn(('DELETE', f'/api/conversations/{CID}'), self.guest.calls)  # torn down all the same
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')                   # 404 and nothing left
+        self.assertIn('skipped', self.step(out, 11))                              # nothing to search
+
+    def test_an_interrupt_still_tears_down_and_drops_the_token(self):
+        def interrupted(fetch, done, ceiling):
+            raise KeyboardInterrupt
+        with mock.patch.object(NT.NativeToken, 'drop', autospec=True, side_effect=NT.NativeToken.drop) as drop:
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_driver(wait=interrupted)
+        self.assertIn(('DELETE', f'/api/conversations/{CID}'), self.guest.calls)
+        self.assertGreaterEqual(drop.call_count, 1)
+
+    def test_a_token_in_the_runs_own_text_is_redacted_and_a_stop(self):
+        """Review S3 (P10): the record is redacted once and written; the redaction is a stop."""
+        lines = self.tunnel.log_lines
+
+        def log_lines():
+            if self.guest.sent:
+                raise guest.Refused('TUNNEL', 'host-side text that happens to hold ' + TOKEN)
+            return lines()
+        self.tunnel.log_lines = log_lines
+        out = self.run_driver()                    # run_driver asserts the written record holds no token
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['redacted'], self.stops(out))
+        self.assertGreaterEqual(out['native_token']['redacted_from_record'], 1)
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')                   # the teardown's status survives
+
+    def test_the_tunnel_carrying_another_target_is_a_stop(self):
+        """Review S6 (P2): PASS needs an admitted connection to the origin and no other target carried; the whole
+        run's log is read again after the teardown."""
+        self.tunnel.run_lines = [log_line(event='upstream-connect', conn=7, target='evil.example:443',
+                                          peer={'address': '203.0.113.9', 'port': 443})]
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 10)['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['other-target'], self.stops(out))
+        self.setUp()
+        self.tunnel.late_lines = [log_line(event='connection', conn=9, target=ORIGIN, decision='refused',
+                                           reason='TUNNEL_ECH_REFUSED')]
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 10)['verdict'], self.step(out, '12a')['verdict']), ('PASS', 'FAIL'))
+        self.assertIn(guest.NATIVE_STOPS['hello'], self.stops(out))
+
+    def test_an_unreadable_environment_in_the_lineage_is_unknown(self):
+        """Review S4 (P7): unreadable in the provider's lineage, or a process the snapshot did not see: UNKNOWN; a
+        process outside the lineage: recorded, not judged."""
+        self.guest.env['process_environments']['99'] = {'unreadable': 'PermissionError'}
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 6)['verdict'], 'UNKNOWN')
+        self.assertEqual(self.step(out, 6)['detail']['unreadable_in_the_lineage'], ['99'])
+        self.setUp()
+        self.guest.env['process_environments']['1'] = {'unreadable': 'PermissionError'}
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 6)['verdict'], self.step(out, 6)['detail']['unreadable']), ('PASS', ['1']))
+
+    def test_another_credentials_value_under_any_name_is_a_stop(self):
+        """Review S5: the probe's shape report of any value (never the value)."""
+        self.guest.env['process_environments']['1']['other_value_shape'] = True
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 6)['verdict'], 'FAIL')
+        self.assertIn(guest.NATIVE_STOPS['other-credential'], self.stops(out))
+        self.assertIn('other_value_shape', self.guest.env_specs[0])
+
     def test_a_connection_elsewhere_is_a_stop(self):
         self.guest.during = aq.snapshot(rows=[aq.TO_ENDPOINT, aq.TO_ELSEWHERE])
         out = self.run_driver()
@@ -410,6 +574,12 @@ class DriverRun(unittest.TestCase):
             ech = log_line(event='connection', conn=9, target=ORIGIN, decision='refused', reason=reason)
             self.assertEqual(verdict(ech)[0::2], ('FAIL', True))
         self.assertEqual(verdict(run=[])[0], 'FAIL')                        # never through the tunnel
+        carried = log_line(event='upstream-connect', conn=10, target='evil.example:443',
+                           peer={'address': '203.0.113.9', 'port': 443})
+        v, detail, _ = verdict(carried)                             # review S6: the origin admitted, and another
+        self.assertEqual((v, detail['other_targets']), ('FAIL', ['evil.example:443']))
+        admitted_other = log_line(event='connection', conn=11, target='evil.example:443', decision='admitted')
+        self.assertEqual(verdict(admitted_other)[0], 'FAIL')
         self.assertEqual(verdict(log_line(event='refusals-suppressed', reason='x', count=4))[0], 'UNKNOWN')
         self.assertEqual(verdict('not json')[0], 'UNKNOWN')
         self.tunnel.run_lines.append(log_line(event='connection', conn=9, target=ORIGIN, decision='refused',
@@ -451,6 +621,8 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(guest.native_model_verdict({'models': {'claude-opus-5': 1}})[0], 'FAIL')     # no main loop
         self.assertEqual(guest.native_model_verdict({'models': {}})[0], 'UNKNOWN')
         self.assertEqual(guest.native_model_verdict(None)[0], 'UNKNOWN')
+        self.assertEqual(guest.native_model_verdict({'models': {'claude-sonnet-5': 2, '<synthetic>': 1}})[0],
+                         'FAIL')                  # review N1: kept, fails closed; attributed after a run
         self.guest.probe['after']['transcript']['models'] = {'claude-sonnet-5': 1, 'claude-sonnet-5-5': 1}
         out = self.run_driver()
         self.assertEqual(self.step(out, '11a')['verdict'], 'FAIL')
@@ -463,6 +635,7 @@ class DriverRun(unittest.TestCase):
         occ = lambda **o: {'occurrences': dict({'token': 0, 'endpoint': 0, 'switch': 0, 'marker': 0}, **o)}
         self.assertEqual(guest.native_mask_verdict(0, occ())[0], 'PASS')
         self.assertEqual(guest.native_mask_verdict(2, occ(token=2))[0], 'PASS')
+        self.assertEqual(guest.native_mask_verdict(5, occ(token=1))[0], 'UNKNOWN')        # review N3 (P9)
         self.assertEqual(guest.native_mask_verdict(1, occ(endpoint=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ(switch=1, token=1))[0], 'FAIL')
         self.assertEqual(guest.native_mask_verdict(1, occ())[0], 'UNKNOWN')
@@ -521,6 +694,26 @@ class NativeTokenContract(unittest.TestCase):
         spec = guest.native_token_spec(PROFILE, ('CLAUDE_CODE_OAUTH_TOKEN',))
         self.assertEqual((spec['token_shape'], spec['provider_key_shape']),
                          (NT.TOKEN_SHAPE.pattern, NT.OTHER_CREDENTIAL_SHAPE.pattern))
+
+    def test_the_probe_reports_another_credentials_shape_never_the_value(self):
+        d6 = aq.d6
+        key = 'sk-ant-' + 'api03-' + hashlib.sha256(b'review S5').hexdigest() * 2      # built at run time
+        spec = guest.native_token_spec(PROFILE, ('CLAUDE_CODE_OAUTH_TOKEN',))
+        environs = {'20': b'CLAUDE_CODE_OAUTH_TOKEN=' + TOKEN.encode() + b'\0PATH=/bin\0',
+                    '21': b'FOO=' + key.encode() + b'\0'}
+        real = d6.run_env_probe.__globals__['json']
+        original_dumps = real.dumps
+
+        def with_shape(value, *args, **kwargs):
+            if isinstance(value, dict) and value.get('attempt_token') == spec:
+                value = dict(value, other_value_shape=NT.OTHER_CREDENTIAL_SHAPE.pattern)
+            return original_dumps(value, *args, **kwargs)
+        with mock.patch.object(real, 'dumps', with_shape):
+            out = d6.run_env_probe(environs, spec)
+        envs = out['process_environments']
+        self.assertEqual((envs['20'].get('other_value_shape'), envs['21'].get('other_value_shape')), (False, True))
+        self.assertNotIn(key, json.dumps(out))
+        self.assertNotIn(TOKEN, json.dumps(out))
 
     def test_the_probe_and_the_verdict(self):
         d6 = aq.d6
