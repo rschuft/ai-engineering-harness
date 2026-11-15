@@ -1,6 +1,8 @@
 """Live custody probe of plan leaf E-01.3.3 (TEST ONLY; PREPARED, NOT RUN).
 
-Not a unittest module (``discover`` never runs it). On a running provisioned guest it runs
+Not a unittest module (``discover`` never runs it). On a running guest created with
+``create --provision --egress-falsification`` (``custody_probe`` refuses another: step (3) takes
+job-access-probe's verdict, which needs its route-present falsification step) it runs
 ``tools/guest.py``'s ``custody_probe`` under its decision rule (``guest.CUSTODY_PROBE_RULE``, fixed
 before any run), supplying the dispatch chain for step (5):
 

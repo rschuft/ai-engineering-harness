@@ -37,7 +37,8 @@ NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 CREDENTIAL = 'runtime-credential-' + 'R' * 24
 CID = guest.CUSTODY_CONVERSATION_ID
 FP = {'builder': 'sha256:' + '1' * 16, 'reviewer': 'sha256:' + '2' * 16}
-RECORD = {'provisioning': {'image_id': tg.IMAGE_ID}, 'ports': {'ssh': 40022, 'qmp': 40023}}
+RECORD = {'provisioning': {'image_id': tg.IMAGE_ID, 'egress_falsification': True},
+          'ports': {'ssh': 40022, 'qmp': 40023}}
 
 
 class Listener(http.server.ThreadingHTTPServer):
@@ -252,6 +253,20 @@ class ProbeRun(unittest.TestCase):
         ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
         with self.assertRaisesRegex(guest.Refused, 'live_custody_probe'):
             guest.custody_probe(ctx, 'g1')
+
+    def test_an_instance_without_the_egress_falsification_is_refused_before_any_attempt(self):
+        """Step (3) takes job-access-probe's verdict, FAIL by design on an ordinary provisioned guest (its
+        route-present egress falsification step is not available there): such an instance is refused before step
+        (5) reads a credential or dispatches an attempt (E-01.3.3 revalidation, 2026-11-15)."""
+        ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
+        called = []
+        for provisioning in ({'image_id': tg.IMAGE_ID}, {'image_id': tg.IMAGE_ID, 'egress_falsification': False}):
+            with self.subTest(provisioning=provisioning),                     mock.patch.object(guest, 'running_instance',
+                                      return_value=(None, dict(RECORD, provisioning=provisioning))):
+                with self.assertRaisesRegex(guest.Refused, '--egress-falsification'):
+                    guest.custody_probe(ctx, 'g1', attempts_fn=called.append, channels=lambda rec: (self.api, None),
+                                        inspect_fn=called.append, job_access_fn=called.append)
+        self.assertEqual((called, self.api_calls), ([], []))
 
     def test_a_2xx_on_an_outer_route_is_a_stop(self):
         self.server.admit.add('*')  # every outer route answers 2xx

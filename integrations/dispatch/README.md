@@ -788,8 +788,9 @@ its own. **Not yet verified** live.
 
 The custody probe (prepared, **not run**) runs from
 [`tests/live_custody_probe.py`](tests/live_custody_probe.py), which drives `tools/guest.py`'s
-`custody_probe` (its decision rule, `CUSTODY_PROBE_RULE`, is fixed before any run) and supplies its
-step (5): one `implement` and one `review` attempt dispatched over this transport on the fixture
+`custody_probe` (its decision rule, `CUSTODY_PROBE_RULE`, is fixed before any run; it refuses an
+instance not created with `create --provision --egress-falsification`, since step (3) takes
+`job-access-probe`'s verdict) and supplies its step (5): one `implement` and one `review` attempt dispatched over this transport on the fixture
 with the real declaration less exactly one key, the `implement` stage's D1 template pin (E-05.2;
 [`tests/declaration_support.py`](tests/declaration_support.py), the engineering manager's ruling
 of 2026-11-15; the step's record quotes the derivation as `declaration_derivation`, and the live

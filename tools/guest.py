@@ -16123,8 +16123,9 @@ def custody_verdict(steps, stop_conditions):
 
 def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, inspect_fn=None,
                   job_access_fn=None, ssh_fn=None):
-    """custody-probe (plan leaf E-01.3.3; PREPARED, NOT RUN) on a running provisioned instance, under
-    CUSTODY_PROBE_RULE, fixed before any run. ``attempts_fn(transport)`` runs the dispatch chain for one implement
+    """custody-probe (plan leaf E-01.3.3; PREPARED, NOT RUN) on a running instance created with
+    ``create --provision --egress-falsification`` (refused otherwise: step (3) takes job-access-probe's verdict),
+    under CUSTODY_PROBE_RULE, fixed before any run. ``attempts_fn(transport)`` runs the dispatch chain for one implement
     and one review attempt over the dispatch module's live transport and delivers each stage's token
     (integrations/dispatch/tests/live_custody_probe.py supplies it, with a credential provider that refuses every
     write); it returns {'records': [...], 'fingerprints': {role: fp}, 'refused': [...], 'provider_writes': n}. In
@@ -16139,6 +16140,12 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
     _, record = running_instance(ctx, name)
     if not record.get('provisioning'):
         raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    if record['provisioning'].get('egress_falsification') is not True:
+        # Step (3) takes job-access-probe's verdict, which is FAIL by design on an ordinary provisioned guest (its
+        # route-present egress falsification step is not available there): refused before step (5) reads a
+        # credential or dispatches an attempt (E-01.3.3 revalidation, 2026-11-15)
+        raise Refused('REFUSED', f'{name} was not created with create --provision --egress-falsification: step (3) '
+                      "takes job-access-probe's verdict, which needs its route-present egress falsification step")
     out_file = None
     if out_path:
         out_file = Path(out_path).resolve()

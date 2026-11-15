@@ -1344,8 +1344,9 @@ defaults them.
   [`evidence/E-01.4.3-start-race.md`](../evidence/E-01.4.3-start-race.md).
 
 - `custody_probe` (plan leaf E-01.3.3; **prepared, not run**) checks the dispatcher's custody
-  on a running provisioned guest under its decision rule, fixed before any run
-  (`CUSTODY_PROBE_RULE`). It runs from
+  on a running guest created with `create --provision --egress-falsification` (another instance
+  is refused: step (3) takes `job-access-probe`'s verdict, which needs that falsification step)
+  under its decision rule, fixed before any run (`CUSTODY_PROBE_RULE`). It runs from
   [`integrations/dispatch/tests/live_custody_probe.py`](../integrations/dispatch/tests/live_custody_probe.py)
   (`--profile <dir> --state-dir <dir> --name <name> [--out <file>] [--rotate-report <file>]`),
   which supplies the dispatch chain; there is no Task target. Its steps: (5) one `implement`
