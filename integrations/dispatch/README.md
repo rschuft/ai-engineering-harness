@@ -67,7 +67,8 @@ The checks run in this order, and the first failing one refuses:
    runtime only, caps within the ceilings, the declared mounts; below);
 7a. the pin's agent assignment (E-05.3, `read_assignment`; [below](#agent-assignment-plan-leaf-e-053)),
    read at the pinned commit of the pin's catalog repository: its sha256 the pin's
-   `manifest_sha256`, its shape `agent-assignment/v1` for this pin, no Skill;
+   `manifest_sha256`, its shape `agent-assignment/v1` for this pin, no Skill, and its create
+   template the one the profile admits for the stage (`CATALOG_TEMPLATE_NOT_ADMITTED`);
 8. the Work: the repository's Backlog.md lists it, and Backlog.md's own readiness
    (`planning_readiness.read_readiness`, P-02.2) reports it ready;
 9. the design: every OpenSpec source pointer of the task resolves in git, all of them pin
@@ -1199,9 +1200,10 @@ A catalog pin `{id, repository, commit, manifest_sha256}` names one file: the ag
 `catalog/assignments/<id>.json` at `commit` of the catalog repository `repository`. Decision 0019
 point 1 places the harness runtime's agent-assignment manifests in this repository's `catalog/`, then
 in the protected Gitea catalog (A-01.1); until then the one catalog repository is this one, by the id
-`ai-engineering-harness` (`CATALOG_REPOSITORY`). The resolver reads the committed blob at the pinned
-commit through the repository-access module (`GitCatalogSource`), never a work tree, after the profile
-and before the Work:
+`ai-engineering-harness` (`CATALOG_REPOSITORY`). The resolver reads the committed tree entry and blob at
+the pinned commit through the repository-access module (`GitCatalogSource`, under the planning adapter's
+configuration policy: a replacement ref, a missing or corrupt object is unavailable), never a work tree,
+after the profile and before the Work:
 
 ```json
 {"format": "ai-engineering-harness/catalog/agent-assignment/v1", "id": "d1-implement",
@@ -1217,19 +1219,28 @@ and before the Work:
 | `CATALOG_SOURCE_UNAVAILABLE` | no catalog source for the pin's repository, or it could not be read |
 | `CATALOG_MANIFEST_MISSING` | the pinned commit, or the assignment at it, is absent |
 | `CATALOG_MANIFEST_DRIFTED` | the assignment's bytes at the pinned commit do not have the pin's `manifest_sha256` (checked before anything in it is believed) |
-| `CATALOG_MANIFEST_INVALID` | not strict JSON of `agent-assignment/v1` with exactly its keys, its `id` not the pin's; a path or digest outside its grammar; a named file (`provider`, `create_template`) not a blob at the pinned commit with the sha256 it names; the provider file not the registry entry of the named `acp_server` |
+| `CATALOG_MANIFEST_INVALID` | not strict JSON of `agent-assignment/v1` with exactly its keys, its `id` not the pin's; a path or digest outside its grammar; the assignment or its provider not a regular file (mode `100644`: a symbolic link, an executable or a submodule entry is refused); the provider not under `integrations/dispatch/qualification/`, not at the pinned commit with the sha256 it names, or not an `acp-registry-extract/v1` of the named `acp_server` |
 | `CATALOG_SKILL_NOT_QUALIFIED` | `skills` names a Skill: none is assigned before A-01.1 qualifies a Skill catalog, so none is materialized |
+| `CATALOG_TEMPLATE_NOT_ADMITTED` | the assignment's `create_template` (path and sha256) is not the template the resolved profile admits for the request's stage: its `stage_create_template` for that stage, its F-04.2 fixture for any other (`admission_policy`'s `create_template`) |
 
 An unpinned assignment is refused earlier: no pin named (`CATALOG_PIN_REQUIRED`), a pin the manifest
 does not approve or bind (`CATALOG_PIN_UNKNOWN`, `CATALOG_PIN_NOT_BOUND`, before any catalog read), no pin
 at all (`NO_APPROVED_CATALOG`). The pin's `manifest_sha256` is the attempt identity's
 `agent_manifest_digest`, and the pin is in `policy_inputs`.
 
-**Not checked by the resolver, disclosed:** that the assignment's `create_template` is the one the
-profile admits for the stage. A binding may approve several profiles with one pin, and the profile's own
-pin and admission (E-05.2) bind the template the create carries. For D1 a test holds them equal
-(`test_agent_assignment.TheCheckedInAssignment`). This leaf does not claim A-01.1's proof (provenance,
-format and security checks, Skill qualification); A-01.1's requirement applies again when it lands.
+**The template.** Since the review of E-05.3 (the engineering manager's ruling R-dev2) the resolver
+requires the assignment's `create_template` to be the template the resolved profile admits for the stage;
+the profile's own pin and admission (E-05.2) then read and digest-check that file. A profile's template
+path lies under its own `profiles/<id>/` directory, so a pin assigns the template of one profile: a
+binding that approves several profiles needs one pin per profile (the tests' fixture derives
+`<pin>-<profile>`). This leaf does not claim A-01.1's proof (provenance, format and security checks, Skill
+qualification); A-01.1's requirement applies again when it lands.
+
+**The live resolution's store** (`resolve_live`, `dispatch:resolve`): the managed integration store is
+opened read-only (SQLite `mode=ro` and `query_only`; its kind and migrations checked, never migrated), so
+an empty or foreign file is never written. No file there is `STORE_MISSING`; a file that is not a current
+store, and every SQLite error (corrupt, locked, also inside the decision verifier), is `STORE_UNAVAILABLE`:
+exit 2, the code leading the message, never a refusal record.
 
 **D1's assignment** is [`catalog/assignments/d1-implement.json`](../../catalog/assignments/d1-implement.json):
 the claude-code ACP registry entry (`acp_qualification.REGISTRY_PATH` at `REGISTRY_SHA256`), the D1

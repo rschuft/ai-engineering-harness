@@ -57,7 +57,8 @@ Check order (the first failing check refuses): the request; the repository; the 
 the stage's binding; the profile's approval and binding; the catalog pin (required); the
 profile file's digest and qualification, and its admission policy (``admission_policy``,
 E-01.2.2: runtime, caps within the ceilings, mounts); the pin's agent assignment at the pinned
-commit of its catalog repository (``read_assignment``, E-05.3: its digest, its shape, no Skill);
+commit of its catalog repository (``read_assignment``, E-05.3: its digest, its shape, no Skill, its
+provider a registry extract) and its create template the one the profile admits for the stage;
 the Work's native readiness; the design pointers and the accepted design revision; the ordinal.
 Every manifest check runs before any file, Backlog.md or git read.
 
@@ -194,10 +195,14 @@ REFUSALS = {
     'CATALOG_MANIFEST_MISSING': 'the pinned commit, or the pin\'s agent assignment at it, is absent from the catalog '
                                 'repository',
     'CATALOG_MANIFEST_DRIFTED': 'the agent assignment at the pinned commit does not have the pin\'s manifest_sha256',
-    'CATALOG_MANIFEST_INVALID': 'the agent assignment is not strict JSON of agent-assignment/v1 for this pin, or a file '
-                                'it names is not at the pinned commit with the sha256 it names',
+    'CATALOG_MANIFEST_INVALID': 'the agent assignment is not strict JSON of agent-assignment/v1 for this pin, it or '
+                                'its provider is not a regular file at the pinned commit, or its provider is not a '
+                                'registry extract under integrations/dispatch/qualification/ with the sha256 it names',
     'CATALOG_SKILL_NOT_QUALIFIED': 'the agent assignment names a Skill: no Skill is assigned before a qualified Skill '
                                    'catalog exists (A-01.1)',
+    'CATALOG_TEMPLATE_NOT_ADMITTED': 'the agent assignment\'s create template (path and sha256) is not the template '
+                                     'the resolved profile admits for the request\'s stage (its stage create '
+                                     'template, or its F-04.2 fixture for a stage without one)',
     'PROFILE_MISSING': 'the approved profile has no readable profile.json',
     'PROFILE_DRIFTED': 'the profile.json bytes no longer have the approved sha256',
     'PROFILE_INVALID': 'the profile.json is not this profile\'s profile/v1 declaration',
@@ -756,37 +761,77 @@ ASSIGNMENT_KEYS = ('format', 'id', 'provider', 'create_template', 'skills')
 # The catalog repository the live resolver reads: this harness repository (decision 0019 point 1), by this id.
 CATALOG_REPOSITORY = 'ai-engineering-harness'
 CATALOG_PATH_RE = re.compile(r'[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*')
+# The provider adapter's registry entry: an extract of the pinned OpenHands ACP registry (acp_qualification.py's
+# REGISTRY_FORMAT, repeated here so that this module loads no qualification or inference module; a test asserts
+# equality), kept under REGISTRY_DIR.
+REGISTRY_EXTRACT_FORMAT = 'ai-engineering-harness/dispatch/acp-registry-extract/v1'
+REGISTRY_DIR = 'integrations/dispatch/qualification/'
+REGULAR_FILE_MODE = 0o100644
 
 
 class CatalogUnavailable(Exception):
     """A catalog source could not be read (not: the commit or file is absent, which is None)."""
 
 
+class CatalogEntryNotRegular(Exception):
+    """The tree entry at the path is not a regular, non-executable file (mode 100644): a symbolic link, an executable,
+    a submodule or a tree."""
+
+
 class CatalogSource(Protocol):
     """One catalog repository, read only, by commit."""
 
     def read(self, commit: str, path: str) -> bytes | None:
-        """The bytes of the blob at PATH of COMMIT, or None when the repository has no such commit or no blob
-        there. Raises CatalogUnavailable when the repository cannot be read."""
+        """The bytes of the regular file at PATH of COMMIT, or None when the repository has no such commit or no
+        entry there. Raises CatalogEntryNotRegular for an entry of another mode, CatalogUnavailable when the
+        repository cannot be read (an object it names is missing or corrupt included)."""
 
 
 class GitCatalogSource:
-    """A catalog repository read through the planning adapter's ``Git`` (the shared repository-access module,
-    decision 0014): the committed blob at the pinned commit, never the work tree."""
+    """A catalog repository read through the shared repository-access module (decision 0014), opened under the
+    planning adapter's configuration policy (``planning_adapter.open_project``): the commit's tree entry and its
+    blob, never the work tree. A replacement ref, a corrupt or missing object is CatalogUnavailable."""
 
     def __init__(self, project):
         self.project = Path(project)
 
     def read(self, commit: str, path: str) -> bytes | None:
+        directory, _, name = path.rpartition('/')
+        if not directory or not name:
+            raise ValueError(f'a catalog path names a file below a directory: {path!r}')
         failure = None
         try:
-            git = planning.Git(self.project)
-            with git.session():
-                if git.commit(commit) != commit or git.object_type(commit, path) != 'blob':
-                    return None
-                return git.blob(commit, path)
-        except (planning.PlanningError, planning.CannotRun, OSError) as exc:
+            repository = planning.open_project(self.project)
+        except planning.CannotRun as exc:
+            raise CatalogUnavailable(f'{self.project}: {exc}') from None
+        try:
+            if repository.commit(commit) != commit:
+                return None
+            tree = repository.read(f'{commit}:{directory}')
+            if tree is None or tree[1] != 'tree':
+                return None
+            dulwich = planning.repository_access.dulwich_modules()
+            try:
+                parsed = dulwich.objects.parse_tree(tree[2], len(commit) // 2)  # binary id length: 20 or 32
+                entries = {entry_name: (mode, oid) for entry_name, mode, oid in parsed}
+            except Exception as exc:  # noqa: BLE001 - Dulwich's format errors for a tree that does not parse
+                raise ValueError(f'{commit}:{directory} does not parse as a tree ({type(exc).__name__})') from None
+            entry = entries.get(name.encode('utf-8'))
+            if entry is None:
+                return None
+            if entry[0] != REGULAR_FILE_MODE:
+                raise CatalogEntryNotRegular(f'{commit}:{path} has mode {entry[0]:o}, not {REGULAR_FILE_MODE:o}')
+            found = repository.read(entry[1].decode('ascii'))
+            if found is None or found[1] != 'blob':
+                failure = f'{commit}:{path} names the object {entry[1].decode("ascii")}, which the repository lacks'
+            else:
+                return found[2]
+        except planning.repository_access.RepositoryError as exc:
             failure = f'{type(exc).__name__}: {getattr(exc, "code", exc)}'
+        except (ValueError, OSError) as exc:  # a tree that does not parse (Dulwich's errors are ValueErrors)
+            failure = f'{type(exc).__name__}: {exc}'
+        finally:
+            repository.close()
         raise CatalogUnavailable(f'{self.project}: {failure}')
 
 
@@ -811,41 +856,50 @@ def _is_catalog_path(path) -> bool:
 def read_assignment(pin_entry: dict, catalog_sources: Callable[[str], CatalogSource | None]) -> dict:
     """The agent assignment PIN_ENTRY pins (E-05.3), checked, or a refusal. In this order:
 
-    * the pin's catalog repository has a source (CATALOG_SOURCE_UNAVAILABLE; also a source that fails to read);
-    * ``catalog/assignments/<pin id>.json`` is a blob at the pinned commit (CATALOG_MANIFEST_MISSING; also an absent
-      commit);
+    * the pin's catalog repository has a source (CATALOG_SOURCE_UNAVAILABLE; also a source that fails to read, or an
+      object of the commit that is missing or corrupt);
+    * ``catalog/assignments/<pin id>.json`` is an entry at the pinned commit (CATALOG_MANIFEST_MISSING; also an
+      absent commit), a regular file (CATALOG_MANIFEST_INVALID: a symbolic link, an executable or a submodule);
     * its bytes have the pin's ``manifest_sha256`` (CATALOG_MANIFEST_DRIFTED);
     * it is strict JSON of ``agent-assignment/v1`` with exactly its keys: ``format``, ``id`` (the pin's id),
-      ``provider`` (``{path, sha256, acp_server}``: the provider adapter's registry entry), ``create_template``
-      (``{path, sha256}``) and ``skills`` (a list) (CATALOG_MANIFEST_INVALID);
+      ``provider`` (``{path, sha256, acp_server}``: the provider adapter's registry entry, under REGISTRY_DIR),
+      ``create_template`` (``{path, sha256}``) and ``skills`` (a list) (CATALOG_MANIFEST_INVALID);
     * ``skills`` is empty (CATALOG_SKILL_NOT_QUALIFIED): no Skill is assigned, and so none is materialized, before
       A-01.1 qualifies one;
-    * each file it names is a blob at the same commit with the sha256 it names, and the registry entry's
-      ``acp_server`` is the one named (CATALOG_MANIFEST_INVALID).
+    * the provider file is a regular file at the same commit with the sha256 named, and a registry extract
+      (``acp-registry-extract/v1``) of the named ``acp_server`` (CATALOG_MANIFEST_INVALID).
 
-    Nothing is written. Whether the assigned template is the one the profile admits for the stage is the profile's
-    pin and admission's (E-05.2), not checked here: a binding may approve several profiles with one pin."""
+    Nothing is written. ``resolve`` then requires ``create_template`` to be the template the resolved profile admits
+    for the stage (CATALOG_TEMPLATE_NOT_ADMITTED): the profile's pin and admission read and digest-check that file."""
     pin, repository, commit, approved = (pin_entry['id'], pin_entry['repository'], pin_entry['commit'],
                                          pin_entry['manifest_sha256'])
     where = {'catalog_pin': pin, 'repository': repository, 'commit': commit}
+    path = assignment_path(pin)
     source = catalog_sources(repository)
     if source is None:
         raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'no catalog source for {repository!r}', **where)
 
-    def read(path: str) -> bytes | None:
-        failure = None
+    def invalid(detail: str):
+        return DispatchRefused('CATALOG_MANIFEST_INVALID', f'{repository}@{commit}:{path}: {detail}', path=path,
+                               **where)
+
+    def read(name: str) -> bytes | None:
+        failure = not_regular = None
         try:
-            raw = source.read(commit, path)
+            raw = source.read(commit, name)
+        except CatalogEntryNotRegular as exc:
+            not_regular = str(exc)
         except (CatalogUnavailable, OSError) as exc:
             failure = f'{type(exc).__name__}: {exc}'
+        if not_regular is not None:
+            raise invalid(f'{name} is not a regular file ({not_regular})')
         if failure is not None:
-            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{path}: {failure}', **where)
+            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{name}: {failure}', **where)
         if raw is not None and not isinstance(raw, bytes):
-            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{path}: the catalog source '
+            raise DispatchRefused('CATALOG_SOURCE_UNAVAILABLE', f'{repository}@{commit}:{name}: the catalog source '
                                   'returned no bytes', **where)
         return raw
 
-    path = assignment_path(pin)
     raw = read(path)
     if raw is None:
         raise DispatchRefused('CATALOG_MANIFEST_MISSING', f'{repository}@{commit} has no {path}', path=path, **where)
@@ -853,11 +907,6 @@ def read_assignment(pin_entry: dict, catalog_sources: Callable[[str], CatalogSou
     if digest != approved:
         raise DispatchRefused('CATALOG_MANIFEST_DRIFTED', f'{repository}@{commit}:{path} has sha256 {digest}, pinned '
                               f'{approved}', path=path, actual=digest, approved=approved, **where)
-
-    def invalid(detail: str):
-        return DispatchRefused('CATALOG_MANIFEST_INVALID', f'{repository}@{commit}:{path}: {detail}', path=path,
-                               **where)
-
     try:
         assignment = _strict_loads(raw.decode('utf-8'))
     except ValueError as exc:  # UnicodeDecodeError is a ValueError
@@ -877,25 +926,26 @@ def read_assignment(pin_entry: dict, catalog_sources: Callable[[str], CatalogSou
         if not _is_catalog_path(named['path']) or not isinstance(named['sha256'], str) \
                 or not SHA256_RE.fullmatch(named['sha256']):
             raise invalid(f'{name} does not name a repository-relative path and a sha256')
+    if not provider['path'].startswith(REGISTRY_DIR):
+        raise invalid(f'provider {provider["path"]} is not a registry extract under {REGISTRY_DIR}')
     if not isinstance(skills, list):
         raise invalid('skills is not a list')
     if skills:
         raise DispatchRefused('CATALOG_SKILL_NOT_QUALIFIED', f'{repository}@{commit}:{path} names {len(skills)} '
                               'Skill(s); none is assigned before A-01.1 qualifies a Skill catalog', path=path, **where)
-    named_bytes = {}
-    for name, named in (('provider', provider), ('create_template', template)):
-        found = read(named['path'])
-        if found is None:
-            raise invalid(f'{name} {named["path"]} is not at the pinned commit')
-        if hashlib.sha256(found).hexdigest() != named['sha256']:
-            raise invalid(f'{name} {named["path"]} at the pinned commit does not have the sha256 it names')
-        named_bytes[name] = found
+    found = read(provider['path'])
+    if found is None:
+        raise invalid(f'provider {provider["path"]} is not at the pinned commit')
+    if hashlib.sha256(found).hexdigest() != provider['sha256']:
+        raise invalid(f'provider {provider["path"]} at the pinned commit does not have the sha256 it names')
     try:
-        registry = _strict_loads(named_bytes['provider'].decode('utf-8'))
+        registry = _strict_loads(found.decode('utf-8'))
     except ValueError:
         registry = None
-    if not isinstance(registry, dict) or registry.get('acp_server') != provider['acp_server']:
-        raise invalid(f'the provider registry entry {provider["path"]} is not the {provider["acp_server"]!r} entry')
+    if not isinstance(registry, dict) or registry.get('format') != REGISTRY_EXTRACT_FORMAT \
+            or registry.get('acp_server') != provider['acp_server']:
+        raise invalid(f'the provider {provider["path"]} is not the {REGISTRY_EXTRACT_FORMAT} of '
+                      f'{provider["acp_server"]!r}')
     return assignment
 
 
@@ -1174,7 +1224,12 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
 
     profile_digest, declared = _check_profile(profile, profile_entry['sha256'], read_profile)
     admission = admission_policy(declared, profile, stage)
-    read_assignment(pin_entry, catalog_sources)  # E-05.3: the pinned agent assignment, at its pinned commit
+    assignment = read_assignment(pin_entry, catalog_sources)  # E-05.3: the pinned agent assignment, at its commit
+    if assignment['create_template'] != admission['create_template']:
+        raise DispatchRefused('CATALOG_TEMPLATE_NOT_ADMITTED', f'{pin!r} assigns the create template '
+                              f'{assignment["create_template"]}; {profile} admits {admission["create_template"]} for '
+                              f'{stage}', catalog_pin=pin, profile=profile, stage=stage,
+                              assigned=assignment['create_template'], admitted=admission['create_template'])
 
     source = work_sources(repository)
     if source is None:
@@ -3124,8 +3179,43 @@ RESOLUTION_FORMAT = 'ai-engineering-harness/dispatch/resolution-report/v1'
 
 
 class LiveUnavailable(Exception):
-    """The live resolution could not run: no integration store at its managed location, or it could not be opened
-    as a current one."""
+    """The live resolution could not run, with a stable code (LIVE_UNAVAILABLE): no integration store at its
+    managed location, or a file there that is not a current integration store or could not be read."""
+
+    def __init__(self, code: str, detail: str):
+        if code not in LIVE_UNAVAILABLE:
+            raise ValueError(f'unknown code {code!r}')
+        self.code, self.detail = code, detail
+        super().__init__(f'{code}: {detail}')
+
+
+LIVE_UNAVAILABLE = {
+    'STORE_MISSING': 'no integration store file at its managed location: nothing was promoted there',
+    'STORE_UNAVAILABLE': 'the file at the store\'s managed location is not a current integration store (empty, not a '
+                         'database, another store kind, pending migrations) or could not be read (corrupt, locked)',
+}
+
+
+def _open_read_only_store(path: Path):
+    """(connection, IntegrationStore) of the existing store file PATH on a connection opened with SQLite's ``mode=ro``
+    and ``query_only`` (``storecore.open_read_only``, as integrations/lineage and integrations/gitea read it): its
+    kind and migrations are checked as they are (``storecore.check_current``), never migrated, and the file is never
+    written (SQLite may create or update the ``-wal`` and ``-shm`` sidecars of a database in WAL mode, as for any
+    reader). LiveUnavailable STORE_UNAVAILABLE otherwise."""
+    import sqlite3
+    failure, conn = None, None
+    try:
+        conn = store.storecore.open_read_only(path)
+        conn.execute('PRAGMA query_only = ON')
+        if conn.execute('PRAGMA query_only').fetchone()[0] != 1:
+            raise store.StoreError('the connection did not take query_only')
+        store.storecore.check_current(conn, store.KIND)
+        return conn, store.IntegrationStore(conn, path)
+    except (store.StoreError, sqlite3.Error) as exc:
+        failure = f'{path}: {type(exc).__name__}: {exc}'
+    if conn is not None:
+        conn.close()
+    raise LiveUnavailable('STORE_UNAVAILABLE', failure)
 
 
 def live_store_path(res) -> Path:
@@ -3139,25 +3229,43 @@ def resolve_live(request, *, res, work_source: WorkSource,
     """(ResolvedInputs, ApprovedInputs) of REQUEST resolved under the live manifest of RES (E-05.3), as the
     dispatcher resolves it, with nothing reserved; or DispatchRefused. The manifest is ``manifest_path(res)``'s,
     loaded only through ``load_manifest`` with the decision verifier over the managed integration store
-    (``live_store_path``), which must exist and be current: it is never created or migrated here
-    (LiveUnavailable). WORK_SOURCE serves the request's repository and no other; the profile, the catalog pin's
-    agent assignment and the ordinal come from READ_PROFILE, CATALOG_SOURCES and the store's claims."""
+    (``live_store_path``), which must exist and be current; it is opened read-only and never created, migrated or
+    written (LiveUnavailable, with its code: STORE_MISSING, or STORE_UNAVAILABLE for a file that is not a current
+    store and for every SQLite error, the verifier's included). WORK_SOURCE serves the request's repository and no
+    other; the profile, the catalog pin's agent assignment and the ordinal come from READ_PROFILE, CATALOG_SOURCES
+    and the store's claims."""
+    import sqlite3
     store_path = live_store_path(res)
     if not store_path.is_file():
-        raise LiveUnavailable(f'no integration store at {store_path}: no promotion was recorded there')
+        raise LiveUnavailable('STORE_MISSING', f'no integration store file at {store_path}')
     decisions = _load('input_decisions', REPO / 'integrations' / 'owner' / 'input_decisions.py')
     repository = request.get('repository') if isinstance(request, Mapping) else None
+    conn, integration_store = _open_read_only_store(store_path)
+    verifier, store_failures = decisions.verifier(integration_store), []
+
+    def verify(*args):
+        try:
+            return verifier(*args)
+        except sqlite3.Error as exc:  # load_manifest reads any verifier failure as DECISION_RECORD_INVALID
+            store_failures.append(exc)
+            raise
+
     failure = None
     try:
-        with store.open_store(store_path, apply_migrations=False) as integration_store:
-            manifest = load_manifest(manifest_path(res), decisions=decisions.verifier(integration_store))
-            resolved = resolve(request, manifest=manifest, next_ordinal=store_next_ordinal(integration_store),
-                               work_sources=lambda name: work_source if name == repository else None,
-                               read_profile=read_profile, catalog_sources=catalog_sources)
-    except store.StoreError as exc:
-        failure = f'the integration store at {store_path}: {type(exc).__name__}: {exc}'
+        manifest = load_manifest(manifest_path(res), decisions=verify)
+        resolved = resolve(request, manifest=manifest, next_ordinal=store_next_ordinal(integration_store),
+                           work_sources=lambda name: work_source if name == repository else None,
+                           read_profile=read_profile, catalog_sources=catalog_sources)
+    except DispatchRefused:
+        if not store_failures:
+            raise
+        failure = f'{type(store_failures[0]).__name__}: {store_failures[0]}'
+    except (store.StoreError, sqlite3.Error) as exc:
+        failure = f'{type(exc).__name__}: {exc}'
+    finally:
+        conn.close()
     if failure is not None:
-        raise LiveUnavailable(failure)
+        raise LiveUnavailable('STORE_UNAVAILABLE', f'{store_path}: {failure}')
     return resolved, manifest
 
 
@@ -3181,7 +3289,7 @@ def _resolve_command(args, environ: Mapping[str, str] | None) -> int:
         print(f'REFUSED {refusal.code}: {refusal.detail}', file=sys.stderr)
         return 1
     except (paths.PathsError, planning.CannotRun, LiveUnavailable) as exc:
-        return cannot(str(exc))
+        return cannot(str(exc))  # a LiveUnavailable's text leads with its code
     print(json.dumps({'format': RESOLUTION_FORMAT, 'resolved': resolved.to_json(), 'approval': manifest.approval},
                      indent=2))
     return 0

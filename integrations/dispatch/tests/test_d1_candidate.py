@@ -76,13 +76,19 @@ class TheD1Candidate(unittest.TestCase):
                          'a revised candidate, and have planning promote it again')
 
     def test_the_assignment_at_the_pinned_commit_passes_the_resolvers_check(self):
+        """In a clone holding the pinned commit; skipped, with the reason, only where the pinned commit cannot be in
+        the copy: no git history, or a shallow or partial clone without it (review N3). Any other failure is one."""
         if not (REPO / '.git').exists():
             self.skipTest('this copy has no git history: the pinned commit cannot be read here')
+        if di.planning.Git(REPO).commit(self.pin['commit']) != self.pin['commit']:
+            self.skipTest(f'the pinned commit {self.pin["commit"]} is not in this clone (shallow or partial): its '
+                          'assignment cannot be read here')
         assignment = di.read_assignment(self.pin, di.harness_catalog_sources)
         self.assertEqual(assignment['skills'], [])
         declared = json.loads((REPO / 'profiles' / PROFILE / 'profile.json').read_bytes())
-        template = declared['provisioning']['agent_server'][di.STAGE_TEMPLATE_KEY]
-        self.assertEqual(assignment['create_template'], {'path': template['path'], 'sha256': template['sha256']})
+        # The resolver's own check (R-dev2): the template the profile admits for the binding's stage.
+        self.assertEqual(assignment['create_template'], di.admission_policy(declared, PROFILE, 'implement')
+                         ['create_template'])
 
 
 if __name__ == '__main__':

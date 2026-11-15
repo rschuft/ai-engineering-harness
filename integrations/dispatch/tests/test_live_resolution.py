@@ -16,6 +16,7 @@ from pathlib import Path
 import hashlib
 import importlib.util
 import json
+import sqlite3
 import sys
 import unittest
 from unittest import mock
@@ -43,6 +44,11 @@ def _load(name, path):
 cs = _load('dispatch_catalog_support', HERE / 'catalog_support.py')
 REAL = 'strong-windows-qemu-whpx'
 REAL_SHA = hashlib.sha256((REPO / 'profiles' / REAL / 'profile.json').read_bytes()).hexdigest()
+# The checked-in D1 assignment, whose create template is the one REAL admits for implement (R-dev2).
+PIN = 'd1-implement'
+PIN_PATH = f'catalog/assignments/{PIN}.json'
+PIN_BYTES = (REPO / PIN_PATH).read_bytes()
+PIN_SHA = hashlib.sha256(PIN_BYTES).hexdigest()
 OUTCOME_REF = 'outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63'
 
 
@@ -78,20 +84,20 @@ class LiveResolution(fi.Fixture):
         self.ctx = self.context(state_root=Path(str(self.res.paths['state'])), store=self.live_store,
                                 manifest_path=DI.manifest_path(self.res))
         self.catalog = cs.standard()
+        self.catalog.put(cs.CATALOG, cs.PIN_COMMIT, {PIN_PATH: PIN_BYTES})
         git = DI.planning.Git(self.repos.project)
         self.work = Entry(DI.planning.make_pointer(git, fi.CHANGE, 'design.md', self.repos.first).text)
 
     def promote_candidate(self):
-        pin = {'id': 'builder-pin', 'repository': cs.CATALOG, 'commit': cs.PIN_COMMIT,
-               'manifest_sha256': cs.BUILDER_SHA}
+        pin = {'id': PIN, 'repository': cs.CATALOG, 'commit': cs.PIN_COMMIT, 'manifest_sha256': PIN_SHA}
         self.accept()
         self.promote(self.candidate(profiles=[{'id': REAL, 'sha256': REAL_SHA}], catalog_pins=[pin],
                                     bindings=[{'repository': fi.REPOSITORY, 'stage': 'implement',
-                                               'profiles': [REAL], 'catalog_pins': ['builder-pin']}]))
+                                               'profiles': [REAL], 'catalog_pins': [PIN]}]))
 
     def request(self, **changes):
         return {'format': DI.REQUEST_FORMAT, 'work_id': 'TASK-1', 'repository': fi.REPOSITORY, 'stage': 'implement',
-                'profile': REAL, 'catalog_pin': 'builder-pin', **changes}
+                'profile': REAL, 'catalog_pin': PIN, **changes}
 
     def resolve(self, request=None):
         return DI.resolve_live(self.request() if request is None else request, res=self.res, work_source=self.work,
@@ -107,16 +113,16 @@ class LiveResolution(fi.Fixture):
                          ('TASK-1', fi.REPOSITORY, 'implement', 1))
         self.assertEqual(resolved.design_revision, f'openspec:changes/{fi.CHANGE}@{self.repos.first}')
         self.assertEqual((resolved.profile_digest, resolved.catalog_pin, resolved.agent_manifest_digest),
-                         (REAL_SHA, 'builder-pin', cs.BUILDER_SHA))
+                         (REAL_SHA, PIN, PIN_SHA))
         self.assertEqual(resolved.outcome_ref, OUTCOME_REF)
         self.assertEqual((resolved.manifest_version, manifest.version), (1, 1))
-        self.assertEqual(manifest.approving_record('catalog_pins', 'builder-pin')['kind'], 'promote-manifest')
+        self.assertEqual(manifest.approving_record('catalog_pins', PIN)['kind'], 'promote-manifest')
         self.assertEqual(self.attempts(), [])
         self.assertEqual(self.work.reads, 1)
 
     def test_a_refusal_after_the_load_is_the_resolvers(self):
         self.promote_candidate()
-        self.catalog.put(cs.CATALOG, cs.PIN_COMMIT, {'catalog/assignments/builder-pin.json': cs.BUILDER_BYTES + b' '})
+        self.catalog.put(cs.CATALOG, cs.PIN_COMMIT, {PIN_PATH: PIN_BYTES + b' '})
         with self.assertRaises(DI.DispatchRefused) as caught:
             self.resolve()
         self.assertEqual(caught.exception.code, 'CATALOG_MANIFEST_DRIFTED')
@@ -133,12 +139,58 @@ class LiveResolution(fi.Fixture):
             self.resolve()
         self.assertEqual(caught.exception.code, 'MANIFEST_DIGEST_MISMATCH')
 
+    def unavailable(self, code):
+        with self.assertRaises(DI.LiveUnavailable) as caught:
+            self.resolve()
+        self.assertEqual(caught.exception.code, code, caught.exception.detail)
+        self.assertTrue(str(caught.exception).startswith(f'{code}: '))
+        return caught.exception
+
     def test_no_store_at_its_managed_location(self):
         self.live_store.close()
         self.store_path.unlink()
-        with self.assertRaises(DI.LiveUnavailable):
-            self.resolve()
+        self.unavailable('STORE_MISSING')
         self.assertFalse(self.store_path.exists(), 'the store is never created here')
+
+    def test_a_file_that_is_no_current_store_is_unavailable_and_never_written(self):
+        """Review S1 (probe 2): an empty file, a file that is not a database, and another SQLite database are
+        STORE_UNAVAILABLE, and each is byte for byte unchanged after the call."""
+        def foreign(path):
+            conn = sqlite3.connect(str(path))
+            conn.execute('CREATE TABLE other (x)')
+            conn.commit()
+            conn.close()
+
+        self.live_store.close()
+        cases = {'empty': lambda path: path.write_bytes(b''),
+                 'not a database': lambda path: path.write_bytes(b'not a sqlite database at all, 1234567890' * 200),
+                 'another SQLite database': foreign}
+        for name, make in cases.items():
+            with self.subTest(name):
+                for stale in self.store_path.parent.iterdir():
+                    stale.unlink()
+                make(self.store_path)
+                before = self.store_path.read_bytes()
+                self.unavailable('STORE_UNAVAILABLE')
+                self.assertEqual(self.store_path.read_bytes(), before)
+
+    def test_every_sqlite_error_is_unavailable_never_a_refusal(self):
+        """A locked or corrupt store read by the decision verifier (which load_manifest would report as
+        DECISION_RECORD_INVALID) or by the resolver is STORE_UNAVAILABLE."""
+        self.promote_candidate()
+
+        def locked(store):
+            def verify(*args):
+                raise sqlite3.OperationalError('database is locked')
+            return verify
+        with mock.patch.object(fi.I, 'verifier', locked):
+            self.assertIn('OperationalError', self.unavailable('STORE_UNAVAILABLE').detail)
+
+        def malformed(*args):
+            raise sqlite3.DatabaseError('database disk image is malformed')
+        with mock.patch.object(DI.store.IntegrationStore, 'claims', malformed):
+            self.assertIn('DatabaseError', self.unavailable('STORE_UNAVAILABLE').detail)
+        self.assertEqual(self.resolve()[0].catalog_pin, PIN)  # the same store, read again, resolves
 
     def test_the_command_line(self):
         request = self.dir / 'request.json'
@@ -154,6 +206,12 @@ class LiveResolution(fi.Fixture):
             self.assertEqual(DI.main(['resolve', '--request', str(self.dir / 'absent.json'), '--project', '.',
                                       '--backlog', 'backlog']), 2)
             self.live_store.close()
+            self.store_path.write_bytes(b'')
+            with mock.patch('sys.stderr') as err:
+                self.assertEqual(DI.main(argv), 2)  # never 1: no refusal record for a store that cannot be read
+            written = ''.join(call.args[0] for call in err.write.call_args_list)
+            self.assertTrue(written.startswith('ERROR STORE_UNAVAILABLE: '), written)
+            self.assertEqual(self.store_path.read_bytes(), b'')
             self.store_path.unlink()
             self.assertEqual(DI.main(argv), 2)
 

@@ -241,6 +241,7 @@ class Fixture(unittest.TestCase):
         self.ordinal_calls = []
         self.sources = {'demo-app': CountingSource(di.PlanningWorkSource(SnapshotBacklog('unblocked'), self.git))}
         self.catalog = cs.standard()
+        self.catalog.entry_not_regular = di.CatalogEntryNotRegular
         # One git read session per test (plan leaf F-09.4): the test's dispatch reads share one
         # batch reader. The design repository never changes during a test, and the session (with
         # its memo) ends with the test, so nothing is kept for the next one.
@@ -270,15 +271,64 @@ class Fixture(unittest.TestCase):
                  'catalog_pins': ['reviewer-pin']}],
         }
 
-    def write_manifest(self, data, name='approved-inputs.json'):
+    def write_manifest(self, data, name='approved-inputs.json', assign=True):
+        """DATA written and loaded; with ASSIGN, first ``assign``ed (every profile of a binding gets a pin whose
+        assignment is the template it admits for the binding's stage)."""
         path = self.case / name
-        path.write_bytes(json.dumps(data, indent=2).encode('utf-8'))
+        path.write_bytes(json.dumps(self.assign(data) if assign else data, indent=2).encode('utf-8'))
         return di.load_manifest(path, decisions=fixture_verifier)
 
+    def admitted_template(self, profile, stage):
+        """The create template PROFILE's declaration (this fixture's profiles, else the checked-in ones) admits for
+        STAGE, or None when it declares no admissible policy (the resolver refuses such a profile before it reads a
+        catalog pin)."""
+        for root in (self.profiles, REPO / 'profiles'):
+            try:
+                declared = json.loads(di.read_profile_file(profile, profiles_root=root))
+                return di.admission_policy(declared, profile, stage)['create_template']
+            except FileNotFoundError:
+                continue
+            except (ValueError, TypeError, AttributeError, di.DispatchRefused):
+                return None
+        return None
+
+    def assign(self, data):
+        """E-05.3 (R-dev2): an assignment names the one template its profile admits for the stage. For each standard
+        pin (builder-pin, reviewer-pin) of a binding, and each profile of that binding, the pin cs.assigned_pin
+        names carries an assignment of the template that profile admits there, written to the fixture's catalog:
+        the standard pin itself for strong-test-profile, ``<pin>-<profile>`` (added to the manifest and the binding)
+        for every other. A pin whose digest a test changed keeps it (and so do its derived pins): the test means
+        that digest."""
+        data = copy.deepcopy(data)
+        pins = {p['id']: p for p in data['catalog_pins']}
+        for binding in data['bindings']:
+            for pin_id in list(binding['catalog_pins']):
+                base_pin = pins.get(pin_id)
+                if pin_id not in cs.STANDARD_PINS or base_pin is None:
+                    continue
+                automatic = base_pin['manifest_sha256'] == cs.STANDARD_SHA[pin_id]
+                for profile in binding['profiles']:
+                    target = cs.assigned_pin(pin_id, profile)
+                    template = self.admitted_template(profile, binding['stage']) or cs.FIXTURE_TEMPLATE
+                    raw = cs.assignment(target, template=template)
+                    self.catalog.put(cs.CATALOG, cs.PIN_COMMIT, {di.assignment_path(target): raw})
+                    digest = hashlib.sha256(raw).hexdigest() if automatic else base_pin['manifest_sha256']
+                    if target == pin_id:
+                        base_pin['manifest_sha256'] = digest
+                    elif target not in pins:
+                        pins[target] = dict(base_pin, id=target, manifest_sha256=digest)
+                        data['catalog_pins'].append(pins[target])
+                    if target not in binding['catalog_pins']:
+                        binding['catalog_pins'].append(target)
+        return data
+
     def request(self, **changes):
+        """A request; a standard pin is mapped to the pin of the request's profile (cs.assigned_pin)."""
         request = {'format': di.REQUEST_FORMAT, 'work_id': 'TASK-2', 'repository': 'demo-app',
                    'stage': 'implement', 'profile': 'strong-test-profile', 'catalog_pin': 'builder-pin'}
         request.update(changes)
+        if 'catalog_pin' in request:
+            request['catalog_pin'] = cs.assigned_pin(request['catalog_pin'], request.get('profile'))
         return request
 
     def next_ordinal(self, *args):
@@ -598,7 +648,12 @@ class SuccessTests(Fixture):
         record = self.resolve_real('strong-windows-qemu-whpx', manifest)
         self.assertEqual((record.profile, record.profile_digest),
                          ('strong-windows-qemu-whpx', hashlib.sha256(raw).hexdigest()))
-        self.assertEqual((record.catalog_pin, record.agent_manifest_digest), ('builder-pin', BUILDER_SHA))
+        # The fixture's pin of this profile assigns the template it admits for implement, its D1 template (E-05.3).
+        pin = cs.assigned_pin('builder-pin', 'strong-windows-qemu-whpx')
+        template = self.admitted_template('strong-windows-qemu-whpx', 'implement')
+        self.assertEqual(template['path'], 'profiles/strong-windows-qemu-whpx/agent-server/d1-create.json')
+        self.assertEqual((record.catalog_pin, record.agent_manifest_digest),
+                         (pin, hashlib.sha256(cs.assignment(pin, template=template)).hexdigest()))
         self.assertEqual(self.ordinal_calls, [('TASK-2', record.design_revision, 'implement')])
 
     def test_the_real_qemu_whpx_profile_without_an_approved_catalog_pin_is_refused(self):
