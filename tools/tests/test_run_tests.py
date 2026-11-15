@@ -156,10 +156,40 @@ class RunnerTests(unittest.TestCase):
                          '? tests, SystemExit: 2')
 
     def test_unknown_suites_and_bad_jobs_cannot_run(self):
-        with mock.patch('sys.stderr', io.StringIO()) as err:
+        with mock.patch('sys.stderr', io.StringIO()) as err, mock.patch('sys.stdout', io.StringIO()):
             self.assertEqual(rt.main(['--suite', 'no-such-suite']), 2)
             self.assertEqual(rt.main(['--jobs', '-1']), 2)
         self.assertIn('unknown suite(s): no-such-suite', err.getvalue())
+
+    def test_the_output_is_encoding_safe(self):
+        # A redirected standard output under -I has the locale's encoding (cp1252 on Windows): the runner writes
+        # UTF-8 instead, with a backslash escape for what UTF-8 cannot encode, never UnicodeEncodeError.
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding='cp1252', newline='\n')
+        self.assertIs(rt.encoding_safe(stream), stream)
+        stream.write('\ufffd \u0661 \ud800\n')
+        stream.flush()
+        self.assertEqual(raw.getvalue(), '\ufffd \u0661 '.encode('utf-8') + b'\\ud800\n')
+        plain = io.StringIO()
+        self.assertIs(rt.encoding_safe(plain), plain)  # no reconfigure: as it is
+
+    def test_main_writes_through_the_encoding_safe_stream(self):
+        raw, err = io.BytesIO(), io.BytesIO()
+        stdout = io.TextIOWrapper(raw, encoding='cp1252')
+        stderr = io.TextIOWrapper(err, encoding='cp1252')
+        seen = {}
+
+        def run(suites, jobs, out):
+            seen['out'] = out
+            out.write('===== tools (exit 0, 0.1 s) =====\ncaf\ufffd\n')
+            out.flush()
+            return 0
+
+        with mock.patch('sys.stdout', stdout), mock.patch('sys.stderr', stderr), mock.patch.object(rt, 'run', run):
+            self.assertEqual(rt.main(['--suite', 'tools']), 0)
+        self.assertIs(seen['out'], stdout)
+        self.assertEqual((stdout.encoding, stderr.encoding), ('utf-8', 'utf-8'))
+        self.assertIn('caf\ufffd'.encode('utf-8'), raw.getvalue())
 
 
 class RealSuitesTests(unittest.TestCase):
@@ -201,6 +231,55 @@ class RealSuitesTests(unittest.TestCase):
             self.assertRegex(text, r'FAIL b +\d+\.\d s  2 tests, FAILED \(failures=1\)')
             self.assertEqual(list((root / 'scratch').iterdir()), [], 'the data roots and logs are removed')
             self.assertEqual(sorted(p.name for p in root.rglob('__pycache__')), [])
+
+    def test_a_redirected_run_survives_output_its_encoding_cannot_hold(self):
+        # The runner's main, in a child process under -I with its standard output redirected to a file: a suite
+        # writes bytes that are not UTF-8, read back as U+FFFD, which cp1252 (Windows' redirected default) cannot
+        # encode. The run ends with its summary and exit 0, its output UTF-8.
+        suite = textwrap.dedent('''\
+            import sys, unittest
+
+            class C(unittest.TestCase):
+                def test_bytes(self):
+                    sys.stdout.flush()
+                    sys.stdout.buffer.write(b'caf\\xe9 \\xd9\\xa1\\n')
+                    sys.stdout.buffer.flush()
+            ''')
+        child = textwrap.dedent('''\
+            import functools, importlib.util, sys
+            from pathlib import Path
+            repo, root = Path(sys.argv[1]), Path(sys.argv[2])
+            spec = importlib.util.spec_from_file_location('run_tests', repo / 'tools' / 'run_tests.py')
+            rt = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(rt)
+
+            class Profiler:
+                class ProfileError(Exception):
+                    pass
+
+                @staticmethod
+                def select_suites(names):
+                    return [('a', 'a/tests')]
+
+            rt._profiler = lambda: Profiler
+            rt.run = functools.partial(rt.run, repo=root, temp_parent=root / 'scratch')
+            sys.exit(rt.main(['--suite', 'a', '--jobs', '1']))
+            ''')
+        with tempfile.TemporaryDirectory(prefix='aieh-run-tests-') as tmp:
+            root = Path(tmp)
+            (root / 'a' / 'tests').mkdir(parents=True)
+            (root / 'a' / 'tests' / 'test_a.py').write_text(suite, encoding='utf-8')
+            (root / 'scratch').mkdir()
+            (root / 'child.py').write_text(child, encoding='utf-8')
+            env = {k: v for k, v in os.environ.items() if k not in ('PYTHONIOENCODING', 'PYTHONUTF8')}
+            with open(root / 'out.log', 'wb') as log:
+                status = subprocess.run([sys.executable, '-I', '-B', str(root / 'child.py'), str(REPO), str(root)],
+                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env,
+                                        timeout=120, creationflags=rt._no_window().no_window_flags()).returncode
+            text = (root / 'out.log').read_bytes().decode('utf-8')
+            self.assertEqual(status, 0, text)
+            self.assertIn('caf�', text)
+            self.assertRegex(text, r'ok   a +\d+\.\d s  1 tests?, OK')
 
 
 if __name__ == '__main__':

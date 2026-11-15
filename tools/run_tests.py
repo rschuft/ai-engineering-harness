@@ -137,7 +137,20 @@ def run(suites, jobs, repo=REPO, python=sys.executable, out=sys.stdout, temp_par
     return 1 if failed else 0
 
 
+def encoding_safe(stream):
+    """STREAM reconfigured to write UTF-8, a character it still cannot encode (a lone surrogate) written as a
+    backslash escape, so that no suite's output ends the run with UnicodeEncodeError. Under ``-I`` a redirected
+    standard output has the locale's encoding (cp1252 on Windows), and a suite's output, read with its undecodable
+    bytes replaced, can hold U+FFFD. A stream without ``reconfigure`` is returned as it is."""
+    reconfigure = getattr(stream, 'reconfigure', None)
+    if reconfigure is not None:
+        reconfigure(encoding='utf-8', errors='backslashreplace')
+    return stream
+
+
 def main(argv=None):
+    out = encoding_safe(sys.stdout)
+    encoding_safe(sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--jobs', type=int, default=0,
                         help='suites at once (default: every suite, at most the processors)')
@@ -153,7 +166,7 @@ def main(argv=None):
         print('could not run: --jobs must be positive', file=sys.stderr)
         return 2
     jobs = args.jobs or max(1, min(len(suites), os.cpu_count() or 1))
-    return run(suites, jobs)
+    return run(suites, jobs, out=out)
 
 
 if __name__ == '__main__':
