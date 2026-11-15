@@ -701,6 +701,19 @@ class ExchangeDeliveryTests(unittest.TestCase):
         self.assertEqual(self.files(), [])
         self.assertNotIn(self.PAYLOAD.hex()[:64], self.host_side(answer))
 
+    def test_a_frame_beside_a_stdout_that_is_not_text_is_withheld(self):
+        """Review A4 N-c (probe_s5's last case): no stdout string, the frame in another field: refused, withheld."""
+        body = {'stdout': None, 'output': framed(self.PAYLOAD)}
+        entry = {'body': body}
+        spec = dict(guest.exchange_delivery(PROFILE, {'part': 'bundle', 'name': 'w.bundle'}), dir=str(self.exchange))
+        namespace = {}
+        probe = guest.API_PROBE
+        exec(probe[:probe.index('# sealed (decision 0015)')].replace('key_path, host, port = sys.argv[1], sys.argv[2], '
+                                                                    'int(sys.argv[3])', ''), namespace)
+        self.assertEqual(namespace['deliver'](spec, entry), {'error': 'PART_ELSEWHERE'})
+        self.assertEqual(body, {'stdout': None, 'output': None})
+        self.assertEqual(self.files(), [])
+
     def test_the_file_appears_whole_and_a_leftover_partial_is_refused(self):
         """Review A4 N-e: the delivery writes <name>.partial and links it to <name>; no .partial remains, and a
         leftover .partial refuses the delivery (never completed, never pulled)."""

@@ -9033,20 +9033,21 @@ PART_BEGIN, PART_END, PART_DONE = 'AIEH-EXCHANGE-PART', 'AIEH-EXCHANGE-END', 'AI
 def deliver(spec, entry):
     value = entry.get('body')
     text = value.get(spec['field']) if isinstance(value, dict) else None
-    if not isinstance(text, str):
+    if not isinstance(value, dict):
         if isinstance(value, str) and (PART_BEGIN in value or PART_END in value):
             entry['body'] = None
         return {'error': 'NO_PART'}
-    # the frame is read from the field alone: a marker in any other field refuses the delivery, withheld
-    elsewhere = [k for k, v in value.items() if k != spec['field']
+    # the frame is read from the field alone, a string: a marker in any other field (or in a field that is not a
+    # string) refuses the delivery and that field is withheld
+    elsewhere = [k for k, v in value.items() if (k != spec['field'] or not isinstance(v, str))
                  and (PART_BEGIN in json.dumps(v) or PART_END in json.dumps(v))]
     for k in elsewhere:
         value[k] = None
     if elsewhere:
-        if PART_BEGIN in text or PART_END in text:
+        if isinstance(text, str) and (PART_BEGIN in text or PART_END in text):
             value[spec['field']] = None
         return {'error': 'PART_ELSEWHERE'}
-    if PART_BEGIN not in text and PART_END not in text:
+    if not isinstance(text, str) or (PART_BEGIN not in text and PART_END not in text):
         return {'error': 'NO_PART'}
     part = re.escape(spec['part'])
     frame = re.compile(r'^%s %s ([0-9a-f]{64}) ([0-9]{1,12})\r?\n((?:[0-9a-f]*\r?\n)*)%s %s\r?$'
