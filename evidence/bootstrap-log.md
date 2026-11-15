@@ -4757,6 +4757,54 @@ push never implies parent acceptance.
   - **Decisions under delegated authority** (engineering manager), for the D1 milestone report:
     - E-05.1's provisioning: the organization `aieh-demo`; the site administrator pushing the initial content C0..C3 inside the one OA-22 (h) act before the collaborators and rules; the fixture's rules plus Actions disabled; no protection auditor; read-back verification as the site administrator.
     - E-05.3: the location `catalog/assignments/` and the format `agent-assignment/v1` (decision 0019 point 1; A-01.1 may supersede them); an assignment's template must be the one the profile admits for the stage (`CATALOG_TEMPLATE_NOT_ADMITTED`; in effect one pin per profile).
+- <a id="d1-planning-acts-2026-11-15"></a>**2026-11-15: D1 planning acts: E-05.1's design acceptance and the D1 manifest promotion (product manager).** Taken in the product manager's own session on the [handoff](#handoff-d1-planning-2026-11-15), as the [commitment](#commitment-d1-2026-11-15) decided ("The design acceptance", "The D1 manifest"). Decision 0020 point 2 refuses both acts to execution. The commitment, its criteria, the leaves and the Owner-actions queue are unchanged.
+  - **Where they ran.** From the harness at `7a0c2fd` on `main` (it contains `135fb94`, `95bf279` and `b385ff1`), under the tools interpreter. They wrote the managed integration store, the delegated decision copies and the live manifest under the managed data root, outside the repository.
+  - **C2's diff, checked before recording** (the commitment's rule). The check was made in a work-tree clone of `aieh-demo/aieh-d1-demo` at C3 `1e2ed198d6290f85b37bba0fb7d238d2645d7587`:
+    - C1 `0f85b72966d7ac158ae357ff659f981678c7a711`: its `openspec/changes/add-slugify/` is byte-identical, file by file (sha256 of each of the four files), to [`D1-demo-design/openspec/changes/add-slugify/`](D1-demo-design/openspec/changes/add-slugify/).
+    - C1 to C2 changes only what the acceptance recorder writes:
+      - `.openspec.yaml` gains `x-outcomes` (O1, outcome `0d07308f-b43c-4907-91a4-170a16a77cbd`);
+      - `proposal.md` gets O1's `authority: accepted` and its `acceptance` reference;
+      - `owner-decisions/e6122e2f-759c-42bc-8b60-4d9cb7fe9507.json` (`accept-objective`) is added; its statement lies inside the Owner's verbatim block of [the direction](#owner-direction-d1-planning-2026-11-15).
+    - `design.md` and the spec are unchanged, so C2 carries the behaviour this commitment accepted (AC1 to AC7). This agrees with [E-05.1's record](E-05.1-demo-work-offline.md), section 9, L5.
+    - C2 to C3 adds only TASK-1's file, outside the change folder.
+  - **P0** (`input_recorder.py status`): `promotion.head` null, `next` 1; nothing failed or unsettled; no design series.
+  - **P1, the design acceptance** (decision 0018 point 3.2; `design delegate`, decided by `agent:product-manager`):
+    - Decision `3d3f2d5e-c914-4e18-a4d3-26c719875fb9` (`delegated-decision/v1`, `accept-design`).
+    - Subject: `aieh-d1-demo`/`add-slugify` at C2 `dd18102dccfcfeac5ea0cd11c40e3e052d11a4b3`; content `sha256:2ad3f1bd408de365c571f6c51bd91b8626641bd7a497e52b766f97c352b280d8`; `supersedes` null.
+    - Delegation read at `7a0c2fd`; decision 0018's blob `sha256:49afb6e9d7c5c4101c162a49c4454c69ee49e395f820723d1bda86eab897bacc`.
+    - Basis `commitment`, link `evidence/bootstrap-log.md#commitment-d1-2026-11-15`.
+    - Receipt `dispatch-inputs/v1/design/aieh-d1-demo/add-slugify/1`: confirmed.
+  - **P2, the candidate.** `integrations/dispatch/candidates/d1-approved-inputs.json` was copied outside the checkout: sha256 `6e6d17f1cd2fbee0f747890c5a0f65678bf3babde4d16ae0e9f6da167e02723d`, version 1. `check-manifest` exit 0, `problems []`.
+    - Its entries are exactly the commitment's five:
+      - repository `aieh-d1-demo`;
+      - design `add-slugify` at C2;
+      - profile `strong-windows-qemu-whpx` at `7d01e62c23fd521c523a08946a9bb65a7c6d74c656fdaed2dffe5045c687a17b`, equal to the checked-in `profile.json` at `7a0c2fd`;
+      - binding (`aieh-d1-demo`, `implement`, that profile, `d1-implement`);
+      - pin `d1-implement`: `catalog/assignments/d1-implement.json` at `135fb94`, sha256 `d06a1fc06f2388558fd8f09a6885f56d8c7ce3c97d838b9613adb3dbeca8be40` as read, `skills []`.
+    - There is no E-01.3.2 entry.
+  - **Containment in the envelope** (the product manager's judgment; decision 0020 point 9.2). Each entry lies inside OA-22 (j) as approved on 2026-11-14 and read in the [standing authorization](#owner-direction-d1-planning-2026-11-15):
+    - the demo repository, and the change named under OA-25 at its accepted commit;
+    - the qualified native profile at its current digest (after E-05.2), and its binding;
+    - the D1 agent assignment, with no Skills.
+    - No entry lies outside it, so no per-act Owner decision is needed.
+  - **P3, the promotion** (decision 0018 point 3.3; `manifest delegate`, decided by `agent:product-manager`):
+    - Decision `802e1e10-72b9-4f6b-b68b-fe5cbd41d172` (`delegated-decision/v1`, `promote-manifest`).
+    - Version 1; digest `sha256:6e6d17f1cd2fbee0f747890c5a0f65678bf3babde4d16ae0e9f6da167e02723d`; `previous` null.
+    - Designs: `aieh-d1-demo`, `add-slugify`, C2, acceptance `3d3f2d5e-c914-4e18-a4d3-26c719875fb9`, sequence 1.
+    - Basis `envelope`, link `evidence/bootstrap-log.md#owner-direction-d1-planning-2026-11-15`, quote "Reconcile the manifest with the current native execution profile and its digest."
+    - Receipt `dispatch-inputs/v1/promotion/1`: confirmed.
+    - The live manifest (`dispatch_inputs.py manifest-path`) reads back at that sha256.
+  - **P4** (`status`):
+    - The promotion head is version 1 (decision `802e1e10…`), `next` 2.
+    - The design series `aieh-d1-demo`/`add-slugify` has head sequence 1 at C2 (decision `3d3f2d5e…`), `next` 2.
+    - Nothing is failed or unsettled.
+  - **Not verified here; disclosed** (decision 0020 point 7):
+    - The recorder does not check who ran the command, or containment, which rests on the judgment above.
+    - Execution's live resolution of TASK-1 under this manifest (E-05.3's last clause) has not run yet.
+  - **Delegated decisions in this entry, for the D1 milestone report:**
+    - the design acceptance of `add-slugify` at C2 (point 3.2);
+    - the D1 manifest's promotion, version 1, and its containment in (j) (point 3.3).
+  - **Handoff to execution.** Execution runs the live resolution of TASK-1 under the promoted manifest (E-05.3's last clause), then E-01.3.3, E-01.3.2, E-05.4 and E-05.5 in its own order. E-05.1's and E-05.3's verdicts are the engineering manager's. There is no question for the Owner.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
