@@ -1565,9 +1565,41 @@
       "findings": ["fd-session-key-not-fine-grained"]
     },
     {
+      "id": "op-as-conversation-message",
+      "name": "Send a conversation its task message",
+      "mechanism": "POST /api/conversations/{id}/events through the Docker runtime's conversation proxy (POST /api/conversations/{conversation_id}/{tail}, tail events): exactly one user text that starts the run",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-unenumerated", "conversation-container"],
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slice A1, built offline, not yet verified live). No dispatcher code sends this call yet (slice A2). tools/guest.py probes keep their own API channel.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.5",
+        "profiles/strong-windows-qemu-whpx/agent-server/routes.json"
+      ],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-conversation-command",
+      "name": "Run a dispatcher-built command in a conversation's container",
+      "mechanism": "POST /api/conversations/{id}/bash/execute_bash_command through the Docker runtime's conversation proxy (tail bash/execute_bash_command): a command only a registered builder of the dispatch module makes, cwd /workspace, a bounded timeout; with the API probe's exchange delivery of one framed part of its output into the guest exchange",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-unenumerated", "conversation-container", "guest-exchange"],
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist and its tail list, routes.json) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; D1 slice A1, built offline, not yet verified live). No dispatcher code sends this call yet (slice A2). tools/guest.py probes keep their own API channel.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.5",
+        "profiles/strong-windows-qemu-whpx/agent-server/routes.json"
+      ],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
       "id": "op-as-unenumerated-routes",
       "name": "Other Agent Server management capabilities",
-      "mechanism": "The key-gated routes of profiles/strong-windows-qemu-whpx/agent-server/routes.json beyond the conversation lifecycle and the inspection reads (dispatcher use not-used): settings, secrets, credential bindings, profiles, skills, plugins, LLM and MCP configuration, extensions, files, git, bash, workspaces, init and the WebSockets",
+      "mechanism": "The key-gated routes of profiles/strong-windows-qemu-whpx/agent-server/routes.json beyond the conversation lifecycle, the inspection reads and the conversation proxy's two listed tails (op-as-conversation-message, op-as-conversation-command) (dispatcher use not-used): settings, secrets, credential bindings, profiles, skills, plugins, LLM and MCP configuration, extensions, files, git, bash, workspaces, init and the WebSockets",
       "principal": "management-dispatcher",
       "owner_only": false,
       "credentials": ["cred-agent-server-session-key"],

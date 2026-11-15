@@ -1286,6 +1286,8 @@
           "op-as-conversation-delete",
           "op-as-conversation-pause",
           "op-as-management-read",
+          "op-as-conversation-message",
+          "op-as-conversation-command",
           "op-as-unenumerated-routes",
           "op-child-conversation"
         ],
