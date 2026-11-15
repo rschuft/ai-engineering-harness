@@ -243,6 +243,13 @@ REFUSALS = {
     'ROUTE_NOT_ALLOWLISTED': 'the call (the create or any other dispatcher call) does not target a route the '
                              'pinned route allowlist lists exactly once with dispatcher "allowed"',
     'ROUTE_PARAMETER_INVALID': 'a route\'s path parameters are not exactly its placeholders, each in its grammar',
+    # D1 work design G1: the conversation proxy's tails and their bodies
+    'ROUTE_TAIL_NOT_ALLOWED': 'a call on a {tail} route names a tail its allowlist entry does not list or the client '
+                              'has no body grammar for (an allowed {tail} route without a list admits none)',
+    'TAIL_BODY_INVALID': 'a body of a conversation proxy tail is not exactly that tail\'s grammar (a message: one '
+                         'user text, run true; a command: bounded text, cwd /workspace, a bounded timeout)',
+    'COMMAND_NOT_BUILT': 'the command tail\'s body is not a command made by a registered builder (a raw string, a '
+                         'mapping or any other object is refused)',
     'BODY_MALFORMED': 'the create body is not a JSON object, or a bodyless call (GET, HEAD, DELETE) carries a body',
     'BODY_FIELD_UNKNOWN': 'the create body carries a field outside the allowlist',
     'BODY_NOT_TEMPLATE': 'an allowlisted create body field differs from the profile\'s pinned create template',
@@ -2397,6 +2404,135 @@ ROUTE_QUERIES = {('GET', '/api/conversations/{conversation_id}/events/search'):
                  {'page_id': ROUTE_PARAMETERS['event_id']}}
 PLACEHOLDER_RE = re.compile(r'\{([^{}]*)\}')
 BODYLESS_METHODS = ('GET', 'HEAD', 'DELETE')
+
+# D1 work design G1 (accepted 2026-11-15): the Docker runtime's conversation proxy, POST
+# /api/conversations/{conversation_id}/{tail}, reaches every POST of the conversation's inner server. Its allowlist
+# entry lists the tails the dispatcher may send (``tails``, pinned in routes.json, so in the profile digest); each tail
+# has an exact body grammar here. A route with a {tail} placeholder admits a call only with a tail its entry lists and
+# this module has a grammar for: an allowed {tail} route without a list, a listed tail without a grammar, and any
+# other tail (a case, encoding, slash or traversal variant) are ROUTE_TAIL_NOT_ALLOWED.
+TAIL_PARAMETER = 'tail'
+MESSAGE_TAIL, COMMAND_TAIL = 'events', 'bash/execute_bash_command'
+MESSAGE_MAX_CHARS = 32768          # one user message: the dispatcher's frame, not a document
+COMMAND_MAX_CHARS = 4 << 20        # one built command: SEED's tree or RESULT's base bundle travel in its text
+COMMAND_CWD = '/workspace'         # the server-provisioned working directory (WORKING_DIR_NOT_ALLOWED's)
+COMMAND_MAX_TIMEOUT_S = 540        # under the live transport's per-request ceiling (guest_transport, 600 s)
+# The exchange delivery a built command may ask of the live transport (tools/guest.py GuestApi): the named part of
+# its answer's standard output is written into the guest exchange, and only its sha256 and size come back.
+DELIVERY_PART_RE = re.compile(r'[a-z][a-z0-9-]{0,31}')
+DELIVERY_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}')   # the profile's exchange.pull name grammar
+BUILDER_NAME_RE = re.compile(r'[a-z][a-z0-9-]{0,31}')
+
+
+class ContainerCommand:
+    """One command for a conversation's container, the only body ``AgentServerClient`` sends on the
+    ``bash/execute_bash_command`` tail. It is made only by a builder registered with ``command_builder`` (D1 work
+    design G1: the command text comes from the dispatcher's own builders, never a free-form string) and is
+    immutable. ``deliver``, when set, is ``{"part", "name"}``: the transport's exchange delivery of that part of the
+    answer (``tools/guest.py`` GuestApi)."""
+
+    __slots__ = ('builder', 'command', 'timeout', 'deliver')
+
+    def __init__(self, seal, builder: str, command: str, timeout: int, deliver: Mapping | None):
+        if seal is not _BUILDER_SEAL:
+            raise TypeError('a ContainerCommand is made only by a registered builder (command_builder)')
+        for name, value in (('builder', builder), ('command', command), ('timeout', timeout),
+                            ('deliver', dict(deliver) if isinstance(deliver, Mapping) else deliver)):
+            object.__setattr__(self, name, value)
+
+    def __setattr__(self, name, value):
+        raise AttributeError('a ContainerCommand is immutable')
+
+    def __delattr__(self, name):
+        raise AttributeError('a ContainerCommand is immutable')
+
+    def __repr__(self):  # never the command text: it may carry a whole tree
+        return f'ContainerCommand(builder={self.builder!r}, chars={len(self.command)}, timeout={self.timeout})'
+
+
+_BUILDER_SEAL = object()
+_COMMAND_BUILDERS: dict[str, Callable] = {}
+
+
+def command_builder(name: str):
+    """Register the decorated function as the builder NAME of the command tail's bodies. The function returns
+    ``{"command": <text>, "timeout": <seconds>}`` and optionally ``"deliver": {"part", "name"}``; the registered
+    builder returns that as a ``ContainerCommand``, refusing (``DispatchRefused('TAIL_BODY_INVALID')``) a value
+    outside the tail's grammar. A name is registered once."""
+    if not isinstance(name, str) or not BUILDER_NAME_RE.fullmatch(name):
+        raise ValueError(f'a command builder name is {BUILDER_NAME_RE.pattern}')
+    if name in _COMMAND_BUILDERS:
+        raise ValueError(f'the command builder {name!r} is already registered')
+
+    def register(function):
+        def build(*args, **kwargs):
+            made = function(*args, **kwargs)
+            if not isinstance(made, Mapping) or set(made) - {'command', 'timeout', 'deliver'} \
+                    or not {'command', 'timeout'} <= set(made):
+                raise DispatchRefused('TAIL_BODY_INVALID', f'the builder {name!r} made no '
+                                      '{command, timeout[, deliver]}')
+            command = ContainerCommand(_BUILDER_SEAL, name, made['command'], made['timeout'], made.get('deliver'))
+            _check_command(command)
+            return command
+        build.__name__ = build.__qualname__ = getattr(function, '__name__', name)
+        build.__doc__ = getattr(function, '__doc__', None)
+        build.builder_name = name
+        _COMMAND_BUILDERS[name] = build
+        return build
+    return register
+
+
+def _text_in_bounds(value, limit: int) -> bool:
+    """A str of 1 to LIMIT characters that encodes as UTF-8 (no lone surrogate) and holds no NUL."""
+    if type(value) is not str or not 0 < len(value) <= limit or '\x00' in value:
+        return False
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _check_command(command) -> dict:
+    """The command tail's grammar: a registered builder's ContainerCommand; the wire body
+    ``{"command", "cwd": "/workspace", "timeout"}`` it is sent as."""
+    if type(command) is not ContainerCommand or _COMMAND_BUILDERS.get(command.builder) is None:
+        raise DispatchRefused('COMMAND_NOT_BUILT', f'the {COMMAND_TAIL} tail takes only a command made by a '
+                              'registered builder (command_builder), never a raw string or object',
+                              body=type(command).__name__)
+    timeout, deliver = command.timeout, command.deliver
+    if not _text_in_bounds(command.command, COMMAND_MAX_CHARS):
+        raise DispatchRefused('TAIL_BODY_INVALID', f'the command is not 1 to {COMMAND_MAX_CHARS} characters of '
+                              'UTF-8 text without NUL', builder=command.builder)
+    if type(timeout) is not int or not 0 < timeout <= COMMAND_MAX_TIMEOUT_S:
+        raise DispatchRefused('TAIL_BODY_INVALID', f'the command timeout is not an integer of 1 to '
+                              f'{COMMAND_MAX_TIMEOUT_S} seconds', builder=command.builder)
+    if deliver is not None and (type(deliver) is not dict or set(deliver) != {'part', 'name'}
+                                or not all(type(deliver[k]) is str for k in deliver)
+                                or not DELIVERY_PART_RE.fullmatch(deliver['part'])
+                                or not DELIVERY_NAME_RE.fullmatch(deliver['name'])
+                                or deliver['name'].endswith('.partial')):
+        raise DispatchRefused('TAIL_BODY_INVALID', 'the exchange delivery is not {part, name} in their grammars',
+                              builder=command.builder)
+    return {'command': command.command, 'cwd': COMMAND_CWD, 'timeout': timeout}
+
+
+def _check_message(body) -> dict:
+    """The message tail's grammar, exactly: ``{"role": "user", "content": [{"type": "text", "text": <1 to
+    MESSAGE_MAX_CHARS characters>}], "run": true}``; returned as a fresh plain object."""
+    content = body.get('content') if type(body) is dict else None
+    part = content[0] if type(content) is list and len(content) == 1 else None
+    if type(body) is not dict or set(body) != {'role', 'content', 'run'} or body['role'] != 'user' \
+            or type(body['role']) is not str or body['run'] is not True or type(part) is not dict \
+            or set(part) != {'type', 'text'} or type(part['type']) is not str or part['type'] != 'text' \
+            or not _text_in_bounds(part['text'], MESSAGE_MAX_CHARS):
+        raise DispatchRefused('TAIL_BODY_INVALID', f'the {MESSAGE_TAIL} tail takes exactly {{role: user, content: '
+                              f'[{{type: text, text: <1 to {MESSAGE_MAX_CHARS} characters>}}], run: true}}')
+    return {'role': 'user', 'content': [{'type': 'text', 'text': part['text']}], 'run': True}
+
+
+# Each admitted tail's body check; the tail's wire body is what it returns.
+TAIL_GRAMMARS = {MESSAGE_TAIL: _check_message, COMMAND_TAIL: _check_command}
 CREATE_STATUSES = {201: True, 200: False}  # status -> created; 200 returns the existing one (F-04.2 s4.5)
 EXECUTION_REF_PREFIX = 'openhands:conversation/'
 DISPATCHED_FORMAT = 'ai-engineering-harness/dispatch/create-dispatched/v1'
@@ -2418,7 +2554,14 @@ class AgentServerClient:
     tools/guest.py's GuestApi as the guest login that holds the management key, the key read in the guest
     only (decision 0013 point 1, bootstrap); tests inject fakes. While a role token is delivered
     (attempt_tokens.py, E-01.3.3), a call whose path or body carries it or its fingerprint is
-    ROLE_TOKEN_EXPOSURE."""
+    ROLE_TOKEN_EXPOSURE.
+
+    A route with a ``{tail}`` placeholder (the conversation proxy, D1 work design G1) admits a call only with a
+    tail its allowlist entry lists (``tails``) and ``TAIL_GRAMMARS`` holds, and only with that tail's exact body:
+    ``events`` one user message that starts the run, ``bash/execute_bash_command`` a ``ContainerCommand`` of a
+    registered builder (``command_builder``), sent as ``{"command", "cwd": "/workspace", "timeout"}``. A built
+    command that asks for an exchange delivery is sent as ``transport(method, path, body, deliver={"part",
+    "name"})``; every other call keeps the three-argument form."""
 
     def __init__(self, routes_raw: bytes, transport: Callable[[str, str, dict | None], object], *,
                  routes_sha256: str):
@@ -2433,13 +2576,18 @@ class AgentServerClient:
                 or not isinstance(version, str) or not version:
             raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'the route allowlist is not {ROUTES_SCHEMA} with a '
                                   'version')
-        listed = [(r.get('method'), r.get('path'), r.get('dispatcher')) for r in routes if isinstance(r, dict)]
+        listed = [(r.get('method'), r.get('path'), r.get('dispatcher'), r.get('tails')) for r in routes
+                  if isinstance(r, dict)]
         counts: dict = {}
-        for method, path, _ in listed:
+        for method, path, _, _ in listed:
             counts[(method, path)] = counts.get((method, path), 0) + 1
-        self._allowed = frozenset((m, p) for m, p, d in listed
-                                  if d == 'allowed' and isinstance(m, str) and isinstance(p, str)
-                                  and counts[(m, p)] == 1)
+        allowed = [(m, p, t) for m, p, d, t in listed
+                   if d == 'allowed' and isinstance(m, str) and isinstance(p, str) and counts[(m, p)] == 1]
+        self._allowed = frozenset((m, p) for m, p, _ in allowed)
+        # D1 work design G1: a {tail} route's listed tails, a non-empty list of distinct strings; an allowed {tail}
+        # route without one admits no call (fail closed, ROUTE_TAIL_NOT_ALLOWED)
+        self._tails = {(m, p): frozenset(t) for m, p, t in allowed
+                       if isinstance(t, list) and t and all(type(x) is str for x in t) and len(set(t)) == len(t)}
         self._transport, self.version, self.routes_sha256 = transport, version, routes_sha256
 
     def allows(self, method, route) -> bool:
@@ -2463,9 +2611,20 @@ class AgentServerClient:
         if not isinstance(params, Mapping) or sorted(params) != sorted(set(names)) or len(set(names)) != len(names):
             raise DispatchRefused('ROUTE_PARAMETER_INVALID', f'{route} takes {sorted(names)}, not '
                                   f'{sorted(map(str, params)) if isinstance(params, Mapping) else params!r}')
-        path = route
+        path, deliver = route, None
         for name in names:
             value, grammar = params[name], ROUTE_PARAMETERS.get(name)
+            if name == TAIL_PARAMETER:   # D1 work design G1: a listed tail with a grammar here, exactly
+                listed = self._tails.get((method, route), frozenset())
+                if type(value) is not str or value not in listed or value not in TAIL_GRAMMARS:
+                    raise DispatchRefused('ROUTE_TAIL_NOT_ALLOWED', f'{method} {route}: the tail is not one the '
+                                          'pinned allowlist lists for it with a body grammar in the client',
+                                          listed=sorted(listed & set(TAIL_GRAMMARS)))
+                if value == COMMAND_TAIL and type(body) is ContainerCommand:
+                    deliver = body.deliver
+                body = TAIL_GRAMMARS[value](body)
+                path = path.replace('{' + name + '}', value)
+                continue
             if grammar is None or not isinstance(value, str) or grammar.fullmatch(value) is None:
                 raise DispatchRefused('ROUTE_PARAMETER_INVALID', f'{name} of {route} is not in its grammar',
                                       parameter=name)
@@ -2476,6 +2635,8 @@ class AgentServerClient:
         if _carries_held_role_token(path, body):
             raise DispatchRefused('ROLE_TOKEN_EXPOSURE', f'{method} {route} would carry a delivered role token or its '
                                   'fingerprint into the guest', method=method, route=route)
+        if deliver is not None:   # a built command's exchange delivery (the live transport's deliver=)
+            return self._transport(method, path, body, deliver=dict(deliver))
         return self._transport(method, path, body)
 
 

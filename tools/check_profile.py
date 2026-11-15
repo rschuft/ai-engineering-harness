@@ -1902,6 +1902,9 @@ ROUTE_ADMISSIONS = ('public', 'session-key', 'session-key-or-bearer', 'init-key'
 ROUTE_CLASSES = ('public-read', 'management-read', 'privileged')
 ROUTE_WS_VARIANTS = ('no_auth_message', 'first_message_wrong_key', 'query_wrong_key',
                      'header_wrong_key')
+# D1 work design G1: a dispatcher-allowed route ending in {tail} lists its tails, each lower-case segments
+ROUTE_TAIL_PLACEHOLDER = '{tail}'
+ROUTE_TAIL = re.compile(r'[a-z0-9_]+(?:/[a-z0-9_]+)*')
 # S-01.3.1: the container guard's rules as the profile must declare them (iptables syntax;
 # the seeded aieh-container-guard installs exactly these, in this order)
 GUARD_RULES = ['-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
@@ -1923,12 +1926,32 @@ EGRESS_RULES = ['-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
 CONTAINER_CLASSES = ('inference', 'provision')
 
 
+def tail_problems(route):
+    """The tails of one route entry (D1 work design G1, 2026-11-15): a dispatcher-allowed route whose path has
+    a ``{tail}`` placeholder (the Docker runtime's conversation proxy reaches every route of the conversation's
+    inner server through it) lists the tails the dispatcher may send, ``tails``: a non-empty list of distinct
+    relative paths of lower-case segments. ``tails`` appears on no other entry. The list is pinned with the
+    allowlist, so a further tail changes the profile digest."""
+    placeholder = ROUTE_TAIL_PLACEHOLDER in str(route.get('path'))
+    if 'tails' not in route:
+        return ([f'a dispatcher-allowed {ROUTE_TAIL_PLACEHOLDER} route must list its tails (tails)']
+                if placeholder and route.get('dispatcher') == 'allowed' else [])
+    if not placeholder or route.get('dispatcher') != 'allowed':
+        return [f'tails belong only to a dispatcher-allowed route with a {ROUTE_TAIL_PLACEHOLDER} placeholder']
+    tails = route['tails']
+    if not isinstance(tails, list) or not tails or len(set(map(str, tails))) != len(tails) \
+            or not all(isinstance(t, str) and ROUTE_TAIL.fullmatch(t) for t in tails):
+        return [f'tails must be a non-empty list of distinct relative paths ({ROUTE_TAIL.pattern})']
+    return []
+
+
 def route_problems(data):
     """The route inventory of provisioning.agent_server.admission (S-01.3.1): every route
     has a method, a path, a known credential kind, class, source and dispatcher use, and an
     expected refusal; a public route is a GET of class public-read; a route that needs a
     credential is never expected to answer 2xx without one, and a WebSocket route never to
-    stay open (101 without a close); no route appears twice."""
+    stay open (101 without a close); no route appears twice; a dispatcher-allowed {tail}
+    route lists its tails (tail_problems)."""
     problems = []
     if not isinstance(data, dict) or data.get('schema') != ROUTES_SCHEMA:
         return [f'schema must be {ROUTES_SCHEMA}']
@@ -1953,6 +1976,7 @@ def route_problems(data):
             problems.append(f'{where}: dispatcher must be allowed, validation or not-used')
         if r.get('source') not in ('openapi', 'framework', 'binary'):
             problems.append(f'{where}: source must be openapi, framework or binary')
+        problems.extend(f'{where}: {p}' for p in tail_problems(r))
         public = r.get('admission') == 'public'
         if public != (r.get('class') == 'public-read'):
             problems.append(f'{where}: admission public and class public-read go together')

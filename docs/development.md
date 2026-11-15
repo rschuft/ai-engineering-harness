@@ -798,7 +798,9 @@ re-read from the store (checked against its digest and its typed identity). The 
 is created only after admission, one directory at a time and never through a link or junction.
 Every Agent Server call goes through `AgentServerClient`, which refuses any route that the
 profile's pinned allowlist (`agent-server/routes.json`) does not list exactly once as
-`dispatcher` `allowed`, before the transport is called. Before the create, `GET /server_info`
+`dispatcher` `allowed`, before the transport is called; on the conversation proxy
+(`/{tail}`) it admits only the tails the entry lists (`events`, `bash/execute_bash_command`),
+each with its exact body (D1 work design G1, slice A1). Before the create, `GET /server_info`
 must show decision 0001's preconditions P1 to P5: the pinned version, the capabilities
 `conversation_runtime_routes_v1` and `idempotent_conversation_create_v1`, runtime `docker` and
 no selectable runtime. A refusal marks the attempt `failed`. A 200 or 201 carrying the reserved

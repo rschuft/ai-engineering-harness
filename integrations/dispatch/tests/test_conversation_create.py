@@ -69,10 +69,11 @@ class Recorder:
     """A transport that records every call and answers ``answer``."""
 
     def __init__(self, answer=None):
-        self.calls, self.answer = [], answer
+        self.calls, self.answer, self.deliveries = [], answer, []
 
-    def __call__(self, method, path, body):
+    def __call__(self, method, path, body, **kwargs):
         self.calls.append((method, path, copy.deepcopy(body)))
+        self.deliveries.append(copy.deepcopy(kwargs))
         return self.answer
 
 
@@ -91,6 +92,32 @@ def entry(data, method, path):
 
 
 VALID_PARAMETER = {'conversation_id': CONVERSATION, 'event_id': 'event-1'}
+PROXY = ('POST', '/api/conversations/{conversation_id}/{tail}')
+PROXY_TAILS = ['events', 'bash/execute_bash_command']
+MESSAGE = {'role': 'user', 'content': [{'type': 'text', 'text': 'Implement the change as designed.'}], 'run': True}
+
+
+def _test_command(command='python -m unittest discover -s tests', timeout=60, deliver=None, **extra):
+    """A builder of the command tail for these tests only (D1's are attempt_run's SEED and RESULT, slice A2)."""
+    made = {'command': command, 'timeout': timeout, **extra}
+    if deliver is not None:
+        made['deliver'] = deliver
+    return made
+
+
+TEST_BUILDER = 'a1-test-command'
+# registered once per process: other suites load this module by name too
+build_command = di._COMMAND_BUILDERS.get(TEST_BUILDER) or di.command_builder(TEST_BUILDER)(_test_command)
+
+
+def tail_body(tail):
+    """A valid body of each listed tail."""
+    return copy.deepcopy(MESSAGE) if tail == 'events' else build_command()
+
+
+def wire_body(tail):
+    return copy.deepcopy(MESSAGE) if tail == 'events' else {
+        'command': 'python -m unittest discover -s tests', 'cwd': '/workspace', 'timeout': 60}
 
 
 class RouteAllowlistTests(unittest.TestCase):
@@ -106,25 +133,37 @@ class RouteAllowlistTests(unittest.TestCase):
 
     def test_each_listed_route_is_sent_only_when_the_dispatcher_is_allowed(self):
         """Over the whole pinned allowlist: allowed routes reach the transport once with the
-        rendered path; validation and not-used routes are refused with zero calls."""
+        rendered path (a {tail} route once per listed tail, with that tail's body); validation and
+        not-used routes are refused with zero calls."""
         seen = {'allowed': 0, 'validation': 0, 'not-used': 0}
         for route in ROUTES['routes']:
             names = di.PLACEHOLDER_RE.findall(route['path'])
-            params = {name: VALID_PARAMETER.get(name, 'x') for name in names}
-            body = None if route['method'] in di.BODYLESS_METHODS else {}
-            transport = Recorder({'status': 200, 'body': {}})
             seen[route['dispatcher']] += 1
-            with self.subTest(method=route['method'], path=route['path'], dispatcher=route['dispatcher']):
-                if route['dispatcher'] == 'allowed':
-                    client(transport).call(route['method'], route['path'], params=params, body=body)
-                    path = route['path']
-                    for name, value in params.items():
-                        path = path.replace('{' + name + '}', value)
-                    self.assertEqual(transport.calls, [(route['method'], path, body)])
-                else:
-                    self.refused('ROUTE_NOT_ALLOWLISTED', transport, route['method'], route['path'],
-                                 params=params, body=body)
-        self.assertTrue(all(seen.values()), seen)
+            for tail in route.get('tails') or [None]:
+                params = {name: VALID_PARAMETER.get(name, 'x') for name in names}
+                body = None if route['method'] in di.BODYLESS_METHODS else {}
+                sent = body
+                if tail is not None:
+                    params['tail'], body, sent = tail, tail_body(tail), wire_body(tail)
+                transport = Recorder({'status': 200, 'body': {}})
+                with self.subTest(method=route['method'], path=route['path'], dispatcher=route['dispatcher'],
+                                  tail=tail):
+                    if route['dispatcher'] == 'allowed':
+                        client(transport).call(route['method'], route['path'], params=params, body=body)
+                        path = route['path']
+                        for name, value in params.items():
+                            path = path.replace('{' + name + '}', value)
+                        self.assertEqual(transport.calls, [(route['method'], path, sent)])
+                    else:
+                        self.refused('ROUTE_NOT_ALLOWLISTED', transport, route['method'], route['path'],
+                                     params=params, body=body)
+        # D1 work design G1: the conversation proxy's POST was the one "validation" entry (the admission probe's);
+        # it is now dispatcher-allowed for its two listed tails, so no entry holds "validation" any more. The value
+        # stays a valid one (check_profile) and is still refused here (test_an_allowed_route_listed_twice_...).
+        self.assertEqual(seen['validation'], 0, seen)
+        self.assertTrue(seen['allowed'] and seen['not-used'], seen)
+        self.assertEqual([(r['method'], r['path'], r['tails']) for r in ROUTES['routes'] if 'tails' in r],
+                         [(*PROXY, PROXY_TAILS)])
         allowed = client(Recorder())
         self.assertTrue(allowed.allows(*INFO) and allowed.allows(*CREATE))
         self.assertEqual(allowed.version, '1.60.1')
@@ -247,6 +286,190 @@ PRECONDITION_CASES = {
            'absent': info_with(available_conversation_runtimes=KeyError),
            'null': info_with(available_conversation_runtimes=None)},
 }
+
+
+class ProxyTailTests(unittest.TestCase):
+    """D1 work design G1: the conversation proxy's POST reaches the transport only with a tail its pinned entry lists
+    and the client has a grammar for, and only with that tail's exact body; everything else is refused with zero
+    transport calls."""
+    category = 'unit'
+
+    def send(self, tail, body, transport=None, routes=ROUTES_BYTES):
+        transport = transport or Recorder({'status': 200, 'body': {}})
+        answer = client(transport, routes).call(*PROXY, params={'conversation_id': CONVERSATION, 'tail': tail},
+                                                body=body)
+        return answer, transport
+
+    def refused(self, code, tail, body, routes=ROUTES_BYTES):
+        transport = Recorder()
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.send(tail, body, transport, routes)
+        self.assertEqual(caught.exception.code, code, caught.exception.detail)
+        self.assertEqual(transport.calls, [], 'a refused call must never reach the transport')
+        return caught.exception
+
+    def test_the_two_listed_tails_send_their_exact_bodies(self):
+        self.assertEqual(sorted(di.TAIL_GRAMMARS), sorted(PROXY_TAILS))
+        for tail in PROXY_TAILS:
+            with self.subTest(tail):
+                answer, transport = self.send(tail, tail_body(tail))
+                self.assertEqual(answer, {'status': 200, 'body': {}})
+                self.assertEqual(transport.calls, [('POST', f'/api/conversations/{CONVERSATION}/{tail}',
+                                                    wire_body(tail))])
+                self.assertEqual(transport.deliveries, [{}], 'no exchange delivery unless the command asks')
+
+    def test_any_other_tail_is_refused(self):
+        tails = ['run', 'pause', 'bash/start_bash_command', 'bash/bash_events', 'children', 'Events', 'EVENTS',
+                 'events/', '/events', 'events?x=1', 'events#x', 'events%2F', 'ev%65nts', 'bash%2Fexecute_bash_command',
+                 'bash/execute_bash_command/', 'bash//execute_bash_command', 'bash/../events', '../events',
+                 './events', 'events ', ' events', 'events\n', 'events\x00', 'ｅvents', 'BASH/execute_bash_command',
+                 '', None, 5, ['events'], b'events']
+        for tail in tails:
+            with self.subTest(tail=tail):
+                self.refused('ROUTE_TAIL_NOT_ALLOWED', tail, MESSAGE)
+
+    def test_the_tail_list_is_the_pinned_ones(self):
+        """A listed tail without a grammar in the client, an allowed {tail} route without a list, or with a
+        malformed one, admits nothing; a tail the client has a grammar for but the entry does not list is
+        refused."""
+        def listing(value):
+            def change(data):
+                proxy = entry(data, *PROXY)
+                if value is None:
+                    proxy.pop('tails')
+                else:
+                    proxy['tails'] = value
+            return routes_variant(change)
+        extra = listing(['events', 'bash/execute_bash_command', 'run'])
+        self.refused('ROUTE_TAIL_NOT_ALLOWED', 'run', {'run': True}, extra)
+        self.assertEqual(self.send('events', MESSAGE, routes=extra)[1].calls[0][1],
+                         f'/api/conversations/{CONVERSATION}/events')
+        self.refused('ROUTE_TAIL_NOT_ALLOWED', 'bash/execute_bash_command', build_command(), listing(['events']))
+        for value in (None, [], 'events', ['events', 'events'], [5], {'events': True}):
+            with self.subTest(tails=value):
+                for tail in PROXY_TAILS:
+                    self.refused('ROUTE_TAIL_NOT_ALLOWED', tail, tail_body(tail), listing(value))
+        # the entry marked otherwise is not allowed at all, whatever it lists
+        for value in ('validation', 'not-used'):
+            def marked(data, value=value):
+                entry(data, *PROXY)['dispatcher'] = value
+            self.refused('ROUTE_NOT_ALLOWLISTED', 'events', MESSAGE, routes_variant(marked))
+
+    def test_the_message_grammar_is_exact(self):
+        def variant(change):
+            body = copy.deepcopy(MESSAGE)
+            change(body)
+            return body
+        text = MESSAGE['content'][0]
+        cases = {
+            'an extra key': variant(lambda b: b.update(conversation_id=CONVERSATION)),
+            'no run': variant(lambda b: b.pop('run')),
+            'run false': variant(lambda b: b.update(run=False)),
+            'run 1': variant(lambda b: b.update(run=1)),
+            'run "true"': variant(lambda b: b.update(run='true')),
+            'another role': variant(lambda b: b.update(role='assistant')),
+            'a role case variant': variant(lambda b: b.update(role='User')),
+            'a system role': variant(lambda b: b.update(role='system')),
+            'two parts': variant(lambda b: b['content'].append(dict(text))),
+            'no part': variant(lambda b: b.update(content=[])),
+            'content an object': variant(lambda b: b.update(content=dict(text))),
+            'content text': variant(lambda b: b.update(content='hello')),
+            'an extra part key': variant(lambda b: b['content'][0].update(cache_prompt=True)),
+            'an image part': variant(lambda b: b['content'][0].update(type='image')),
+            'a type case variant': variant(lambda b: b['content'][0].update(type='Text')),
+            'empty text': variant(lambda b: b['content'][0].update(text='')),
+            'text too long': variant(lambda b: b['content'][0].update(text='x' * (di.MESSAGE_MAX_CHARS + 1))),
+            'text with NUL': variant(lambda b: b['content'][0].update(text='a\x00b')),
+            'a lone surrogate': variant(lambda b: b['content'][0].update(text='a\ud800b')),
+            'text bytes': variant(lambda b: b['content'][0].update(text=b'hello')),
+            'text a number': variant(lambda b: b['content'][0].update(text=5)),
+            'a list body': [MESSAGE], 'no body': None, 'a string body': json.dumps(MESSAGE),
+            'a built command': build_command(),
+        }
+        for name, body in cases.items():
+            with self.subTest(name):
+                self.refused('TAIL_BODY_INVALID', 'events', body)
+        # the bound itself is admitted
+        longest = variant(lambda b: b['content'][0].update(text='x' * di.MESSAGE_MAX_CHARS))
+        self.assertEqual(self.send('events', longest)[1].calls[0][2], longest)
+
+    def test_the_command_tail_takes_only_a_registered_builders_command(self):
+        wire = {'command': 'true', 'cwd': '/workspace', 'timeout': 60}
+        for body in ('true', wire, None, [wire], MESSAGE, b'true', mock.Mock()):
+            with self.subTest(body=type(body).__name__):
+                self.refused('COMMAND_NOT_BUILT', 'bash/execute_bash_command', body)
+        with self.assertRaises(TypeError):
+            di.ContainerCommand(object(), TEST_BUILDER, 'true', 60, None)
+        built = build_command('true')
+        with self.assertRaises(AttributeError):
+            built.command = 'curl example.invalid'
+        with self.assertRaises(AttributeError):
+            del built.timeout
+        self.assertNotIn('true', repr(build_command('true-marker-text')).replace('builder', ''))
+        # a builder that is no longer registered: its commands are refused too
+        name = 'a1-test-unregistered'
+        gone = di.command_builder(name)(_test_command)
+        made = gone('true')
+        di._COMMAND_BUILDERS.pop(name)
+        self.refused('COMMAND_NOT_BUILT', 'bash/execute_bash_command', made)
+        for bad in ('', 'Upper', 'a b', TEST_BUILDER, 5):
+            with self.subTest(name=bad), self.assertRaises(ValueError):
+                di.command_builder(bad)
+
+    def test_the_command_grammar_is_exact(self):
+        """A builder cannot make a command outside the grammar, and a command altered after it was built (past its
+        immutability) is refused again at the client."""
+        cases = {
+            'empty': dict(command=''), 'too long': dict(command='x' * (di.COMMAND_MAX_CHARS + 1)),
+            'a NUL': dict(command='true\x00'), 'a lone surrogate': dict(command='echo \udc80'),
+            'not text': dict(command=b'true'), 'a list': dict(command=['true']),
+            'timeout 0': dict(timeout=0), 'timeout above its bound': dict(timeout=di.COMMAND_MAX_TIMEOUT_S + 1),
+            'timeout a bool': dict(timeout=True), 'timeout a float': dict(timeout=60.0),
+            'timeout text': dict(timeout='60'), 'a cwd': dict(cwd='/'), 'another key': dict(env={'A': '1'}),
+            'a delivery without a name': dict(deliver={'part': 'bundle'}),
+            'a delivery with an extra key': dict(deliver={'part': 'bundle', 'name': 'r.bundle', 'dir': '/'}),
+            'a delivery name with a slash': dict(deliver={'part': 'bundle', 'name': '../r.bundle'}),
+            'a partial delivery name': dict(deliver={'part': 'bundle', 'name': 'r.bundle.partial'}),
+            'a delivery part out of grammar': dict(deliver={'part': 'Bundle', 'name': 'r.bundle'}),
+            'a delivery not an object': dict(deliver='r.bundle'),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name), self.assertRaises(di.DispatchRefused) as caught:
+                build_command(**kwargs)
+            self.assertEqual(caught.exception.code, 'TAIL_BODY_INVALID')
+        for field, value in (('command', 'x' * (di.COMMAND_MAX_CHARS + 1)), ('command', 'a\x00'),
+                             ('timeout', di.COMMAND_MAX_TIMEOUT_S + 1), ('timeout', True),
+                             ('deliver', {'part': 'bundle', 'name': '/etc/passwd'})):
+            built = build_command()
+            object.__setattr__(built, field, value)
+            with self.subTest(altered=field):
+                self.refused('TAIL_BODY_INVALID', 'bash/execute_bash_command', built)
+        # the bounds themselves are admitted
+        answer, transport = self.send('bash/execute_bash_command',
+                                      build_command('x' * di.COMMAND_MAX_CHARS, di.COMMAND_MAX_TIMEOUT_S))
+        self.assertEqual(transport.calls[0][2]['timeout'], di.COMMAND_MAX_TIMEOUT_S)
+        self.assertEqual(len(transport.calls[0][2]['command']), di.COMMAND_MAX_CHARS)
+
+    def test_a_delivery_reaches_the_transport_as_its_own_argument(self):
+        command = build_command('make-bundle', deliver={'part': 'bundle', 'name': 'work-1.bundle'})
+        answer, transport = self.send('bash/execute_bash_command', command)
+        self.assertEqual(transport.calls, [('POST', f'/api/conversations/{CONVERSATION}/bash/execute_bash_command',
+                                            {'command': 'make-bundle', 'cwd': '/workspace', 'timeout': 60})])
+        self.assertEqual(transport.deliveries, [{'deliver': {'part': 'bundle', 'name': 'work-1.bundle'}}])
+
+    def test_a_held_role_token_still_guards_the_tails(self):
+        token = 'c0ffee' * 6 + 'abcd'                     # 40 lower-case hex digits, synthetic
+        digest, fingerprint = hashlib.sha256(token.encode()).hexdigest(), 'sha256:' + 'ab' * 32
+        self.addCleanup(di._HELD_ROLE_TOKENS.pop, digest, None)
+        di.hold_role_token(digest, fingerprint)
+        message = copy.deepcopy(MESSAGE)
+        message['content'][0]['text'] = f'use {token}'
+        for tail, body in (('events', message), ('bash/execute_bash_command', build_command(f'echo {token}')),
+                           ('bash/execute_bash_command', build_command(f'echo {fingerprint[7:]}'))):
+            with self.subTest(tail=tail):
+                self.refused('ROLE_TOKEN_EXPOSURE', tail, body)
+        self.assertEqual(self.send('events', MESSAGE)[1].calls[0][2], MESSAGE)   # the control: no token, sent
+        di.release_role_token(digest)
 
 
 class ServerPreconditionTests(unittest.TestCase):

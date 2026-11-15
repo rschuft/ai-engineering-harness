@@ -1266,6 +1266,44 @@ class AdmissionBlock(unittest.TestCase):
                                + data['routes'][1:]))
         self.assertFails('admission.routes: ')
 
+    def test_proxy_tails(self):
+        """D1 work design G1: the conversation proxy's POST is dispatcher-allowed for exactly its listed tails; an
+        allowed {tail} route without a list, a list out of grammar, or a list elsewhere FAILs."""
+        data = self.routes()
+        proxy = next(r for r in data['routes'] if (r['method'], r['path']) ==
+                     ('POST', '/api/conversations/{conversation_id}/{tail}'))
+        self.assertEqual((proxy['dispatcher'], proxy['tails']), ('allowed', ['events', 'bash/execute_bash_command']))
+        self.assertEqual([r for r in data['routes'] if 'tails' in r], [proxy])
+        other = next(r for r in data['routes'] if r['dispatcher'] == 'not-used' and '{tail}' in r['path'])
+        plain = next(r for r in data['routes'] if r['dispatcher'] == 'allowed' and '{' not in r['path'])
+        listless = {k: v for k, v in proxy.items() if k != 'tails'}
+        cases = [
+            (proxy, listless, 'must list its tails'),
+            (proxy, dict(proxy, tails=[]), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails='events'), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['events', 'events']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['Events']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['/events']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['events/']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['../runtime']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=['bash%2Fexecute_bash_command']), 'non-empty list of distinct'),
+            (proxy, dict(proxy, tails=[5]), 'non-empty list of distinct'),
+            (proxy, dict(proxy, dispatcher='not-used'), 'tails belong only to'),
+            (other, dict(other, tails=['events']), 'tails belong only to'),
+            (plain, dict(plain, tails=['events']), 'tails belong only to'),
+        ]
+        for old, new, fragment in cases:
+            with self.subTest(fragment=fragment, tails=new.get('tails')):
+                changed = dict(data, routes=[new if r is old else r for r in data['routes']])
+                problems = check_profile.route_problems(changed)
+                self.assertTrue(any(fragment in p for p in problems), (fragment, problems))
+        # the validation value it held before, and a list-less not-used proxy, pass
+        for variant in (dict(listless, dispatcher='validation'), dict(listless, dispatcher='not-used')):
+            changed = dict(data, routes=[variant if r is proxy else r for r in data['routes']])
+            self.assertEqual(check_profile.route_problems(changed), [])
+        self.write_routes(dict(data, routes=[listless if r is proxy else r for r in data['routes']]))
+        self.assertFails('must list its tails')
+
     def test_route_version_is_the_server_version(self):
         self.write_routes(dict(self.routes(), version='1.0.0'))
         self.assertFails('version must be the Agent Server version')

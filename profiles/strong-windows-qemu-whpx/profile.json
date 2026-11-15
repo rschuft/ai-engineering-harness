@@ -516,7 +516,7 @@
         "use": "The management API admission of the outer Agent Server: who may reach its routes, with which credential, and what a refused request sees. Validation only: disposable conversations of the fixture (and one derived from it), no LLM, no repository content, no untrusted workload (Owner authorization of 2026-11-07, evidence/bootstrap-log.md).",
         "routes": {
           "path": "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
-          "sha256": "04953de136bf053331c67e76d410f10272fea0d04e188aa7ec94a86a31e38730",
+          "sha256": "919d67e2ee49823d0b4d0034f92ab190d95a64abfd9e07bb698680f9edabbc09",
           "purpose": "The route inventory and the dispatcher's allowlist: every route of the running 1.60.1 server (its /openapi.json) and every route the locked release binary registers outside that document (WebSockets, the Canvas App backend proxy, the documentation routes), each with its credential, class (public-read, management-read, privileged), dispatcher use and the expected refusal. guest.py admission-probe compares the live document with it and probes every route."
         },
         "session_key": {

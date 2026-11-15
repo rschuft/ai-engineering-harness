@@ -61,6 +61,9 @@ PIN_COMMIT = cs.PIN_COMMIT
 BUILDER_SHA = cs.BUILDER_SHA
 # The builder pin's digest GOLDEN_POLICY_DIGEST was computed with (before E-05.3 the pins named no file).
 GOLDEN_BUILDER_SHA = hashlib.sha256(b'synthetic builder agent/Skill manifest').hexdigest()
+# The checked-in route allowlist's digest GOLDEN_POLICY_DIGEST was computed with (before D1 slice A1 listed the
+# conversation proxy's tails, a changed input, not a changed canonical form).
+GOLDEN_ROUTES_SHA = '04953de136bf053331c67e76d410f10272fea0d04e188aa7ec94a86a31e38730'
 # The Work's outcome (decision 0008: a random UUID minted at acceptance): every task Backlog.md
 # reports here carries it as a reference (E-01.3.1: every reservation carries an outcomeRef).
 OUTCOME = '3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63'
@@ -693,6 +696,14 @@ class DeterminismTests(Fixture):
         # The golden digest pins the canonical form over the same inputs with the pin digest it was computed with.
         golden_inputs = copy.deepcopy(record.policy_inputs)
         golden_inputs['catalog_pin']['manifest_sha256'] = GOLDEN_BUILDER_SHA
+        golden_inputs['admission']['routes']['sha256'] = GOLDEN_ROUTES_SHA
+        # and the synthetic profile declaration that pins it (its sha256 is an input too)
+        declared = profile_bytes('strong-test-profile')
+        self.assertEqual(hashlib.sha256(declared).hexdigest(), golden_inputs['profile']['sha256'])
+        routes_sha = hashlib.sha256(ROUTES_BYTES).hexdigest().encode('ascii')
+        self.assertEqual(declared.count(routes_sha), 1)
+        golden_inputs['profile']['sha256'] = hashlib.sha256(
+            declared.replace(routes_sha, GOLDEN_ROUTES_SHA.encode('ascii'))).hexdigest()
         self.assertEqual(di._sha256(di._canonical(golden_inputs)), GOLDEN_POLICY_DIGEST)
 
     def test_each_policy_input_changes_the_digest(self):

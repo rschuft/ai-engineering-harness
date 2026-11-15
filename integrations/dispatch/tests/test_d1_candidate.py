@@ -7,8 +7,9 @@ Run from the repository root, under the tools interpreter (Dulwich is required):
 ``integrations/dispatch/candidates/d1-approved-inputs.json`` is the manifest planning promotes for D1 (the
 commitment ``commitment-d1-2026-11-15``, "The D1 manifest"). These tests hold it to the checked-in files: its
 entries are exactly the commitment's five; its profile digest is the checked-in ``profile.json``'s (a profile
-change without a new candidate and a new promotion fails here); its pin's digest is the checked-in assignment's;
-and, in a clone with its history, the assignment at the pinned commit passes the resolver's own check.
+change without a new candidate and a new promotion fails here); it is version 2, the promoted version 1 with only
+its version and profile digest changed (D1 slice A1); its pin's digest is the checked-in assignment's; and, in a
+clone with its history, the assignment at the pinned commit passes the resolver's own check.
 """
 from pathlib import Path
 import hashlib
@@ -41,6 +42,9 @@ PIN = 'd1-implement'
 DEMO, CHANGE = 'aieh-d1-demo', 'add-slugify'
 # C2 of aieh-demo/aieh-d1-demo: the acceptance recorder's commit, which accept-design binds (E-05.1, section 9).
 C2 = 'dd18102dccfcfeac5ea0cd11c40e3e052d11a4b3'
+# The promoted version 1 (planning's acts of 2026-11-15): its sha256, and the profile digest it approved.
+PREVIOUS = '6e6d17f1cd2fbee0f747890c5a0f65678bf3babde4d16ae0e9f6da167e02723d'
+V1_PROFILE = '7d01e62c23fd521c523a08946a9bb65a7c6d74c656fdaed2dffe5045c687a17b'
 
 
 def sha256(path: Path) -> str:
@@ -69,6 +73,17 @@ class TheD1Candidate(unittest.TestCase):
         self.assertEqual(self.data['profiles'][0]['sha256'], sha256(REPO / 'profiles' / PROFILE / 'profile.json'),
                          'profiles/strong-windows-qemu-whpx/profile.json changed: revise the D1 candidate (the next '
                          'version) and have planning promote it again')
+
+    def test_version_2_is_version_1_with_only_the_profile_digest_changed(self):
+        """Version 2 (D1 slice A1: the route allowlist lists the conversation proxy's tails, so the profile's routes
+        pin and the profile digest changed): exactly version 1 (promoted, sha256 PREVIOUS) with its version and its
+        profile digest replaced, and nothing else."""
+        self.assertEqual(self.data['version'], 2)
+        current = self.data['profiles'][0]['sha256'].encode('ascii')
+        self.assertNotEqual(current.decode('ascii'), V1_PROFILE)
+        self.assertEqual((self.raw.count(b'"version": 2,'), self.raw.count(current)), (1, 1))
+        version_1 = self.raw.replace(b'"version": 2,', b'"version": 1,').replace(current, V1_PROFILE.encode('ascii'))
+        self.assertEqual(hashlib.sha256(version_1).hexdigest(), PREVIOUS)
 
     def test_the_pin_digest_is_the_checked_in_assignment(self):
         self.assertEqual(self.pin['manifest_sha256'], sha256(REPO / di.assignment_path(PIN)),

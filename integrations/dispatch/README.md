@@ -685,6 +685,28 @@ call may carry a `query` of exactly its route's declared parameters (`ROUTE_QUER
 method with a body is `BODY_MALFORMED`. `send_create` builds its client from the allowlist bytes
 the admission read (`AdmittedCreate.routes_bytes`, re-checked against the pinned sha256).
 
+**The conversation proxy's tails (D1 work design G1, slice A1).** The Docker runtime's proxy,
+`POST /api/conversations/{conversation_id}/{tail}`, reaches every POST of a conversation's inner
+server. Its allowlist entry is `dispatcher` `allowed` with a closed list of tails, `tails`:
+`events` and `bash/execute_bash_command` (before, `validation`: the admission probe only). The
+list is pinned in `routes.json`, so in the profile digest: a further tail is a profile change and
+a promotion. A call on a `{tail}` route names a tail its entry lists and the client has a grammar
+for (`TAIL_GRAMMARS`), exactly; any other tail (a case, encoding, slash or traversal variant, or a
+listed tail without a grammar), and every call on an allowed `{tail}` route without a list, is
+`ROUTE_TAIL_NOT_ALLOWED`, with zero transport calls. Each tail takes one exact body:
+
+| Tail | Body the caller passes | Sent as | Refused |
+|---|---|---|---|
+| `events` | `{"role": "user", "content": [{"type": "text", "text": <1 to MESSAGE_MAX_CHARS (32768) characters>}], "run": true}`, nothing else | the same object, rebuilt | `TAIL_BODY_INVALID`: another key, role, part type or part count, `run` not exactly `true`, empty or oversized text, a NUL, a lone surrogate |
+| `bash/execute_bash_command` | a `ContainerCommand`, made only by a builder registered with `command_builder(name)` (slice A2 registers SEED and RESULT; there is no free-form command function) | `{"command", "cwd": "/workspace", "timeout"}` | `COMMAND_NOT_BUILT`: a raw string, a mapping or any other object, or a command of a builder no longer registered; `TAIL_BODY_INVALID`: a command of 0 or more than COMMAND_MAX_CHARS (4 MiB) characters, a NUL or a lone surrogate, a timeout that is not an integer of 1 to COMMAND_MAX_TIMEOUT_S (540) seconds, an extra field |
+
+A builder returns `{"command", "timeout"}` and optionally `"deliver": {"part", "name"}`; the
+registered builder checks it and returns the immutable `ContainerCommand`, and the client checks
+it again before the send. A command that asks for a delivery reaches the transport as
+`transport(method, path, body, deliver={"part", "name"})` (the live transport's exchange delivery,
+below); every other call keeps the three-argument form. `ROLE_TOKEN_EXPOSURE` guards both tails as
+every other call.
+
 **The preconditions (decision 0001).** Before the create, `send_create` reads `GET /server_info`
 through the client and `server_preconditions` requires all five; each failed one is named in
 `SERVER_PRECONDITION_FAILED`'s context, and the create is not sent:
@@ -1171,6 +1193,8 @@ acceptance takes effect when a manifest naming it is promoted.
 | `WORKING_DIR_NOT_ALLOWED` | the body's workspace is not the server-provisioned `/workspace` |
 | `ROUTE_NOT_ALLOWLISTED` | a call (the create or any other) whose route the pinned allowlist does not list exactly once with `dispatcher` `allowed`; or a create that does not target `POST /api/conversations` |
 | `ROUTE_PARAMETER_INVALID` | a route's path parameters are not exactly its placeholders, each in its grammar |
+| `ROUTE_TAIL_NOT_ALLOWED` | a call on a `{tail}` route names a tail its allowlist entry does not list or the client has no body grammar for (an allowed `{tail}` route without a list admits none) |
+| `TAIL_BODY_INVALID`, `COMMAND_NOT_BUILT` | a conversation proxy tail's body is not exactly that tail's grammar; the command tail's body is not a command made by a registered builder |
 | `BODY_MALFORMED`, `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH` | the body is not an object (or a bodyless call carries one), carries a field outside the allowlist, differs from the pinned template, or lacks the reserved conversation id |
 | `WORKSPACE_CATEGORY_UNAVAILABLE`, `WORKSPACE_PATH_INVALID`, `WORKSPACE_RESERVED_NAME`, `WORKSPACE_NOT_PLANNED`, `WORKSPACE_PATH_UNSAFE` | the host workspace: no usable category; outside the fixed rule's grammar; a Windows device name; not this attempt's; a link, junction, reparse point or non-directory on disk |
 | `SERVER_PRECONDITION_FAILED` | `GET /server_info` does not show P1 to P5 (above), or was not answered; the create is not sent |
@@ -1275,7 +1299,7 @@ it creates and reads nothing there (exit 2 on a managed-root refusal).
 |---|---|
 | `AcceptanceRefusalTests` | **the proof.** Each refusal with its code, and with nothing reserved and no ordinal asked for: an unapproved repository; a design revision other than the accepted one, a change with none accepted, unresolvable pointers (digest, revision, artifact), no pointer, several revisions; an unapproved, unbound, drifted (content, line endings, one byte), missing, invalid or non-operational profile; an unknown, unbound or missing catalog pin, and a manifest with no pins; an unknown or unbound stage; blocked, missing-dependency and finished Work, unknown and unreadable Work; extra fields; caller-supplied path, digest, runtime, resource, revision and ordinal fields; paths in identifier fields; malformed requests |
 | `SuccessTests` | the record's fields; it feeds `reserve_attempt`, which reserves (and is idempotent); the next resolution asks for ordinal 2 with its own workspace, which the store refuses as a live claim until the first attempt fails; the review binding; case-insensitive Work ids; the checked-in profiles are refused as not operational |
-| `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs (v2, with the admission policy) and a pinned golden policy digest; each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
+| `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs (v2, with the admission policy) and a pinned golden policy digest (over the route allowlist and the synthetic profile digests it was computed with: a changed input is not a changed canonical form); each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
 | `ManifestCheckerTests` | the example is valid; schema, version, identifiers, duplicates (also duplicate JSON keys), unknown references, non-full commits, digest format, unreadable bytes; type fuzzing never crashes |
 | `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading, in every Windows form of its path (`\\?\`, `\\.\`, trailing spaces and dots, case, `/`), and `inside_or_around` itself; path shapes; a manifest outside the checkout is refused without a decision source and loads with one; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
 | `CliTests` | `check-manifest` exit codes and report; `manifest-path` with `AIEH_DATA_ROOT` in a throwaway directory creates nothing |
@@ -1360,7 +1384,8 @@ times wherever nothing may be called. The positive control asserts exactly one `
 
 | Class | What it shows |
 |---|---|
-| `RouteAllowlistTests` (unit) | over every route of the pinned allowlist, a call is sent only for `dispatcher` `allowed`, with the rendered path; unknown paths, other methods, concrete paths, query strings, trailing slashes, case variants, `validation`, `not-used` and WebSocket routes, an allowed route listed twice or re-marked, wrong, extra, missing or out-of-grammar path parameters, a body on a `GET`, and a drifted or malformed allowlist are refused with zero calls |
+| `RouteAllowlistTests` (unit) | over every route of the pinned allowlist, a call is sent only for `dispatcher` `allowed`, with the rendered path (a `{tail}` route once per listed tail, with that tail's body; no entry holds `validation` since slice A1); unknown paths, other methods, concrete paths, query strings, trailing slashes, case variants, `validation`, `not-used` and WebSocket routes, an allowed route listed twice or re-marked, wrong, extra, missing or out-of-grammar path parameters, a body on a `GET`, and a drifted or malformed allowlist are refused with zero calls |
+| `ProxyTailTests` (unit) | D1 slice A1: the two listed tails send their exact wire bodies; 30 other tails (case, encoding, slash, traversal, whitespace, NUL, other types) are `ROUTE_TAIL_NOT_ALLOWED`; a listed tail without a grammar, a list-less, empty, malformed or one-tail list, and a re-marked entry admit nothing; 25 message variants are `TAIL_BODY_INVALID`; a raw string, a mapping, a mock, a command of an unregistered builder are `COMMAND_NOT_BUILT`, a `ContainerCommand` cannot be made or changed outside a builder; 19 command variants are refused at the builder and 5 altered after building at the client; the bounds themselves pass; a delivery reaches the transport as its own argument; a held role token in either tail is `ROLE_TOKEN_EXPOSURE`; every refusal with zero transport calls |
 | `ServerPreconditionTests` (unit) | the recorded `/server_info` meets P1 to P5; each precondition alone refuses (another version, a non-2xx or malformed answer, a missing capability, a local, process, case-variant or absent runtime, a selectable runtime list), and several failures are all named |
 | `CreateReceiptTests` (unit) | 201 is created, 200 existing; another, missing or hex id, other statuses and non-objects give no receipt; the execution reference parses as the lineage reader's attempt reference |
 | `DispatchTests` | the positive control (two calls, the store's three transitions and their details, `workRef` and `outcomeRef` in the reservation, nothing of the answer but its id stored, no event route called, the workspace created as plain directories); an existing conversation is confirmed as existing; the call order and the re-read record (spied: admit and `send_create` get the store's record, not the resolution's object; admission ran with no workspace, the send on a `dispatched` attempt with one); a stored intent altered in seven ways is `RESERVATION_INVALID` and failed; `reserved_inputs` on a missing, untyped or no longer reserved attempt; a resolution refusal reserves nothing; an admission refusal is failed and creates no workspace; junctions planted after admission at the category, the repository and the Work, and a file at the workspace, are refused and nothing is created through them; every precondition case refuses the create through `dispatch` (one `GET`, no `POST`, failed with `create_sent` false), as do an unanswered `/server_info` and an allowlist that no longer allows it; a 4xx is `CREATE_REFUSED` and failed; a 5xx, a 202 or another conversation's id is `unknown` (reconciliation required) and never retried; a lost answer is `unknown`, re-raised, and blocks the next attempt; the outcome reference absent, malformed, ambiguous or at two revisions is refused before any reservation |

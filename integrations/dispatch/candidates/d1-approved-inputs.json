@@ -1,6 +1,6 @@
 {
   "schema": "ai-engineering-harness/dispatch/approved-inputs/v1",
-  "version": 1,
+  "version": 2,
   "repositories": [
     {
       "id": "aieh-d1-demo"
@@ -16,7 +16,7 @@
   "profiles": [
     {
       "id": "strong-windows-qemu-whpx",
-      "sha256": "7d01e62c23fd521c523a08946a9bb65a7c6d74c656fdaed2dffe5045c687a17b"
+      "sha256": "b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7"
     }
   ],
   "catalog_pins": [
