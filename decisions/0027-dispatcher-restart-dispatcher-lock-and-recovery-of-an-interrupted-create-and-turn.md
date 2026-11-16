@@ -1,6 +1,8 @@
 # 0027 - Dispatcher restart: the dispatcher lock, and the recovery of an interrupted create and turn
 
-Status: Proposed - 2026-11-16, for plan leaf E-01.4.2 (architect, gates A and G). It authorizes no reserved act.
+Status: Accepted - 2026-11-16, by the engineering manager (decision 0018 points 1 and 3.1), at leaf E-01.4.2's verdict
+(evidence: the log entry e-01-4-2-verdict-2026-11-16); proposed the same day for plan leaf E-01.4.2 (architect, gates A
+and G). It authorizes no reserved act.
 
 **Authority:** plan leaf E-01.4.2 and its group E-01.4 (actions, artifacts and proofs unchanged by this record); the I1
 commitment ([`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md), commitment-i1-2026-11-16); blueprint

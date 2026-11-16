@@ -830,8 +830,8 @@ that is the dispatcher principal (decision 0013 point 1): the Owner's account th
 module. Only fakes have driven `dispatch`, including a fake ssh running the real API probe against
 a loopback fake server: no management key or Agent Server, **not yet verified** live.
 
-The dispatcher lock and `recover` (plan leaf E-01.4.2, slices 5a and 5b; draft decision 0027,
-Proposed; [dispatch README](../integrations/dispatch/README.md#the-dispatcher-lock-e-0142-slice-5a)):
+The dispatcher lock and `recover` (plan leaf E-01.4.2, slices 5a and 5b; decision 0027,
+Accepted; [dispatch README](../integrations/dispatch/README.md#the-dispatcher-lock-e-0142-slice-5a)):
 `dispatcher_lock.py` is one exclusive, non-blocking operating-system lock per integration store, the
 empty file `<store file name>.dispatcher.lock` beside the store, never deleted. `dispatch` holds it from
 before the request is resolved until the create's outcome is recorded, the attempt run from before its

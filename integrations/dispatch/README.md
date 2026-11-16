@@ -826,7 +826,7 @@ live.
 
 Plan leaf E-01.4.2, the architect's ruling R17 and draft
 [decision 0027](../../decisions/0027-dispatcher-restart-dispatcher-lock-and-recovery-of-an-interrupted-create-and-turn.md)
-(Proposed). [`dispatcher_lock.py`](dispatcher_lock.py) (standard library only) is one exclusive,
+(Accepted at E-01.4.2's verdict). [`dispatcher_lock.py`](dispatcher_lock.py) (standard library only) is one exclusive,
 non-blocking operating-system lock per integration store: the file `<store file name>.dispatcher.lock`
 beside the store, in its directory and custody. It holds no data (0 bytes), is never deleted, and the
 operating system releases it when the holder's handle closes or its process ends. The technique is

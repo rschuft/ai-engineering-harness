@@ -5401,6 +5401,75 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - within I1, E-01.4.2's after-message restart rows are proved against an event whose dispatcher-read fields are derived from the pinned upstream source; their live counterpart, E-01.6, is outside I1;
     - E-01.4.2 and E-01.7 now admit clock-valued replays and, on the dispatcher's face, listed unserved properties.
   - **Next:** execution continues. E-01.4.2's slice 5c has its clauses (PB-10) and its decision rule's held rows (PB-11); E-01.7 has PB-12's answer. Planning runs again for U-06.1's design acceptance, OA-33's presentation, a blocker, or I1's acceptance.
+- <a id="e-01-4-2-verdict-2026-11-16"></a>**2026-11-16: E-01.4.2 PASS, the engineering manager's verdict (decision 0018 point 1); decision 0027 Accepted.** Offline, judged against the proof as amended on 2026-11-16 ([PB-10 and PB-11](#i1-recovery-disposed-2026-11-16)) and the design in [`evidence/I1-restart-recovery-design-2026-11-16.md`](I1-restart-recovery-design-2026-11-16.md) (R16 to R22, slices 5a to 5c).
+  - **Commits, all pushed by this entry:**
+    - slices 5a and 5b: `1b025ba`, `9fdfd26`, `8ab5c60`, `21eeed6`;
+    - their review's fixes: `0d05c84`, `944cf9b`, `4b31cf8`, `f45a66c`;
+    - slice 5c: `669b60d` (the rule, committed before the matrix ran), `0662781`, `5051fde`, `daea674`, `8dd67d1`, `9737d00`;
+    - 5c's review fixes: `37cd964`, `668f014`, `035a59e`.
+  - **Code:**
+    - `integrations/dispatch/dispatcher_lock.py` and `restart_recovery.py` (`recover`);
+    - `integrations/agentfixture/`: the cited core, `observations.json`, and the provenance table in its README;
+    - tests `test_dispatcher_lock`, `test_restart_recovery`, `test_result_receipts`, `test_restart_matrix`, `test_read_binding` and `test_agentfixture_core`.
+  - **"Same conversation is recovered without repeated effects; original E-01.4 proof satisfied."** In `test_restart_matrix.Rows`, all 16 rows (A to L, C', D', J', Z) were observed exactly as committed in `669b60d`. In every row the core received at most one create per operation key, and at most one conversation received a message; `recover` sent reads (`GET`s) only, and a second `recover` changed nothing.
+    - Rows D, E, J, K and L recover onto ordinal 1's own conversation.
+    - Rows G, H and I hold the attempt on its conversation and send nothing; the exit is E-05.8's end, after which the turn is reported `ended` (PB-11).
+  - **"A lost create response and a dispatcher restart at each step ... shown by the fake's call log."** The lost response is row E. The restarts:
+    - row A: before the create;
+    - rows B to F: after it;
+    - rows G to L: after the message.
+    - `AgentServerCore.calls` records only what the core received. A request a transport event drops leaves no entry (`ByState`).
+    - The restart is a simulated death, not a process restart. The real-process facts are E-01.1.2's crash matrix and slice 5a's condition 2 (`KilledHolder`), and the live restart is E-01.6's.
+  - **The catalog and its four classes.** It has 75 field rows:
+    - observation 46 (3 of them clock-valued, replayed unchanged);
+    - echo 3;
+    - pinned rule 3: SEED's `stdout` and `exit_code` from `attempt_run.SEED_SCRIPT`, and the stop answer's `body` from `tools/guest.py` `API_PROBE`;
+    - label 12;
+    - not served 8;
+    - source-derived 3.
+    - Tests:
+      - `TableBinding` holds the README table and the catalog equal.
+      - `Citations` finds each value in its cited section.
+      - `Rules` checks the equivalent-request rule, the clock rule, and that each inferred determining input is cited to the source.
+    - An independent audit of every observation row (dispatch 13) found each value in its record. The rows it could not show equivalent were corrected: re-cited, narrowed, or no longer served.
+  - **The one source-derived exception.** `message-event`'s `source`, `llm_message` and `llm_message.content`, cited to openhands-sdk 1.60.1 (sha256 `f6efa8f8…eb6b`) and openhands-agent-server 1.60.1 (sha256 `df80a622…76f6`) by in-wheel path and line. The wheels' hashes were checked against `composition/lock/components.lock.json`, and the reviewer confirmed each line. It is answered in process only. Its observed counterpart is E-01.6's.
+  - **The read-binding test** (`test_read_binding`) records at the answer boundary over all 29 dispatch test modules. The fields read equal the 29 rows marked read, with their reading functions, and none of them is clock-valued or not served.
+    - The recorder fails closed on any read that sees the whole answer or changes it.
+    - Its stated blind spots: a path no test runs, answers a test knob makes, and an unbound `dict` method on a key the answer does not hold.
+  - **Transport events and knobs.** The matrix's wire forwards, drops or withholds, and never answers. No row is decided by a knob. The knobs stay in the test modules, and the three fake modules keep their 161 test ids and every assertion.
+  - **Reviews and validation:**
+    - Two fresh read-only reviews:
+      - dispatch 10, of 5a and 5b: 4 should-fix findings, all fixed;
+      - dispatch 13, of 5c: 4 should-fix findings, all fixed.
+    - 67 mutants killed across the dispatches.
+    - The dispatch suite runs 822 tests, OK. The full `tools/run_tests.py` passed (15 suites) at `f45a66c` and at `668f014`.
+    - `verify_seed` PASS.
+    - The engineering manager re-ran the leaf's modules at `035a59e`: all OK.
+  - **Decision 0027 is Accepted** at this verdict (decision 0018 points 1 and 3.1). The one revision since Proposed, point 4, says the native driver `d1_run` does not run `recover`. No composition root calls `recover` yet; E-01.8's fixture root (slice 11) will.
+  - **Delegated decisions, recorded with their basis in the READMEs:**
+    - refusal codes: `RECOVER_INSIDE_HELD_REGION`, `TURN_RESERVED_UNPROVEN`, `RESULT_DELIVERY_UNSETTLED`, `LOOKUP_INDETERMINATE`;
+    - a turn of an ended attempt is reported in `ended` and not held;
+    - result receipts left `dispatched` are settled by reading them;
+    - readings 1 to 5 in the agentfixture README;
+    - the stop answer's body is classed pinned rule;
+    - the two unread `/server_info` timeouts are not served;
+    - a write of an Integration process record is retried while a reader holds it (ownerhost, `944cf9b`).
+  - **Fix-forward, unrelated but detected:**
+    - the ownerhost run-record replace race and the `test_stop` signal race, both load-sensitive;
+    - defect 3, an interrupted intake receipt.
+  - **Carried, inside committed scope:**
+    - **To E-01.5:**
+      - R22: refuse the next ordinal while an earlier one with a `dispatched` event is not known to have ended at the server;
+      - the 404 race;
+      - refuse ordinal N+1 while an earlier ordinal's grant journal is unrevoked.
+      - Its gate stays at `run_attempt`'s `inspect` step, before the message.
+    - **To slice 9 (E-01.7):**
+      - the listener validates a create body before answering 201;
+      - its "unknown" scenario is not built as a lost message answer.
+  - **Planning's confirmation request answered: no I1 scenario ends an attempt after its message.** E-01.8 dispatches once and takes the result in. U-04.1's failed states (a refused create, the gate's not-launched) both come before the message, and the inspection end reads an empty log.
+  - **Discovered work (planning's):** `integrations/gitea/gitea_host.py` writes its polled run record with the same `os.replace` pattern that raced in ownerhost.
+  - **Not verified:** Linux and macOS lock behaviour; anything live; the upstream line citations, which no repository test checks because the wheels are not in the repository.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
