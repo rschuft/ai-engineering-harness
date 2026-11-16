@@ -169,8 +169,10 @@ def rehearse(*, transport, raw, pull, routes_bytes, fixture_body, workdir):
                 detail['whole'] = ok
             elif name == 'line-endings':
                 detail['repr'] = repr(stdout)
-                ok = 'tRuE' in stdout
-                detail['crlf_kept'], detail['switch_spelling_kept'] = '\r\n' in stdout, ok
+                ok = answer.get('status') == 200 and body.get('exit_code') == 0
+                detail['crlf_kept'], detail['switch_spelling_kept'] = '\r\n' in stdout, 'tRuE' in stdout
+                # review of B and C, S4: the fixture registers no secret, so no masking applies to it here
+                detail['switch_spelling_kept_note'] = 'vacuous: the fixture conversation registers no secret'
             else:
                 detail['stdout'] = stdout[:2000]
                 ok = body.get('exit_code') == 0 and 'git version' in stdout and 'Python 3' in stdout
@@ -199,15 +201,28 @@ def rehearse(*, transport, raw, pull, routes_bytes, fixture_body, workdir):
             record('RESULT', False, refused=exc.to_json(), delivered=answer.get('delivered'))
             return out
         reasons = sorted({e['reason'] for e in printed['excluded']})
-        record('RESULT, delivered (os.link, exclusive)', True, delivered=printed['delivered'],
-               excluded={'count': printed['excluded_digest']['count'], 'reasons': reasons},
+        # review of B and C, S4: the step passes only when both exclusion paths ran
+        record('RESULT, delivered (os.link, exclusive)', 'forbidden-name' in reasons and 'protected-dir' in reasons,
+               delivered=printed['delivered'], excluded={'count': printed['excluded_digest']['count'],
+                                                          'reasons': reasons},
                pathspec_exclusion='forbidden-name' in reasons, index_info='protected-dir' in reasons,
                tests=printed['tests']['status'], commit=printed['commit'])
-        pulled = pull(printed['delivered']['name'])
-        record('exchange pull and the retained verifier', pulled.get('result') == 'pulled',
-               staged=pulled.get('staged'), verified=(pulled.get('bundle') or {}).get('verified'))
-        verified = AR.intake_result(fixture.store, key, base=base, printed=printed, pulled=pulled, message=message,
-                                    when=when)
+        try:
+            pulled = pull(printed['delivered']['name'])
+        except Exception as exc:  # noqa: BLE001 - recorded in the record (S4), never raised past it
+            record('exchange pull and the retained verifier', False, error=type(exc).__name__,
+                   code=str(getattr(exc, 'code', ''))[:64])
+            return out
+        if not record('exchange pull and the retained verifier', pulled.get('result') == 'pulled',
+                      staged=pulled.get('staged'), verified=(pulled.get('bundle') or {}).get('verified'),
+                      pull_result=pulled.get('result')):
+            return out
+        try:
+            verified = AR.intake_result(fixture.store, key, base=base, printed=printed, pulled=pulled,
+                                        message=message, when=when)
+        except di.DispatchRefused as exc:
+            record('the host intake: the commit-id equality and the tree policy', False, refused=exc.to_json())
+            return out
         record('the host intake: the commit-id equality and the tree policy', verified.commit == printed['commit'],
                result=verified.to_json())
         answer = client.call('POST', AR.PROXY, params={'conversation_id': cid, 'tail': di.COMMAND_TAIL}, body=again)
@@ -251,12 +266,19 @@ def main(argv=None):
         print(f'REFUSED: the instance {args.name} already exists; choose a new name (nothing was done)',
               file=sys.stderr)
         return 2
-    verdict, started = None, False
+    verdict, started, destroy_failed = None, False, False
     try:
         try:
             created = g.create(ctx, args.name, g.READY_TIMEOUT_S, None, provision=True)
-        finally:
-            started = os.path.lexists(ctx.instance_dir(args.name))      # ours: it did not exist before
+            started = True
+        except g.Refused as exc:
+            # ours only when create made it: its refusal of an existing directory means another process made it
+            # between the check above and the create (review of B and C, NIT 8)
+            started = os.path.lexists(ctx.instance_dir(args.name)) and 'never reuses' not in str(exc)
+            raise
+        except BaseException:
+            started = os.path.lexists(ctx.instance_dir(args.name))
+            raise
         write(out_dir, '1-create.json', created)
         if created.get('result') in ('unavailable', 'not-ready') or \
                 (created.get('create') or {}).get('result') == 'not-ready':
@@ -297,8 +319,8 @@ def main(argv=None):
                 print(f'destroy: {destroyed.get("result")}', file=sys.stderr)
             except g.Refused as exc:
                 print(f'STOP: the destroy was refused: {exc.code}: {exc}', file=sys.stderr)
-                return 1
-    return 0 if verdict == 'PASS' else 1
+                destroy_failed = True        # no return in finally: an exception in flight is never swallowed
+    return 0 if verdict == 'PASS' and not destroy_failed else 1
 
 
 if __name__ == '__main__':

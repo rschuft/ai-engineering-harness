@@ -14,11 +14,13 @@ registered only by the rehearsal.
 """
 from pathlib import Path
 import importlib.util
+import os
 import re
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -115,6 +117,65 @@ class Rehearsal(unittest.TestCase):
         self.assertEqual(guest_.calls[-1], ('raw', 'DELETE', f'/api/conversations/{FIXTURE["conversation_id"]}'))
         self.assertEqual(puller.names, [AR.result_name(steps['the host intake: the commit-id equality and the tree '
                                                              'policy']['result']['attemptId'])])
+
+    def rehearse(self, pull=None, where='a'):
+        base = self.tmp / where
+        base.mkdir()
+        guest_ = FakeContainer(base)
+        (base / 'host').mkdir()
+        puller = tar.Puller(base / 'host', guest_.exchange)
+        routes = (S0.REPO / 'profiles' / S0.PROFILE_ID / 'agent-server' / 'routes.json').read_bytes()
+        (base / 'work').mkdir()
+        out = S0.rehearse(transport=guest_.transport, raw=guest_.raw, pull=pull or puller, routes_bytes=routes,
+                          fixture_body=FIXTURE, workdir=base / 'work')
+        return out, guest_
+
+    def test_a_refused_intake_or_pull_is_recorded_never_raised(self):
+        """Review of B and C, S4 (the reviewer's probe_step0_raise): the refusal is in the record, the fixture
+        conversation deleted, the result FAIL."""
+        delete = ('raw', 'DELETE', f'/api/conversations/{FIXTURE["conversation_id"]}')
+        with mock.patch.object(AR, 'intake_result', side_effect=di.DispatchRefused('RESULT_TREE_REFUSED', 'a path')):
+            out, guest_ = self.rehearse()
+        intake = [s for s in out['steps'] if s['step'].startswith('the host intake')]
+        self.assertEqual((out['result'], intake[0]['ok'], intake[0]['refused']['code']),
+                         ('FAIL', False, 'RESULT_TREE_REFUSED'))
+        self.assertEqual(guest_.calls[-1], delete)
+        out, guest_ = self.rehearse(pull=lambda name: {'result': 'refused', 'code': 'BUNDLE_REFUSED'}, where='b')
+        pulled = [s for s in out['steps'] if s['step'].startswith('exchange pull')]
+        self.assertEqual((out['result'], pulled[0]['ok'], pulled[0]['pull_result']), ('FAIL', False, 'refused'))
+        self.assertFalse([s for s in out['steps'] if s['step'].startswith('the host intake')])
+        self.assertEqual(guest_.calls[-1], delete)
+
+    def test_the_rehearsal_touches_no_live_managed_root(self):
+        """The reviewer's probe_step0_live_root: every integrations/paths resolution is a throwaway root with no
+        configuration file, and no configuration file or integration store outside the temporary directories is
+        opened."""
+        resolved, opened, armed = [], [], [True]
+        temp = Path(tempfile.gettempdir()).resolve()
+        real = di.paths.resolve
+
+        def resolve(*args, **kwargs):
+            resolved.append((args, kwargs))
+            return real(*args, **kwargs)
+
+        def hook(event, args):
+            if armed[0] and event == 'open' and args and isinstance(args[0], (str, bytes)):
+                path = os.fsdecode(args[0]).replace('\\', '/').lower()
+                if path.endswith(('/config.yml', '.sqlite', '.sqlite-wal')) and \
+                        not path.startswith(temp.as_posix().lower()):
+                    opened.append(path)
+        sys.addaudithook(hook)
+        try:
+            with mock.patch.object(di.paths, 'resolve', resolve):
+                out, _ = self.rehearse()
+        finally:
+            armed[0] = False
+        self.assertEqual(out['result'], 'PASS')
+        self.assertEqual(opened, [])
+        for args, kwargs in resolved:
+            self.assertEqual(kwargs.get('config'), {})
+            root = Path((args[0] if args else kwargs.get('environ'))['AIEH_DATA_ROOT']).resolve()
+            self.assertTrue(root.is_relative_to(temp), root)
 
     def test_the_test_only_builders_are_the_rehearsal_s(self):
         self.assertIn(S0.EDIT_BUILDER, di._TEST_BUILDER_NAMES)
