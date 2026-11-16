@@ -1,8 +1,8 @@
 """The Integration process's lifecycle (plan leaf U-01.3; Proposed decision 0025 point 1; decision 0011's service verbs
 through the platform contract of integrations/platform).
 
-Verbs: ``up``, ``down``, ``restart``, ``status``, ``inspect``, ``verify``. There is no ``install``, ``upgrade``,
-``uninstall`` or credential verb: the process runs from the checkout under the tools interpreter, and it is custodian
+Verbs: ``up``, ``down``, ``restart``, ``recover``, ``status``, ``inspect``, ``verify``. There is no ``install``,
+``upgrade``, ``uninstall`` or credential verb: the process runs from the checkout under the tools interpreter, and it is custodian
 of no credential. Linux and macOS are ``PLATFORM_UNSUPPORTED``, as the contract answers today.
 
 - ``up`` refuses a running environment (``ALREADY_RUNNING``) and a held port (``PORT_IN_USE``: 127.0.0.1:13310 is
@@ -20,7 +20,10 @@ of no credential. Linux and macOS are ``PLATFORM_UNSUPPORTED``, as the contract 
   check to the end of the wait, so their checks never race each other. ``up`` waits for the run record of its own launch (a launch id it passes), never another's.
 - ``down`` writes the stop request the server watches for, waits on the processes themselves (bounded by a
   ceiling), and terminates the supervisor only if they have not ended; the job then ends the server.
-- ``restart`` is the contract's, under a write-ahead transition record (``<state>/owner-host/transitions``).
+- ``restart`` is the contract's, under a write-ahead transition record (``<state>/owner-host/transitions``); a
+  restart whose stop or start raises or is refused closes its record as failed, with the cause, so it never stays
+  pending. ``recover`` runs the contract's recovery for a record left pending by a killed restart (the remedy of
+  TRANSITION_PENDING). Both hold ``transition.lock``, so two never interleave.
 - ``status`` and ``inspect`` change nothing. ``verify`` writes nothing and exits 0 only when its
   ``aieh-readiness/1`` record passes: the supervisor and the server run, the server runs in the supervision, it
   listens on 127.0.0.1:13310 and nowhere else, and nothing else holds that port.
@@ -30,7 +33,7 @@ commit and the tools lock digest, the configuration), ``<state>/owner-host/serve
 its process, address, port, console window and its live import census), the conversation store beside them; logs in
 ``<logs>/owner-host/`` (``supervisor.log``, ``console.log``, ``service.log``).
 
-  <tools python> -I -B integrations/ownerhost/service.py up|down|restart|status|inspect|verify
+  <tools python> -I -B integrations/ownerhost/service.py up|down|restart|recover|status|inspect|verify
 
 Exit 0 done, 1 failed (or verify did not pass), 2 refused (a stable code).
 """
@@ -135,6 +138,10 @@ class Layout:
     @property
     def launch_lock(self) -> Path:
         return self.state / 'launch.lock'
+
+    @property
+    def transition_lock(self) -> Path:
+        return self.state / 'transition.lock'
 
 
 class InstanceLock:
@@ -429,10 +436,46 @@ class Operations(contract.ServiceOperations):
         return status(self.lay, self.adapter)['ready']
 
 
+def _close_failed(log, exc: BaseException) -> None:
+    """A transition the verb could not finish (its stop or start raised or was refused) is closed as failed, with
+    its cause, so that it never stays pending: the next restart is not refused for it."""
+    record = log.pending()
+    if record is not None:
+        log.finish(record, 'failed', reason='the transition raised before it completed',
+                   cause={'code': getattr(exc, 'code', type(exc).__name__),
+                          'detail': getattr(exc, 'detail', str(exc))[:500]})
+
+
+def _transition(lay: Layout, adapter, run, *, fresh: bool) -> dict:
+    """RUN (the contract's restart or recover) under the transition lock, so that two transitions never interleave;
+    a failure closes the pending record as failed and is raised again. FRESH (restart): a record already pending is
+    refused TRANSITION_PENDING first and left as it is, for recover."""
+    lock = InstanceLock(lay.transition_lock)
+    if not lock.acquire_within(2 * (READY_CEILING_S + STOP_CEILING_S)):
+        raise refused('ALREADY_RUNNING', 'another restart or recover holds the transition lock')
+    try:
+        log = contract.TransitionLog(lay.transitions, SERVICE, adapter.asset_key)
+        if fresh:
+            log.refuse_if_pending()
+        try:
+            return run(log, Operations(lay, adapter))
+        except BaseException as exc:
+            _close_failed(log, exc)
+            raise
+    finally:
+        lock.release()
+
+
 def restart(lay: Layout, adapter) -> dict:
-    log = contract.TransitionLog(lay.transitions, SERVICE, adapter.asset_key)
-    log.refuse_if_pending()
-    return contract.restart(log, Operations(lay, adapter))
+    """Stop (when running) and start again under a write-ahead transition record. A pending record of an
+    interrupted transition (its process killed) is refused, TRANSITION_PENDING: run recover."""
+    return _transition(lay, adapter, contract.restart, fresh=True)
+
+
+def recover(lay: Layout, adapter) -> dict:
+    """The contract's recovery: reconcile the actual state with a pending transition, then resume it (an
+    interrupted restart is finished); with nothing pending it only reports the state."""
+    return _transition(lay, adapter, contract.recover, fresh=False)
 
 
 def readiness(lay: Layout, adapter) -> dict:
@@ -455,6 +498,7 @@ def main(argv=None, *, config=None) -> int:
     for name, text in (('up', 'start the managed environment and wait until the server listens'),
                        ('down', 'ask the server to stop, then the supervisor; terminating it ends the server'),
                        ('restart', 'down (when running) and up again, under a write-ahead transition record'),
+                       ('recover', 'reconcile the actual state with a pending transition, then resume it'),
                        ('status', 'report the processes, listeners and job; changes nothing'),
                        ('inspect', 'report the platform, records, configuration and readiness; changes nothing'),
                        ('verify', 'print the aieh-readiness/1 record; exit 0 only when it passes')):
@@ -473,7 +517,7 @@ def main(argv=None, *, config=None) -> int:
             return supervise(Layout(args.state_dir, args.logs_dir), adapter, args.launch_id)
         lay = layout(paths.resolve(config=config))
         report = {'up': up, 'down': down, 'restart': restart, 'status': status, 'inspect': inspect,
-                  'verify': readiness}[args.command](lay, adapter)
+                  'verify': readiness, 'recover': recover}[args.command](lay, adapter)
     except LifecycleError as exc:
         sys.stderr.write(f'owner-host: {exc}\n')
         return 2 if exc.refusal else 1

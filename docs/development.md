@@ -273,7 +273,7 @@ Only what is listed as verified has been exercised.
 | `ownerhost:test` | `<tools python> -I -B -m unittest discover -s integrations/ownerhost/tests -v` | no | [Integration process](../integrations/ownerhost/README.md) tests (U-01.3): the Owner UI session credential's shape, verifier and refusals, each changing nothing, and every other inventory credential shape refused; the route-table walk, the preflight, Host and Origin over ASGI; the enroll command's console guard, on a real hidden console in a child (gate G8); the lifecycle with a fake adapter; no client socket and the import census; and the real service started and stopped on `127.0.0.1:13310` with a throwaway layout (listener table, host census, environment, records and logs scanned for credentials, no window, no orphan). Fails, rather than skips, when the port is already held. |
 | `ownerhost:up` | `<tools python> -I -B integrations/ownerhost/service.py up` | no | Starts the [Integration process](#owner-host): a supervisor holding a kill-on-close Job Object and the server inside it, on `127.0.0.1:13310` only; refuses a running environment and a held port (never another port); waits until it listens. |
 | `ownerhost:down` | `<tools python> -I -B integrations/ownerhost/service.py down` | no | Its stop request, then the supervisor; terminating the supervisor ends the server through the job. |
-| `ownerhost:restart`, `ownerhost:status`, `ownerhost:inspect` | `<tools python> -I -B integrations/ownerhost/service.py restart\|status\|inspect` | no | `restart` under a write-ahead transition record; `status` and `inspect` change nothing. |
+| `ownerhost:restart`, `ownerhost:recover`, `ownerhost:status`, `ownerhost:inspect` | `<tools python> -I -B integrations/ownerhost/service.py restart\|recover\|status\|inspect` | no | `restart` under a write-ahead transition record, closed as failed when its stop or start fails; `recover` finishes a restart left pending by a killed one; `status` and `inspect` change nothing. |
 | `ownerhost:verify` | `<tools python> -I -B integrations/ownerhost/service.py verify` | no | The `aieh-readiness/1` record of the running process; exit 0 only when it passes. |
 | `ownerhost:enroll [-- --hours N]` | `<tools python> -I -B integrations/ownerhost/enroll.py [--hours N]` | no | The Owner's enrollment of the Owner UI session credential (U-01.3, OA-32 (a)), in his own console window only: refused unless standard input and output are both console handles; mints the credential, keeps its verifier, supersedes the current session, and shows the credential once. |
 | `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
@@ -1778,8 +1778,9 @@ needs the Owner UI session credential (`cred-owner-ui-session`) in the `X-AIEH-O
 header, never a cookie; the CORS preflight is the one exception and carries no data. The
 Owner mints the credential himself with `ownerhost:enroll` at a console (it refuses plain pipes
 and redirections, an accidental piped run; a process of the Owner's account that drives a console
-or writes the store is the accepted same-account limit, which the Owner sees as his session
-superseded); the Owner conversation store
+or writes the store is the accepted same-account limit: such an enrollment supersedes the Owner's
+session, refused at his next request unless a same-account writer of the store undoes it first); the
+Owner conversation store
 ([`integrations/conversation/`](../integrations/conversation/README.md),
 `<state>/owner-host/conversation.sqlite`) keeps only its verifier. The shell's sign-in view
 (`/sign-in`) verifies the pasted credential with `POST /session`, keeps it in its own

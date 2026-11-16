@@ -196,6 +196,73 @@ class Instance(Base):
         self.assertEqual(adapter.launched, [])
 
 
+class OtherLaunch(FakeAdapter):
+    """launch_supervisor plants a ready run record of ANOTHER launch (a concurrent up's), and its own supervisor then
+    exits having lost the instance lock (the review's mutant M32: up accepting any launch's record)."""
+
+    def __init__(self, lay):
+        super().__init__(rows=[row('127.0.0.1', 13310, 20)])
+        self.lay = lay
+
+    def launch_supervisor(self, argv, log, cwd, env=None):
+        self.lay.run_record.write_text(json.dumps({
+            'format': SV.RUN_FORMAT, 'service': 'owner-host', 'state': 'running', 'launch_id': 'another-launch',
+            'supervisor': {'pid': 10, 'created': 1}, 'server': {'pid': 20, 'created': 2, 'in_supervisor_job': True}}),
+            encoding='utf-8')
+        self.procs = {(10, 1): FakeProc(10), (20, 2): FakeProc(20)}
+        polls = iter([None, None, None, SV.LOCK_HELD_EXIT])
+
+        class Lost:
+            pid, returncode = 99, None
+
+            def poll(self):
+                self.returncode = next(polls, SV.LOCK_HELD_EXIT)
+                return self.returncode
+        return Lost()
+
+
+class Transitions(Base):
+    """D2: a restart that cannot finish closes its record as failed, with the cause, and never stays pending; a
+    record a killed restart left pending is refused TRANSITION_PENDING, whose remedy names recover, a verb that
+    exists here."""
+
+    def log(self):
+        return SV.contract.TransitionLog(self.lay.transitions, SV.SERVICE, 'windows-amd64')
+
+    def test_a_restart_refused_at_its_start_is_closed_failed_with_its_cause(self):
+        adapter = FakeAdapter(port_in_use=True)
+        with self.assertRaises(SV.LifecycleError) as caught:
+            SV.restart(self.lay, adapter)
+        self.assertEqual(caught.exception.code, 'PORT_IN_USE')
+        (record,) = self.log().records()
+        self.assertEqual((record['state'], record['cause']['code']), ('failed', 'PORT_IN_USE'))
+        self.assertIsNone(self.log().pending())
+        with self.assertRaises(SV.LifecycleError) as again:     # the next restart runs: refused for the port only
+            SV.restart(self.lay, adapter)
+        self.assertEqual(again.exception.code, 'PORT_IN_USE')
+        self.assertEqual([r['state'] for r in self.log().records()], ['failed', 'failed'])
+
+    def test_a_pending_record_names_recover_which_exists_and_recover_closes_it(self):
+        self.log().begin('restart', {'desired': 'checkout', 'running': None}, was_running=False)   # a killed restart
+        with self.assertRaises(SV.LifecycleError) as caught:
+            SV.restart(self.lay, FakeAdapter())
+        self.assertEqual(caught.exception.code, 'TRANSITION_PENDING')
+        self.assertIn('run recover', str(caught.exception))
+        self.assertIn("('recover',", (T.PACKAGE / 'service.py').read_text(encoding='utf-8'))
+        self.assertIs(SV.main.__globals__['recover'], SV.recover)
+        with self.assertRaises(SV.LifecycleError) as recovered:   # recover resumes it; its start is refused here
+            SV.recover(self.lay, FakeAdapter(port_in_use=True))
+        self.assertEqual(recovered.exception.code, 'PORT_IN_USE')
+        self.assertIsNone(self.log().pending())
+        self.assertEqual(self.log().records()[0]['state'], 'failed')
+
+    def test_up_never_reports_another_launch_s_server_as_its_own(self):
+        adapter = OtherLaunch(self.lay)
+        with self.assertRaises(SV.LifecycleError) as caught:
+            SV.up(self.lay, adapter)
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('ALREADY_RUNNING', True))
+
+
 class Verbs(Base):
     def test_up_refuses_a_running_environment_and_starts_nothing(self):
         adapter = self.running([row('127.0.0.1', 13310, 20)])

@@ -10,9 +10,9 @@ the Owner's act OA-32 (a) for I1's run).
 * What the guard is not: it is no defence against a process of the Owner's account that gives the command a console
   (a console of its own, hidden or not, or a pseudoconsole, ConPTY) and reads what it shows, or that calls
   ``enroll()`` or writes the store directly. No console check can tell the Owner from such a process: that is
-  decision 0010 point 1's accepted same-account limit, named in decision 0025's Consequences. Each of those paths
-  is visible to the Owner: any new enrollment supersedes his session, which then answers
-  ``SESSION_CREDENTIAL_REVOKED``.
+  decision 0010 point 1's accepted same-account limit, named in decision 0025's Consequences. Any such enrollment
+  supersedes the Owner's session, which then answers ``SESSION_CREDENTIAL_REVOKED`` at his next request, unless a
+  same-account writer of the store undoes it first (decision 0010 point 1).
 * It generates 32 random bytes (``secrets``), the credential ``aieh-oui-`` and their lower-case base32 (52
   characters), and writes one session row to the Owner conversation store: the session's public id (a random
   UUID), the credential's **verifier** (session.py), the issue time and the expiry (``--hours``, default 12,

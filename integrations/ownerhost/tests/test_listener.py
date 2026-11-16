@@ -24,7 +24,10 @@ stops it. Then:
   segment never reaches service.log (the log names the matched route or "unmatched");
 - **one instance** (the review's probe_double_up): rounds of two concurrent ``up``; each round leaves exactly one
   listener, the recorded server's, or none, every other ``up`` is refused ALREADY_RUNNING, and down frees the port;
-- **a killed server is recorded as failed**, and the supervisor ends with it, releasing the instance lock.
+- **a killed server is recorded as failed**, and the supervisor ends with it, releasing the instance lock;
+- **a restart that cannot start closes its record** (the delta review's probe_restart_pending): refused PORT_IN_USE
+  while another socket holds the port, its transition is failed with the cause, and once the port is free a restart
+  completes; a restart racing a concurrent up leaves no pending transition and at most the recorded server.
 
 Windows only (the platform contract's only adapter). It fails, rather than skips, when 127.0.0.1:13310 is already
 held: stop the service (service.py down) before running it.
@@ -96,6 +99,66 @@ class Listener(unittest.TestCase):
             cls.stop()
         cls.obs['rounds'] = [cls.double_up() for _ in range(ROUNDS)]
         cls.obs['killed'] = cls.kill_the_server()
+        cls.obs['restart_held'] = cls.restart_on_a_held_port()
+        cls.obs['restart_race'] = cls.restart_racing_up()
+
+    @classmethod
+    def transitions(cls):
+        return SV.contract.TransitionLog(cls.lay.transitions, SV.SERVICE, cls.adapter.asset_key)
+
+    @classmethod
+    def restart_on_a_held_port(cls):
+        import socket
+        observed = {}
+        squat = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            squat.bind(('0.0.0.0', A.PORT))
+            squat.listen(1)
+            try:
+                SV.restart(cls.lay, cls.adapter)
+                observed['refused'] = None
+            except SV.LifecycleError as exc:
+                observed['refused'] = exc.code
+        finally:
+            squat.close()
+        observed['after_refusal'] = cls.transitions().latest()
+        try:
+            observed['restarted'] = SV.restart(cls.lay, cls.adapter)['state']
+            observed['ready'] = SV.readiness(cls.lay, cls.adapter)['passed']
+        finally:
+            cls.ensure_down()
+        observed['pending'] = cls.transitions().pending()
+        return observed
+
+    @classmethod
+    def restart_racing_up(cls):
+        outcomes = {}
+
+        def act(name, verb):
+            try:
+                result = verb(cls.lay, cls.adapter)
+                outcomes[name] = result.get('state') or ('ready' if result.get('ready') else 'not ready')
+            except SV.LifecycleError as exc:
+                outcomes[name] = f'{exc.code} refusal={exc.refusal}'
+        threads = [threading.Thread(target=act, args=('up', SV.up)),
+                   threading.Thread(target=act, args=('restart', SV.restart))]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(4 * (SV.READY_CEILING_S + SV.STOP_CEILING_S))
+            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            observed = {'outcomes': outcomes, 'pending': cls.transitions().pending(),
+                        'listener_pids': sorted({r['pid'] for r in cls.adapter.listeners()
+                                                 if r['proto'] == 'tcp' and r['port'] == A.PORT}),
+                        'recorded_server': (run.get('server') or {}).get('pid') if run.get('state') == 'running'
+                        else None}
+            observed['restart_after'] = SV.restart(cls.lay, cls.adapter)['state']
+        finally:
+            cls.ensure_down()
+        observed['listeners_after_down'] = [r for r in cls.adapter.listeners()
+                                            if r['proto'] == 'tcp' and r['port'] == A.PORT]
+        return observed
 
     @classmethod
     def ensure_down(cls):
@@ -344,6 +407,22 @@ class Listener(unittest.TestCase):
         self.assertNotEqual(killed['server_exit'], 0)
         self.assertTrue(killed['lock_free'])
         self.assertFalse(killed['port_open'])
+
+    def test_a_restart_refused_at_its_start_is_closed_and_the_next_one_completes(self):
+        held = self.obs['restart_held']
+        self.assertEqual(held['refused'], 'PORT_IN_USE')
+        self.assertEqual((held['after_refusal']['verb'], held['after_refusal']['state'],
+                          held['after_refusal']['cause']['code']), ('restart', 'failed', 'PORT_IN_USE'))
+        self.assertEqual((held['restarted'], held['ready'], held['pending']), ('completed', True, None))
+
+    def test_a_restart_racing_an_up_leaves_nothing_pending_and_one_server_at_most(self):
+        race = self.obs['restart_race']
+        self.assertIsNone(race['pending'], race)
+        self.assertTrue(all(o in ('ready', 'completed', 'ALREADY_RUNNING refusal=True')
+                            for o in race['outcomes'].values()), race)
+        self.assertEqual(race['listener_pids'], [race['recorded_server']] if race['recorded_server'] else [], race)
+        self.assertEqual(race['restart_after'], 'completed')
+        self.assertEqual(race['listeners_after_down'], [])
 
     # -------------------------------------------------------------- no window, no orphan
 

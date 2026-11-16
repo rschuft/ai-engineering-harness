@@ -617,6 +617,15 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/ownerhost/service.py verify'
 
+  ownerhost:recover:
+    desc: "Reconcile the Integration process with a transition left pending by a killed restart, then finish it (<tools python> -I -B integrations/ownerhost/service.py recover; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py recover'
+
   ownerhost:enroll:
     desc: "The Owner's enrollment of the Owner UI session credential (<tools python> -I -B integrations/ownerhost/enroll.py [--hours N]; plan leaf U-01.3, Proposed decision 0025 point 3, OA-32 (a)), run by the Owner in his own console window: refused unless standard input and standard output are both console handles, before anything is resolved or written; mints aieh-oui- and 52 lower-case base32 characters, keeps only its verifier with the session id and expiry (default 12 hours, 1 to 168) in <state>/owner-host/conversation.sqlite, supersedes the current session, and shows the credential once on the console; exit 2 on a refusal"
     interactive: true

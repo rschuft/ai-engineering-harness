@@ -8,8 +8,8 @@ What the guard is, and what it is not: it refuses a plain pipe or a redirected h
 tool shell would run the command by accident. It is no defence against a process of the Owner's account that gives
 the command a console, as GuardScope below does with a hidden console of its own (a pseudoconsole, ConPTY, works the
 same way), or that calls the library or writes the store: that is decision 0010 point 1's accepted same-account
-limit. What the Owner sees is the supersession: any new enrollment supersedes his session, which then answers
-SESSION_CREDENTIAL_REVOKED. GuardScope runs the guard on its hidden console's real handles and on a real pipe in
+limit. Any such enrollment supersedes the Owner's session, which then answers SESSION_CREDENTIAL_REVOKED at his
+next request, unless a same-account writer of the store undoes it first (decision 0010 point 1). GuardScope runs the guard on its hidden console's real handles and on a real pipe in
 either position, then the whole command against a throwaway managed root (the credential it shows goes to that
 hidden console, which nobody reads). Nothing here touches the managed data root.
 """

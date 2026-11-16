@@ -18,7 +18,7 @@ projection (U-04.1) attach later. It has no dispatch endpoint.
 | `app.py` | The ASGI application (`create_app`), its three request checks and its one route; `bind_listener` and `serve`, the server process |
 | `session.py` | The credential's shape and verifier, and `check`, which decides one request against the session table |
 | `enroll.py` | The Owner's enroll command: the console guard, minting, the session row, the one showing |
-| `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `status`, `inspect`, `verify`, and the supervisor |
+| `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `recover`, `status`, `inspect`, `verify`, and the supervisor |
 | `tests/test_session.py` | The shape, the verifier, `check`'s four refusals (each changing nothing), every other inventory credential shape refused, enrollment (unit) |
 | `tests/test_app.py` | The route-table walk, the preflight, Host and Origin, the refusals over ASGI, no cookie, the log (contract) |
 | `tests/test_enroll.py` | The console guard on pipes, files and the null device, refusing before anything is resolved or written; gate G8 on a real (hidden) console in a child process (unit, integration) |
@@ -55,9 +55,9 @@ it against the managed root; OA-32 (a) is the Owner's own enrollment.
 What the guard does not do: it does not stop a process of the Owner's account that gives the command a console (one
 of its own, hidden or not, or a pseudoconsole) and reads it, or that calls `enroll()` or writes the store. No console
 check can tell the Owner from such a process; that is decision 0010 point 1's accepted same-account limit (decision
-0025, Consequences). Each of those paths is visible to the Owner: any new enrollment supersedes his session, which
-then answers `SESSION_CREDENTIAL_REVOKED` (`tests/test_enroll.py` `GuardScope` shows a hidden console passing the
-guard).
+0025, Consequences). Any such enrollment supersedes the Owner's session, which then answers
+`SESSION_CREDENTIAL_REVOKED` at his next request, unless a same-account writer of the store undoes it first
+(decision 0010 point 1) (`tests/test_enroll.py` `GuardScope` shows a hidden console passing the guard).
 
 ## Every request
 
@@ -102,7 +102,8 @@ the interpreter's needs, nothing else); it has no dispatch endpoint.
 |---|---|
 | `up` | Refuses `ALREADY_RUNNING` and `PORT_IN_USE` (never another port), then starts the managed environment through the platform adapter: a supervisor with no window that joins a new kill-on-close Job Object and starts the server process inside it (`app.py serve`), and waits until the server of its own launch listens (the TCP table), at most 30 s. Concurrent `up` commands are serialized by `launch.lock`; one instance is enforced by the supervisor's `instance.lock` (below) |
 | `down` | Writes the stop request the server watches for (`<state>/owner-host/stop-request`), waits on both processes (at most 15 s), and terminates the supervisor only if they have not ended; the job then ends the server |
-| `restart` | The contract's, under a write-ahead transition record (`<state>/owner-host/transitions/`) |
+| `restart` | The contract's, under a write-ahead transition record (`<state>/owner-host/transitions/`). A restart whose stop or start raises or is refused (a held port, another `up`) closes its record as `failed` with the cause, so the next restart is not refused for it |
+| `recover` | The contract's recovery, for a record left pending by a restart that was killed (the remedy `TRANSITION_PENDING` names): it reconciles the actual state, then finishes the restart. `restart` and `recover` hold `transition.lock`, so two never interleave |
 | `status`, `inspect` | Report; change nothing |
 | `verify` | The `aieh-readiness/1` record; exit 0 only when it passes: `supervisor_running`, `server_running`, `server_supervised`, `listener_on_declared_port`, `loopback_only`, `port_held_by_server` |
 
