@@ -269,8 +269,8 @@ Only what is listed as verified has been exercised.
 | `inference:credential-enter -- --provider ID [--replace]` | `<tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider ID [--replace]` | no | The Owner's provider-key entry (plan leaf S-03.3, OA-12 act 2; [inference README](../integrations/inference/README.md#the-owners-key-entry-credential-enter-s-033)), run by the Owner in his own console window: refused unless standard input is an interactive console, and for an existing entry without `--replace`, before any prompt; the key pasted once at a hidden prompt, refused by rule name unless key-shaped; stored as the credential entry `AIEH model provider` under a fingerprint-only receipt; prints nothing derived from the key and reminds the Owner to clear the clipboard. Exit 0 stored, 2 refused, 1 failed. Tested offline only (an injected console, an in-memory provider); a real console and the real Credential Manager are **not yet verified**. |
 | `credentials:native-token-enter [-- --replace]` | `<tools python> -I -B integrations/credentials/native_token_entry.py enter [--replace]` | no | The Owner's native Claude Code token entry (plan leaf E-05.9, decision 0023, OA-31 (e); [dispatch README](../integrations/dispatch/README.md#the-native-profiles-token-e-059)), run by the Owner in his own console window after `claude setup-token`: refused unless standard input is an interactive console, and for an existing entry without `--replace`, before any prompt; the token pasted once at a hidden prompt (never argv, the environment, a file, `config.yml` or the host Claude configuration), refused by rule name unless of the native shape; stored as the one credential entry `AIEH Claude Code native token` under a fingerprint-only receipt; prints nothing derived from the token and reminds the Owner to clear the clipboard. Exit 0 stored, 2 refused, 1 failed. Tested offline only (an injected console, an in-memory provider, a fixture store); a real console, the real Credential Manager and a real token are **not yet verified**. |
 | `inference:test` | `<tools python> -I -B -m unittest discover -s integrations/inference/tests -v` | no | [Inference broker](#inference-broker) tests (S-03.2 slice 1): the family declarations and `components.inference_broker` with every refusal (secret-shaped keys included); token issuance (no budget: S-03.6), family binding, revocation and expiry with their integration-store receipts; every admission refusal code; untranslated pass-through and incremental streaming to a fake upstream per declared family, with the synthetic provider key in place of the attempt token; usage extraction; the audit lines and the I7 scan, and a refused request's path, query parameter names and model in their bounded grammars (S-03.3 slice plan D-4), never a value or a credential; egress to the configured origin only; the credential set command over an in-memory provider; `serve` in process; the qualification launcher, the fake upstream and the `issue` command (slice 4) in process; the provider-key containment search (slice 5): its forms, views and positive controls, its command line, and the broker's exposure boundary searched end to end under the launcher (not found; a planted leak found); S-03.3's discovery mode and the reader of an audit into a proposed family pin, and the real-key search over a fake credential provider. Never the real credential store, the managed root or the network beyond loopback. |
-| `conversation:test` | `<tools python> -I -B -m unittest discover -s integrations/conversation/tests -v` | no | [Owner conversation store](../integrations/conversation/README.md) tests (U-01.3): its store kind and `application_id`, refusal of the other store kinds, the migration ledger, locations, and the append-only session table (a verifier, never a credential; one current session; validity at most 7 days), in temporary directories. |
-| `ownerhost:test` | `<tools python> -I -B -m unittest discover -s integrations/ownerhost/tests -v` | no | [Integration process](../integrations/ownerhost/README.md) tests (U-01.3): the Owner UI session credential's shape, verifier and refusals, each changing nothing, and every other inventory credential shape refused; the route-table walk, the preflight, Host and Origin over ASGI; the enroll command's console guard, on a real hidden console in a child (gate G8); the lifecycle with a fake adapter; no client socket and the import census; and the real service started and stopped on `127.0.0.1:13310` with a throwaway layout (listener table, host census, environment, records and logs scanned for credentials, no window, no orphan). Fails, rather than skips, when the port is already held. |
+| `conversation:test` | `<tools python> -I -B -m unittest discover -s integrations/conversation/tests -v` | no | [Owner conversation store](../integrations/conversation/README.md) tests (U-01.3): its store kind and `application_id`, refusal of the other store kinds, the migration ledger, locations, and the append-only session table (a verifier, never a credential; one current session; validity at most 7 days), in temporary directories. U-02.1: migration 0002's threads and messages (the store's thread id, assistant-ui's message id unique per thread, the store's `seq`; a reload returns the same messages, ids, parents and bytes; a repeated append adds nothing; `MESSAGE_ID_CONFLICT`, `MESSAGE_IMMUTABLE` and `THREAD_DELETE_REFUSED` change nothing; SQLite's append-only triggers; quotes cut with `lineage.span_reference` verify, and a changed source byte is `SPAN_DIGEST_MISMATCH`). |
+| `ownerhost:test` | `<tools python> -I -B -m unittest discover -s integrations/ownerhost/tests -v` | no | [Integration process](../integrations/ownerhost/README.md) tests (U-01.3): the Owner UI session credential's shape, verifier and refusals, each changing nothing, and every other inventory credential shape refused; the route-table walk, the preflight, Host and Origin over ASGI; the enroll command's console guard, on a real hidden console in a child (gate G8); the lifecycle with a fake adapter; no client socket and the import census; and the real service started and stopped on `127.0.0.1:13310` with a throwaway layout (listener table, host census, environment, records and logs scanned for credentials, no window, no orphan). U-02.1: the thread and history routes over ASGI (initialize, list, fetch, rename, archive; append, update and load; the store's refusals and `REQUEST_INVALID`; the log names route templates only), and against the real service: a reload after a restart returns the exact messages in order, and a quote cut from a statement it received verifies. Fails, rather than skips, when the port is already held. |
 | `ownerhost:up` | `<tools python> -I -B integrations/ownerhost/service.py up` | no | Starts the [Integration process](#owner-host): a supervisor holding a kill-on-close Job Object and the server inside it, on `127.0.0.1:13310` only; refuses a running environment and a held port (never another port); waits until it listens. |
 | `ownerhost:down` | `<tools python> -I -B integrations/ownerhost/service.py down` | no | Its stop request, then the supervisor; terminating the supervisor ends the server through the job. |
 | `ownerhost:restart`, `ownerhost:recover`, `ownerhost:status`, `ownerhost:inspect` | `<tools python> -I -B integrations/ownerhost/service.py restart\|recover\|status\|inspect` | no | `restart` under a write-ahead transition record, closed as failed when its stop or start fails; `recover` finishes a restart left pending by a killed one; `status` and `inspect` change nothing. |
@@ -1655,7 +1655,7 @@ and adapter exist:
 | `commit` | Git | the shared repository-access module (in process over Dulwich, as `git rev-parse` and `cat-file` answer) in a registered clone | implemented; offline tests |
 | `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
 | `objective` | OpenSpec | the outcome id declared under `x-outcomes` in the declaring change's `.openspec.yaml`, cross-checked against its intent record ([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md), Proposed) | implemented; offline, and live with `AIEH_OPENSPEC` (`validate --strict`, `archive`) |
-| `conversation`, `message` | Owner conversation store | none | authority unavailable (U-02.1); **not yet verified** |
+| `conversation`, `message` | Owner conversation store | none (U-02.2) | authority unavailable: the store holds threads and messages since U-02.1 (built 2026-11-16, its verdict pending; `ConversationStore.message_content` is the durable source a resolver will read), and no resolver reads it yet; **not yet verified** |
 | `attempt` | OpenHands Agent Server | none | authority unavailable (E-01.3.1, E-01.4.1); **not yet verified** |
 | `review`, `ci`, `authorization` | Gitea | none | authority unavailable (E-03.3.x, Q-03.x, G-03.1/G-04.3.1); **not yet verified** |
 | `release`, `catalog` | Git/Gitea, Gitea catalog | none | identity not settled (`unsupported-kind`) |
@@ -1740,9 +1740,12 @@ single React application (blueprint
 [`#conversation`](../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#conversation)).
 It has routes for chat, Work and engineering, persistent navigation, one local session
 identity, a sign-in to the Integration process (U-01.3), and a narrow and a wide layout. The
-chat is assistant-ui's headless primitives over a model-free `LocalRuntime`. Agent Canvas
-1.36.0 is embedded as a library with no backend. No model, conversation thread, Work system
-or Agent Server is connected yet, and every surface says so. The session identity is a
+chat is assistant-ui's headless primitives over a model-free `LocalRuntime`. Signed out, it is
+an empty thread with a disabled composer; signed in (U-02.1), its threads and messages are kept
+in the Owner conversation store through the Integration process (described below), and every
+reply is a fixed acknowledgement, never a model's text. Agent Canvas 1.36.0 is embedded as a
+library with no backend. No model, Work system or Agent Server is connected yet, and every
+surface says so. The session identity is a
 random, non-secret value kept in the browser's local storage; it is not authentication. The
 Owner's sign-in to the Integration process is described below; the Owner UI's access to the Agent
 Server is the open finding `fd-owner-ui-access` in the [security
@@ -1792,6 +1795,28 @@ inventory's `api-integration-service`, `cred-owner-ui-session` and
 `store-owner-conversation`). U-01.3 PASS ([verdict](../evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16)),
 offline with throwaway credentials (`ownerhost:test`, `conversation:test`); the Owner's own
 enrollment and sign-in (OA-32 (a)) and a real browser are **not yet verified**.
+
+**Threads and messages (U-02.1).** Signed in, the chat is assistant-ui's `LocalRuntime` under
+`useRemoteThreadListRuntime`, with two thin adapters
+(`apps/owner-host/src/areas/conversation-adapters.ts`): a `RemoteThreadListAdapter` and, per
+thread through its `unstable_useAdapters` hook, a `ThreadHistoryAdapter`. They call the
+Integration process's thread and history routes (`/threads` and `/threads/{thread_id}/...`,
+behind the credential), which write the conversation store's migration 0002 (decision 0025,
+point 6): the store mints the thread id; the message id is assistant-ui's own, unique per
+thread; the order is the store's per-thread `seq`; a user message is immutable and its text's
+UTF-8 bytes are kept as received, the durable source of every quote; an edit is a new message
+under the same parent; every table is append-only and a thread delete is refused
+(`THREAD_DELETE_REFUSED`). One thread's writes are sent in call order (the runtime does not
+order writes of different messages). The history load answers no head, so after a reload the
+newest branch is shown. The pinned runtime's behaviour these adapters rely on is gate G2's
+test (`apps/owner-host/src/areas/g2-runtime-gate.test.tsx`): the append of a message with its
+native id before the model adapter runs, `load()` without a head, a run paused by a tool in
+`unstable_humanToolNames` appended at the pause and restored by a reload, per-thread history,
+and a title stream that closes at once with no model. Built 2026-11-16 (U-02.1, its verdict
+pending): `conversation:test`, `ownerhost:test` (in process and against the real service) and
+`owner-host:test` PASS offline; a real browser and the Owner's own session are **not yet
+verified**, and so are the lineage resolver over the store and the pending tool state
+(U-02.2).
 
 Verified on Windows 11 x86_64 with Node.js 24.19.0 and npm 11.17.0, with an isolated npm
 cache and empty npm configuration: install, type check, tests (7 files, 43 tests) and build
