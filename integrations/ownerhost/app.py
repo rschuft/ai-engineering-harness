@@ -1,4 +1,4 @@
-"""The Integration process: the Owner UI's backend on the host (plan leaf U-01.3; Proposed decision 0025).
+"""The Integration process: the Owner UI's backend on the host (plan leaf U-01.3; decision 0025).
 
 A Starlette application on uvicorn, run under the tools interpreter, bound to ``127.0.0.1:13310`` only (one fixed
 port, declared in the network matrix's ``nm-owner-ui-integration`` and read by the host census; a busy port is a

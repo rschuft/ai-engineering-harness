@@ -1,4 +1,4 @@
-"""The Owner conversation store, ``conversation.sqlite`` (plan leaf U-01.3; Proposed decision 0025, points 3 and 6).
+"""The Owner conversation store, ``conversation.sqlite`` (plan leaf U-01.3; decision 0025, points 3 and 6).
 
 A store kind of its own on ``integrations/storecore`` (WAL, ``synchronous=FULL``, STRICT tables, a migration
 ledger, its own ``PRAGMA application_id``), never tables in ``integration.sqlite``: the integration store "is not a

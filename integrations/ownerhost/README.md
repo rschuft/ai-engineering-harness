@@ -1,7 +1,7 @@
 # The Integration process (`integrations/ownerhost/`)
 
 Plan leaf **U-01.3**; [decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
-(Proposed); the I1 work design ([`evidence/I1-integration-design-2026-11-16.md`](../../evidence/I1-integration-design-2026-11-16.md),
+(accepted at U-01.3's verdict); the I1 work design ([`evidence/I1-integration-design-2026-11-16.md`](../../evidence/I1-integration-design-2026-11-16.md),
 rulings R1 to R4 and R7). The Owner UI's backend on the host: a Starlette application on uvicorn (the versions the
 component lock pins, in the hash-locked tools set), run under the tools interpreter, bound to `127.0.0.1:13310`
 only. The Owner UI shell ([`apps/owner-host`](../../apps/owner-host/README.md)) reaches it with the Owner UI session

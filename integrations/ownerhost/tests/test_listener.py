@@ -1,4 +1,4 @@
-"""The Integration process, started and stopped for real (plan leaf U-01.3's proof; Proposed decision 0025).
+"""The Integration process, started and stopped for real (plan leaf U-01.3's proof; decision 0025).
 
 One scenario, observed first and judged by the tests: the service is started through ``service.up`` on a throwaway
 managed layout (a temporary directory; never the managed data root), with the starting environment planted with the

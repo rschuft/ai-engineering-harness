@@ -152,7 +152,7 @@ network.
 | Credential provider factory, its refusals and `credentials:doctor` | PASS: Credential Manager chosen without importing keyring; `NO_CREDENTIAL_PROVIDER` for every unqualified case; keyring's own selection and configuration shown ignored; `doctor` reports the provider and its viability and touches no entry ([F-06.3](../evidence/F-06.3-credential-provider.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
 | `credentials:test` | PASS under the tools venv ([F-06.3](../evidence/F-06.3-credential-provider.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
 | The inference broker and `inference:test` | PASS offline under the tools venv: synthetic keys, an in-memory credential provider, a fixture integration store and fake upstreams on ephemeral 127.0.0.1 ports inside the test process ([S-03.2 slice 1](../evidence/S-03.2-slice1-broker-core.md)). Not yet verified: the broker run as a host service, its real listeners, the real credential entry, TLS to a provider and any model call (each its own Owner act); the qualification tools of slice 4 (the launcher, the fake upstream, `inference_control.py issue`) outside the test process; the provider-key containment search of slice 5 ([record](../evidence/S-03.2-slice5-key-containment-search.md)) against a live broker, guest or instance directory | not yet verified | not yet verified | not yet verified |
-| The Integration process (`ownerhost:*`), `ownerhost:test` and `conversation:test` | Built (U-01.3); its tests run under the tools venv, the listener tests starting and stopping the real service on `127.0.0.1:13310` with a throwaway layout and throwaway credentials. The leaf's verdict is pending. Not yet verified: the Owner's own enrollment and sign-in (OA-32 (a)), a real browser against it | not yet verified | not yet verified (PLATFORM_UNSUPPORTED) | not yet verified (PLATFORM_UNSUPPORTED) |
+| The Integration process (`ownerhost:*`), `ownerhost:test` and `conversation:test` | PASS (U-01.3, [verdict](../evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16)): its tests run under the tools venv, the listener tests starting and stopping the real service on `127.0.0.1:13310` with a throwaway layout and throwaway credentials. Not yet verified: the Owner's own enrollment and sign-in (OA-32 (a)), a real browser against it | not yet verified | not yet verified (PLATFORM_UNSUPPORTED) | not yet verified (PLATFORM_UNSUPPORTED) |
 | The acceptance recorder (`owner:accept`) and `owner:test` | PASS on throwaway fixture repositories with synthetic statements, under the tools venv ([P-04.1](../evidence/P-04.1-acceptance-recorder.md)); no real Owner acceptance recorded; not run under Task | not yet verified | not yet verified | not yet verified |
 | The authorization recorder (`owner:authorize`) | PASS against a fake Gitea, in memory and over an in-process loopback HTTP server, with a fixture credential provider and synthetic statements ([P-04.2](../evidence/P-04.2-authorization-recorder.md)); it fails closed: `record` refuses `PROTECTION_UNVERIFIED` unless the protection check of decision 0012 point 6 (OA-16; [record](../evidence/P-04.2-protection-verifier.md)) answers `verified`. Live once on the S-01.2.2 fixture (2026-11-12, the two-phase exercise on the Owner's authorization of OA-14): one merge as `aieh-owner`, and the stale-head control refused 409 with nothing merged (P-04.2 section 17; the leaf is blocked on one custody clause there); the other refusals offline only; not run under Task | not yet verified | not yet verified | not yet verified |
 
@@ -1771,7 +1771,7 @@ Task target.
 **The Integration process (U-01.3).** The Owner host's backend is the Integration process
 ([`integrations/ownerhost/`](../integrations/ownerhost/README.md); [decision
 0025](../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md),
-Proposed): a Starlette application on uvicorn under the tools interpreter, bound to
+accepted at U-01.3's verdict): a Starlette application on uvicorn under the tools interpreter, bound to
 `127.0.0.1:13310` only, a port the host census reads (`guest:host-census`), started and
 stopped by `ownerhost:up` and `ownerhost:down` through the platform contract. Every request
 needs the Owner UI session credential (`cred-owner-ui-session`) in the `X-AIEH-Owner-Session`
@@ -1789,10 +1789,9 @@ content-security policy lets the page connect only to its own origin and to
 `http://127.0.0.1:13310`. The port is fixed: it is not configurable, and a busy port is a
 refusal. The records name it (the network matrix's `nm-owner-ui-integration`, the security
 inventory's `api-integration-service`, `cred-owner-ui-session` and
-`store-owner-conversation`). Built in U-01.3's second slice and tested offline with
-throwaway credentials (`ownerhost:test`, `conversation:test`); the leaf's verdict is pending,
-and the Owner's own enrollment and sign-in (OA-32 (a)) and a real browser are **not yet
-verified**.
+`store-owner-conversation`). U-01.3 PASS ([verdict](../evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16)),
+offline with throwaway credentials (`ownerhost:test`, `conversation:test`); the Owner's own
+enrollment and sign-in (OA-32 (a)) and a real browser are **not yet verified**.
 
 Verified on Windows 11 x86_64 with Node.js 24.19.0 and npm 11.17.0, with an isolated npm
 cache and empty npm configuration: install, type check, tests (7 files, 43 tests) and build

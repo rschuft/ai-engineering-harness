@@ -172,22 +172,28 @@
           "where": "host"
         }
       ],
-      "status": "planned",
-      "evidence": [],
+      "status": "observed",
+      "evidence": [
+        "evidence/bootstrap-log.md",
+        "integrations/ownerhost/tests/test_listener.py",
+        "integrations/ownerhost/tests/test_app.py",
+        "integrations/ownerhost/tests/test_session.py"
+      ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
         "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"
       ],
-      "verify_at": "U-01.3",
       "owner_act": false,
       "findings": [
         "fd-owner-ui-session-plan-silence"
       ],
       "inspection": [
-        "planned: U-01.3, built (guest.py host-census by port 13310: bound to 127.0.0.1 only; task ownerhost:verify: the server's listeners from the TCP table by process; integrations/ownerhost/tests/test_listener.py and test_app.py: every route refuses a request without cred-owner-ui-session); observed at the leaf's verdict"
+        "guest.py host-census by port 13310: the one listener on 127.0.0.1 only (integrations/ownerhost/tests/test_listener.py, with the kernel TCP table by process and task ownerhost:verify's readiness record)",
+        "the route-table walk: every route, method and unmatched path answers SESSION_CREDENTIAL_MISSING without cred-owner-ui-session, the CORS preflight the one exception and carrying no data (test_app.py in process, test_listener.py over HTTP)",
+        "the refusals: missing, foreign (every other inventory credential shape), expired and revoked, each with its code and the store unchanged; Host and Origin against literals (test_session.py, test_app.py, test_listener.py)"
       ],
-      "notes": "Decision 0013, point 5. U-01.3 builds the Integration process and its Owner login (commitment I1, 2026-11-16; Proposed decision 0025), corrected from U-01.2: S-01.4 ruling R8's open question is answered by the I1 commitment. Built in U-01.3's second slice (integrations/ownerhost; the shell's sign-in in apps/owner-host); not yet observed: the observation is the leaf's verdict. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (Proposed decision 0025, point 7)."
+      "notes": "Decision 0013, point 5. U-01.3 builds the Integration process and its Owner login (commitment I1, 2026-11-16; decision 0025), corrected from U-01.2: S-01.4 ruling R8's open question is answered by the I1 commitment. Observed at U-01.3's verdict (PASS, 2026-11-16; evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16; commits 86f1173, 9671fee, 66886cc, 0df37d5, 6a62cb2, 8e7efcc and 352d9a2, the code at 352d9a2). A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (decision 0025, point 7)."
     },
     {
       "id": "nm-owner-management-same-account",

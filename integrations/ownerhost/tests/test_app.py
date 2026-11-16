@@ -1,4 +1,4 @@
-"""The Integration process's request checks, in process (plan leaf U-01.3; Proposed decision 0025, points 2 to 5).
+"""The Integration process's request checks, in process (plan leaf U-01.3; decision 0025, points 2 to 5).
 
 - Every request needs the Owner UI session credential: the application's route table is walked, and every route
   and method (and paths that are no route) answers ``SESSION_CREDENTIAL_MISSING`` without it. The one exception is

@@ -1,4 +1,4 @@
-"""The Owner UI session credential and its check (plan leaf U-01.3; Proposed decision 0025, points 3 and 5).
+"""The Owner UI session credential and its check (plan leaf U-01.3; decision 0025, points 3 and 5).
 
 - The credential's shape is its own: ``aieh-oui-`` and 52 lower-case base32 characters, not an Agent Server key
   (43 URL-safe characters) or any other credential shape of security/inventory.json; every one of those is refused

@@ -2,7 +2,7 @@
 
 Plan leaf **U-01.3** (the store and its session table); U-02.1 adds threads and messages.
 [Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
-(Proposed), points 3 and 6. Python standard library only (`sqlite3`), on the shared mechanics of
+(accepted at U-01.3's verdict), points 3 and 6. Python standard library only (`sqlite3`), on the shared mechanics of
 [`integrations/storecore`](../storecore/storecore.py).
 
 `conversation.sqlite` is a store kind of its own, at `<state>/owner-host/conversation.sqlite` of the managed data

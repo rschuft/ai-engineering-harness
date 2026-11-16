@@ -1,4 +1,4 @@
-"""The Owner conversation store, migration 0001 (plan leaf U-01.3; Proposed decision 0025, points 3 and 6).
+"""The Owner conversation store, migration 0001 (plan leaf U-01.3; decision 0025, points 3 and 6).
 
 A store kind of its own on integrations/storecore: its application_id identifies it, so the integration store refuses
 it and it refuses an integration store; the connection policy is storecore's; the migration ledger refuses an edited

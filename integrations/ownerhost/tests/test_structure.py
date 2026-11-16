@@ -1,4 +1,4 @@
-"""R2's structural tests (Proposed decision 0025 point 2): the Integration process opens no outbound connection and
+"""R2's structural tests (decision 0025 point 2): the Integration process opens no outbound connection and
 imports no credential, Gitea, authorization-recorder or dispatch-transport module.
 
 - **No client socket** (read from the syntax trees, the pattern of integrations/inference/tests/test_egress.py): the

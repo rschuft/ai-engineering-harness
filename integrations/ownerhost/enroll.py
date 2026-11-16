@@ -1,4 +1,4 @@
-"""The Owner's enrollment of the Owner UI session credential (plan leaf U-01.3; Proposed decision 0025, point 3;
+"""The Owner's enrollment of the Owner UI session credential (plan leaf U-01.3; decision 0025, point 3;
 the Owner's act OA-32 (a) for I1's run).
 
 ``cred-owner-ui-session`` is minted here, for the Owner to run in his own console window:

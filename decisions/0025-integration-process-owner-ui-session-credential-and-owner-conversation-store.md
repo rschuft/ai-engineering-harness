@@ -1,8 +1,10 @@
 # 0025 - The Integration process, the Owner UI session credential and the Owner conversation store
 
-Status: Proposed - 2026-11-16, for plan leaves U-01.3, U-02.1, U-02.2, P-01.3, P-04.4 and U-04.1 (architect, gates C
-and G), with point 4 as amended by the engineering manager's rulings of 2026-11-16 (decision 0018 point 3.1). It
-authorizes no reserved act.
+Status: Accepted - 2026-11-16, by the engineering manager (decision 0018 points 1 and 3.1), at leaf U-01.3's verdict;
+points 3 and 4 corrected at acceptance after the independent review (evidence: the log entry
+[`u-01-3-verdict-2026-11-16`](../evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16)). It authorizes no reserved act.
+Previously: Proposed - 2026-11-16, for plan leaves U-01.3, U-02.1, U-02.2, P-01.3, P-04.4 and U-04.1 (architect,
+gates C and G), with point 4 as amended by the engineering manager's rulings of 2026-11-16 (decision 0018 point 3.1).
 
 **Authority:** the I1 commitment ([`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md#commitment-i1-2026-11-16));
 decision 0013 points 1, 5 and 6; decision 0012 points 4 and 9; decision 0008 point 2; decision 0018 points 3.1, 4.1,
@@ -24,13 +26,20 @@ host-service lifecycle); blueprint `#conversation` (UI-02) and `#architecture`.
 2. **What it never does.** It opens no outbound connection and has no path to an Agent Server; it is custodian of no
    credential; it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it has no
    dispatch endpoint.
-3. **The credential.** `cred-owner-ui-session` is one random secret, minted only by the Owner's `enroll` command,
-   which refuses a session without a console and shows the secret once. The store keeps a verifier, the session's
-   public id and its expiry; one session is current. Its shape is its own (prefix `aieh-oui-`).
+3. **The credential.** `cred-owner-ui-session` is one random secret, minted by the `enroll` command for the Owner
+   to run at his own console, which shows it once; the command refuses plain pipes and redirected handles, but
+   cannot tell the Owner from a process of his account that drives a console or pseudoconsole, calls the library or
+   writes the store (decision 0010 point 1), and each such enrollment supersedes the Owner's session, which then
+   answers `SESSION_CREDENTIAL_REVOKED` at his next request unless a same-account writer of the store undoes it
+   first. The store keeps a verifier, the session's public id and its expiry; one session is current. Its shape is
+   its own (prefix `aieh-oui-`).
 4. **Presentation.** The credential is sent in a request header on every request and is never a cookie. No route
    answers without it, except the CORS preflight. Host and Origin are checked against literals. The Owner UI shell
    keeps its copy in its own origin's `localStorage`, not `sessionStorage`: the origin is scheme, host and port, so
-   another loopback listener cannot read it. "Sign out" removes it, and the service-side expiry bounds it.
+   a listener on another port cannot read it, while a process that holds the shell's own port while the shell is
+   down is that origin and can (inside decision 0010 point 1 for the Owner's account, a disclosed residual for
+   another local account; Vite's strictPort then refuses to start, a visible signal). "Sign out" removes it, and the
+   service-side expiry bounds it.
    (Amended by the engineering manager: U-06.1 item (7) closes and reopens the browser during and after execution,
    and `sessionStorage` would make the Owner re-enter his credential at each reopen, an avoidable Owner interaction;
    the Owner directed that his interactions be consolidated.)

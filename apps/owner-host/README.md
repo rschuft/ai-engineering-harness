@@ -67,7 +67,7 @@ it.
 ## Sign-in to the Integration process (U-01.3)
 
 [Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
-(Proposed), point 4 as amended. The Owner mints the Owner UI session credential,
+(accepted at U-01.3's verdict), point 4. The Owner mints the Owner UI session credential,
 `cred-owner-ui-session` (`aieh-oui-` and 52 lower-case base32 characters), at his
 own console with `task ownerhost:enroll`, and pastes it into `/sign-in`.
 [`src/identity/owner-session.ts`](src/identity/owner-session.ts) holds the rules:

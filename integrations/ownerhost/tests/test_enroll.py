@@ -1,4 +1,4 @@
-"""The Owner's enroll command and its console guard (plan leaf U-01.3; Proposed decision 0025 point 3; gate G8).
+"""The Owner's enroll command and its console guard (plan leaf U-01.3; decision 0025 point 3; gate G8).
 
 ``enroll`` refuses unless standard input and standard output are both console handles (the broker's GetConsoleMode
 check, reused): a pipe, a file or the null device on either handle is ``ENROLL_NOT_INTERACTIVE``, before the

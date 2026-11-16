@@ -1,4 +1,4 @@
-"""The Integration process's lifecycle (plan leaf U-01.3; Proposed decision 0025 point 1; decision 0011's service verbs
+"""The Integration process's lifecycle (plan leaf U-01.3; decision 0025 point 1; decision 0011's service verbs
 through the platform contract of integrations/platform).
 
 Verbs: ``up``, ``down``, ``restart``, ``recover``, ``status``, ``inspect``, ``verify``. There is no ``install``,

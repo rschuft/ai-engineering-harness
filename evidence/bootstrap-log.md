@@ -5293,6 +5293,33 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   - **Next:** execution continues.
     - E-01.7 (slice 9) and U-01.2 (slice 13) have planning's answers; E-01.8 (slice 11) has PB-3's.
     - Planning runs again for U-06.1's design acceptance, OA-33's presentation, a blocker, or I1's acceptance.
+- <a id="u-01-3-verdict-2026-11-16"></a>**2026-11-16: U-01.3 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline, on throwaway layouts, stores and credentials: the managed root and the Owner's credentials were not touched. Commits `86f1173`, `9671fee`, `66886cc`, `0df37d5`, `6a62cb2`, `8e7efcc`, `352d9a2`, and this record. [Decision 0025](../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md) is accepted in this record, with points 3 and 4 corrected after the independent review. Design: [I1 design record](I1-integration-design-2026-11-16.md), slice 2.
+  - **Proof, clause by clause** (tests in `integrations/ownerhost/tests/` and `integrations/conversation/tests/`):
+    - Edge `nm-owner-ui-integration` binds 127.0.0.1 only: `test_listener` starts the real service on `127.0.0.1:13310` and stops it. The server's rows of the kernel's TCP and UDP tables are exactly that TCP listener, and nothing else holds the port. The readiness record passes. `guest.py host-census`, by port, finds it on 127.0.0.1 only (PASS). `test_structure.ExclusiveListener` shows that a `SO_REUSEADDR` bind of the held address is refused.
+    - Every request needs the Owner UI session credential: `test_app` walks the application's route table, and `test_listener` repeats the walk over HTTP. Every route and method, and every path that is no route, answers `SESSION_CREDENTIAL_MISSING`. The CORS preflight is the one exception and carries no data. Host and Origin are checked against literals (`HOST_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED`).
+    - The credential is not shaped like an Agent Server key: `aieh-oui-` and 52 lower-case base32 characters. Every other credential shape of `security/inventory.json` is refused as `SESSION_CREDENTIAL_FOREIGN` (`test_session`, `test_app`, `test_listener`).
+    - The Owner login and the UI session credential are built. `enroll` mints the credential and keeps only its verifier in the Owner conversation store; one session is current. The shell signs in with `POST /session` and sends the header on every request (`apps/owner-host`, 11 files, 63 Vitest tests).
+    - Missing, foreign, expired and revoked are each refused with a stable code, and each changes nothing: the store's canonical dump is equal before and after (`test_session`, `test_app`, and live in `test_listener`). A session issued more than 5 minutes ahead is foreign.
+    - No credential is present in the process's environment, configuration or logs. The server's and the supervisor's environment blocks and command lines are read from outside the process (`process_probe.py`). They, `run.json`, `server.json`, `service.log`, `console.log` and `supervisor.log` hold no throwaway credential and no credential shape. The environment that ran `up` held them all. No log line holds a client's path.
+    - Decision 0025 point 2: no client socket (syntax-tree census); the server's import census is its four modules, and the supervisor's has nothing under credentials, gitea, dispatch, inference or owner (in a fresh interpreter and in the live processes' records); no dispatch endpoint.
+    - Gate G8: the console guard refuses a pipe or a redirected handle on either side, and any console passes (`test_enroll.GuardScope`).
+  - **Independent review** (a fresh engineer, with probes and mutations): 1 blocking, 4 should-fix and 6 NIT findings, all closed in `66886cc`, `6a62cb2` and `8e7efcc`. The delta check found D1 to D4, closed in `352d9a2`:
+    - D1: the supersession claim is narrowed;
+    - D2: a restart that cannot start closes its record as failed, and `recover` exists;
+    - D3: mutant M32 is killed;
+    - D4: the delivery wording is corrected.
+    The review's surviving mutant M18 (no `SO_EXCLUSIVEADDRUSE`) is equivalent on Windows 11 (measured); the property is pinned against a listener that shares its address.
+  - **The engineering manager's delegated decisions** (decision 0018 point 3.1):
+    - B1, option 1: the console guard's claim is narrowed under decision 0010 point 1, and the guard is kept;
+    - the shell's copy of the credential is kept in `localStorage` on the shell's origin;
+    - the supervisor's environment is the server's allowlist, and the Windows adapter imports the credential provider lazily (`launch_supervisor` gains an optional environment);
+    - one instance: the supervisor's `instance.lock`, and `launch.lock` to serialize `up`.
+  - **Disclosed residuals:**
+    - under decision 0010 point 1, a process of the Owner's account can enroll a session, write the store, or hold the shell's origin port while the shell is down;
+    - another local account holding the shell's port is a disclosed residual;
+    - Agent Canvas stays embedded in the shell's origin, with no backend, until U-01.2 (decision 0026 point 8).
+  - **Records:** decision 0025 is accepted; `nm-owner-ui-integration` is observed; `cred-owner-ui-session`, `api-integration-service` and `store-owner-conversation` are observed; `fd-owner-ui-session-plan-silence` is answered by U-01.3 and is now a disclosed limit. The principal `integration-service` stays planned: its own identity and the custody of `integration.sqlite` are not built.
+  - Not verified: the Owner's own enrollment and sign-in (OA-32 (a)); a real browser; Linux and macOS.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

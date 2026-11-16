@@ -1,4 +1,4 @@
-"""The Owner UI session credential, as the Integration process checks it (plan leaf U-01.3; Proposed decision 0025,
+"""The Owner UI session credential, as the Integration process checks it (plan leaf U-01.3; decision 0025,
 points 3 to 5).
 
 ``cred-owner-ui-session`` is one random secret that the Owner mints himself with the enroll command (enroll.py):
