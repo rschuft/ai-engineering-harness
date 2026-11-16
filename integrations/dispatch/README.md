@@ -980,7 +980,9 @@ RESULT, refused the same way. "The exit" is `end_interrupted_attempt`, trigger `
 **In every row:** at most one `POST /api/conversations` per operation key; at most one conversation holds a message;
 `recover` made `GET`s only; a second `recover` changes nothing (the store's canonical dump unchanged); no row's
 verdict rests on an answer outside the catalog (the wrapper never answers, and no test knob is used). "Creates" and
-"messages received" count the core's call log over the whole row, the death included.
+"messages received" count the core's call log over the whole row, the death included. The matrix test asserts more
+than this table holds, as consistency checks of each row: the end record's classification, `recover`'s empty
+`conflicts`, and the exact reason strings of the transitions it observes.
 
 **Against the design's table** (the restart-recovery design, slice 5c), updated only to reflect slices 5a and 5b as
 pushed and the engineering manager's readings of 2026-11-16:
@@ -2077,7 +2079,9 @@ same proof on the checked-in `strong-windows-qemu-whpx` declaration, copied byte
 fixture, with a fake Agent Server that replays the recorded answers of
 [`tests/fixtures/agent-server-1.60.1-exchange.json`](tests/fixtures/agent-server-1.60.1-exchange.json)
 (since E-01.4.2 slice 5c, `FakeAgentServer` is built on the fixture catalog's cited core, whose `/server_info`
-and create answers are the same records; its knobs stay in the module, [below](#the-restart-matrix-tests-e-0142-slice-5c)).
+answer is the same record; its create answer is that record only for F-04.2's own request: for any other request
+the core serves only `id` and `created_at`, and the module's knob adds the derived `persistence_dir`; its knobs stay
+in the module, [below](#the-restart-matrix-tests-e-0142-slice-5c)).
 Every refusal asserts that the create was never sent, and that the transport was called zero
 times wherever nothing may be called. The positive control asserts exactly one `GET
 /server_info` and one create with the exact body.
@@ -2166,11 +2170,11 @@ answers). The three modules keep their 161 test ids, with no assertion changed.
 | Class | What it shows |
 |---|---|
 | `TableBinding` (unit) | the catalog's provenance rows are the README's provenance table, cell for cell; every answer has rows and values |
-| `Rules` (unit) | every field of one of E-01.7's four classes or not served (and then neither read nor served); nothing read is clock-valued or not served; the one source-derived entry, cited to the locked wheels (whose sha256 the lock holds) by in-wheel path and line; the pinned rule is the production path's SEED script; every observation cites F-04.2, F-04.1c or the D1 run record |
-| `Citations` (unit) | `/server_info` is F-04.1c section 3's JSON block exactly; the create's values are F-04.2 section 4.2's block and its observed request the profile's fixture; each state value (`idle`, `finished`, `available`, `missing`, the counts, 204, the empty page, `MessageEvent`) is found in the section it cites |
-| `ByState` (unit) | the core's answers by route and state: labelled, only listed fields served; a create serves the id and the clock-valued time, and the other fields only for F-04.2's request (`persistence_dir` only for its own id); a held id, a second message, a second stop, a count of 2, a query, an unknown route or conversation, a delivery are refused with the label; the call log holds what the core received and nothing a dropped request would have sent |
-| `Seed` | SEED's answer by running the harness's own `SEED_SCRIPT` over the request's payload: its success line and exit code, the files written in the core's scratch; a second SEED refused; another script refused without running |
-| `Recording` (unit) | the read record notes each key read by catalog answer and path, present or not, through a deep copy; with no recorder the answers are plain dicts |
+| `Rules` (unit) | every field of one of E-01.7's four classes or not served (and then neither read nor served); nothing read is clock-valued or not served; the one source-derived entry, cited to the locked wheels (whose sha256 the lock holds) by in-wheel path and line; the pinned rule is the production path's SEED script; every observation cites F-04.2, F-04.1c or the D1 run record. Dispatch 14: each row read names the dispatch functions that read it; the `runtime-stop` `body` is a `pinned-rule` on the observed 204, its two cited lines (`tools/guest.py` `API_PROBE`, `guest_transport.py`) holding the cited code; the create's status is determined by what the core checks, and cites the source showing that the matrix's `acp_model` and secret values do not determine it; the core's own transitions are marked as its scenario (no turn runs); each inferred input (the 404 of a conversation never created, the empty log of an ACP agent before its message, the configuration range of `/server_info`) cites its source |
+| `Citations` (unit) | `/server_info` is F-04.1c section 3's JSON block exactly; the create's values are F-04.2 section 4.2's block and its observed request the profile's fixture; each state value (`idle`, `finished`, `available`, `missing`, the counts, 204, the empty page, `MessageEvent`) is found in the section it cites; the server configuration F-04.1c wrote and the profile's now differ only by `enable_browser` false, F-04.1c's image being browser-less |
+| `ByState` (unit) | the core's answers by route and state: labelled, only listed fields served; a create serves the id and the clock-valued time, and the other fields only for F-04.2's request (`persistence_dir` only for its own id); any body whose `conversation_id` is a UUID not held is answered 201, the rest unchecked; the message finishes the conversation at that one call; a held id, a second message, a second stop, a count of 2, a query, an unknown route or conversation, a delivery are refused with the label; the call log holds what the core received and nothing a dropped request would have sent |
+| `Seed` | SEED's answer by running the harness's own `SEED_SCRIPT` over the request's payload: its success line and exit code, the files written in the core's scratch; a second SEED refused; another script refused without running; a script exit other than 0 refused with the label |
+| `Recording` (unit) | the read record notes each key read by catalog answer and path, present or not, through a deep copy, with its reader; `dict()`, `json.dumps`, `reversed` and a knob's write keep the answer; each operation class that reads a whole answer or changes it (equality, text, union, removal and update, `copy()`, an unbound `dict` method) is an opaque read and raises; not seen: an unbound `dict` method on an absent key; with no recorder the answers are plain dicts |
 
 [`tests/test_restart_matrix.py`](tests/test_restart_matrix.py): the restart matrix
 ([above](#the-restart-matrix-e-0142-slice-5c)), each row a test of `Rows` on the native D1 fixture with `Wire`
@@ -2182,9 +2186,11 @@ test module but itself and `test_agentfixture_core.py` (whose tests read the cor
 core's read record, each in a process of its own through
 [`tests/read_binding_runner.py`](tests/read_binding_runner.py) (no visible window; four at a time), requires each
 module's tests to pass there, and shows the keys read of the core's answers to be exactly the provenance table's rows
-marked read (containers included), none clock-valued or not served; reads of the core's refusals are listed, not
-judged. The core answers in 16 of the 29 modules run. `Judge` (unit) is the falsifier set of the judgement: a read
-of an unmarked, clock-valued, not served, unlisted or absent field is a violation, and a container is not.
+marked read (containers included), none clock-valued or not served, and each row's named functions to be exactly
+the dispatch functions recorded reading it; reads of the core's refusals are listed, not judged; an opaque read
+(dispatch 14) is a violation, `OPAQUE_READ`, on any answer. The core answers in 16 of the 29 modules run. `Judge`
+(unit) is the falsifier set of the judgement: a read of an unmarked, clock-valued, not served, unlisted or absent
+field is a violation, and a container is not; an opaque read of each operation class is a named violation.
 
 [`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
 
