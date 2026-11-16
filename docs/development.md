@@ -1382,8 +1382,9 @@ defaults them.
   root (the live promoted manifest loaded for the dispatch with the decision verifier; the native
   entry read once; the builder bot's entry only inside `attempt_role_token`); there is no Task
   target. The verifier's observations are `native_qualification_run`'s, unchanged
-  (`native_observer`), without step (11d). A stop ends the attempt through E-05.8's mechanism
-  with its dispatcher record (`D1_STOP_RECORDS`) before anything reaches Gitea; a refusal after
+  (`native_observer`), without step (11d). A stop is recorded durably as it is observed and ends the
+  attempt through E-05.8's mechanism with its dispatcher record (`D1_STOP_RECORDS`) before anything reaches
+  Gitea, and no resume or result path runs past it; a resumed run never sends the native token into the guest; a refusal after
   the turn tears nothing down (`--resume`); the record's `guest_may_be_destroyed` says when the
   guest may go. The live plan's step 0 runs
   [`integrations/dispatch/tests/live_step0_rehearsal.py`](../integrations/dispatch/tests/live_step0_rehearsal.py)
