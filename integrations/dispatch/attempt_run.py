@@ -1176,12 +1176,14 @@ class RunOutcome:
     end: dict | None = None
     result: VerifiedResult | None = None
     runtime: str | None = None
+    pending: tuple = ()  # the interruption's dispatcher records the caller ends the attempt with (defer_interruption_end)
 
     def to_json(self) -> dict:
         return {'format': OUTCOME_FORMAT, 'outcome': self.outcome, 'attemptId': self.attempt_id,
                 'conversationId': self.conversation_id, 'turnStatus': self.turn_status,
                 'problems': list(self.problems), 'end': self.end,
-                'result': self.result.to_json() if self.result else None, 'runtime': self.runtime}
+                'result': self.result.to_json() if self.result else None, 'runtime': self.runtime,
+                'pending': [dict(r) for r in self.pending]}
 
 
 def _stop(integration_store, operation_key, transport, actor, records, read_artifact):
@@ -1337,11 +1339,15 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
                 observe: Callable[..., Sequence[Mapping]] | None = None,
                 reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
                 ceiling_s: float = TURN_CEILING_S, clock=None, wait=None,
-                read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
+                read_artifact: Callable[[str], bytes] = di.read_profile_artifact,
+                defer_interruption_end: bool = False) -> RunOutcome:
     """The attempt run (the module docstring's steps 0 to 7) of a confirmed attempt on BASE (``read_base`` of the
     approved repository). An attempt whose turn journal exists is TURN_ALREADY_SENT before any call (its result step
     is ``resume_result``'s). Refusals (DispatchRefused) leave the conversation as it is, for a resumed step; only an
-    inspection failure, a run that did not start, or an observer's record ends the attempt."""
+    inspection failure, a run that did not start, or an observer's record ends the attempt. With
+    DEFER_INTERRUPTION_END a run that did not start is returned unended, its interruption record in ``pending``: the
+    caller (the D1 run driver, review of B and C S1) ends the attempt after its own teardown observations, with a
+    security stop's record instead when one is observed there."""
     resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                            read_artifact)
     held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
@@ -1386,6 +1392,8 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     except DispatchRefused as refusal:
         if refusal.code != 'TURN_RUN_NOT_STARTED':
             raise
+        if defer_interruption_end:
+            return RunOutcome('run-not-started', attempt_id, conversation_id, pending=tuple(not_started))
         return stopped(not_started, 'run-not-started')
     records = AE.check_records(list(observe('after-message') or ()))     # D1 slice C: the observations of the turn
     if records:
@@ -1398,6 +1406,9 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
         # stays TURN_CEILING, for the engineering manager.
         if refusal.code == 'TURN_CEILING' and _reconciled(integration_store, attempt_id) and _not_started(
                 client, conversation_id, hashlib.sha256(prepared.text.encode('utf-8')).hexdigest()):
+            if defer_interruption_end:
+                return RunOutcome('run-not-started', attempt_id, conversation_id, turn_status='idle',
+                                  pending=tuple(not_started))
             return stopped(not_started, 'run-not-started', status='idle')
         raise
     records = AE.check_records(list(observe('after-turn', status=status) or ()))

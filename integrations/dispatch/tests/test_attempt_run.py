@@ -1370,6 +1370,19 @@ class Run(Scratch):
         self.assertEqual(self.server.log.count(('POST', 'bash/execute_bash_command')), 1, 'the SEED only')
         self.assertEqual(self.reserved, [])
 
+    def test_a_deferred_interruption_end_is_left_to_the_caller(self):
+        """Review of B and C, S1: with defer_interruption_end the run that did not start is returned unended, its
+        record pending, so the run driver ends it after its teardown observations (with a stop's record if any)."""
+        self.server.message_status = 429
+        outcome = AR.run_attempt(self.store, self.key, transport=self.server, base=self.base, actor='c2-test',
+                                 inspect=lambda cid: (), pull=lambda name: self.fail('no pull'),
+                                 clock=lambda: 0.0, wait=lambda s: self.fail('no wait'),
+                                 read_artifact=self.fixture.read_artifact, defer_interruption_end=True)
+        self.assertEqual((outcome.outcome, outcome.end), ('run-not-started', None))
+        self.assertEqual([r['kind'] for r in outcome.pending], ['run-not-started'])
+        self.assertIsNone(AE.end_record(self.store, outcome.attempt_id))
+        self.assertEqual(outcome.to_json()['pending'][0]['code'], 'TURN_RUN_NOT_STARTED')
+
     def test_a_second_run_of_an_attempt_makes_no_call(self):
         self.server.after_message = 'error'
         self.assertEqual(self.run_attempt().outcome, 'turn-not-finished')
