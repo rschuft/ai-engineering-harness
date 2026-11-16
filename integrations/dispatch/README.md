@@ -934,6 +934,72 @@ transitions' reasons and details.
 (R22), the live restart (E-01.6). Nothing here has run against a live Agent Server: **not yet
 verified** live.
 
+## The restart matrix (E-01.4.2, slice 5c)
+
+E-01.4.2's proof, offline: a lost create response and a dispatcher restart at each step (before the create, after
+it, after the initial message), with no second create and no second initial message, shown by the fake's call log.
+The fake is the cited core of the one fixture catalog ([`integrations/agentfixture/`](../agentfixture/README.md)),
+whose every answer and field has its provenance class there. The rows below, with their expected values, were
+committed before the matrix test first ran (the rule before the observation).
+
+**What the matrix's restart is.** A simulated death, not a process restart: the act's continuation is dropped (a
+`BaseException` at the chosen point, or a transport event with it), the dispatcher lock is released as the act
+unwinds, and the integration store is closed and reopened from its file before `recover` runs. The real-process facts
+it rests on are E-01.1.2's crash matrix (a call left whole or absent by a killed process) and slice 5a's condition 2
+(a killed holder's lock is free once its exit is observed). The live restart is E-01.6's.
+
+**The fixture.** A native D1 attempt (E-05.9's fixture, as slices 5a and 5b use it) whose transport is a wrapper
+around `AgentServerCore`. The wrapper injects only the transport events listed per row, and never an answer. The
+container inspection hook answers nothing (`()`), the exchange's `exists` answers `False`, and nothing is pulled;
+none of these is an Agent Server answer. "Run" is `run_attempt`: the inspection (`count`, the conversation, its
+runtime), SEED, the message, the wait (`finished` at its first read), then RESULT, which the core refuses with its
+label (no observation covers this base's RESULT), so the run ends `RESULT_COMMAND_FAILED` with the turn
+`confirmed`. "Result step" is `resume_result`: the conversation `finished`, its runtime `available`, then exactly one
+RESULT, refused the same way. "The exit" is `end_interrupted_attempt`, trigger `attempt-stopped`, record
+`run-not-started` (R21; E-05.8's end). K1 is ordinal 1's operation key and c1 its conversation; c2 is ordinal 2's.
+
+| Row | The dispatcher dies | Transport events | Store after the death | `recover`: its calls, and what it does | Then | Creates received | Messages received |
+|---|---|---|---|---|---|---|---|
+| A | before the reservation (a `BaseException` at `reserve_attempt`) | none | no typed attempt | no call; nothing | dispatch: ordinal 1, `confirmed` (201); run | 1 | 1 |
+| B | with K1 `reserved` (at `create_workspace`) | none | K1 `reserved` | `GET` c1: 404; K1 `failed` (`NOT_SENT`) | dispatch: ordinal 2, `confirmed`; run on it | 1 | 1 |
+| C | with K1 `dispatched`, its create not received | the create never arrives, with the death | K1 `dispatched` | `GET` c1: K1 `unknown` (`OUTCOME_UNKNOWN`), then 404: `failed` | dispatch: ordinal 2; run on it | 1 | 1 |
+| D | with K1 `dispatched`, its create received | the create's answer withheld, with the death | K1 `dispatched` | `GET` c1: K1 `unknown`, then 200: `confirmed` | a repeat of the dispatch is refused `PRIOR_ATTEMPT_NOT_ENDED` before any reservation (its one call `GET` c1, `idle`); run on K1 | 1 | 1 |
+| E | no death: the create's answer is lost | the create's answer withheld (`TimeoutError`) | K1 `unknown` (`create-unanswered`) | `GET` c1: 200, K1 `confirmed` | run | 1 | 1 |
+| F | with K1 `confirmed`, before the run | none | K1 `confirmed` | no call; nothing | run | 1 | 1 |
+| G | after SEED, before the turn journal (a `BaseException` from the `before-message` observation) | none | K1 `confirmed`, no turn journal | no call; nothing | run: the inspection passes, a second SEED is refused by the core's label, `SEED_FAILED`, no message: held. The exit: an end record; then `recover`: nothing held, nothing `ended` | 1 | 0 |
+| H | with the turn journal `reserved` (at its transition to `dispatched`) | none | turn `reserved` | no call; held `TURN_NOT_SENT` | run refused `TURN_ALREADY_SENT` with zero calls: held. The exit; then `recover`: no call, nothing held, the turn in `ended` (`reserved`) | 1 | 0 |
+| I | with the turn `dispatched`, the message not received | the message never arrives, with the death | turn `dispatched` | `GET` c1, `GET` c1's events (empty): the turn `unknown`, held `TURN_UNRECONCILED` | result step refused `TURN_NOT_CONFIRMED`: held. The exit; then `recover`: no call, nothing held, the turn in `ended` (`unknown`) | 1 | 0 |
+| J | with the turn `dispatched`, the message received | the message's answer withheld, with the death | turn `dispatched` | `GET` c1, `GET` c1's events (the message): the turn `unknown`, then `confirmed` (`reconciled-from-events`) | result step: one RESULT, refused, `RESULT_COMMAND_FAILED` | 1 | 1 |
+| K | after the message's answer was lost, at the next request | the message's answer withheld (`OSError`); then the next request (send_message's own read of c1) never arrives, with the death | turn `unknown` (`no-answer`) | `GET` c1, `GET` c1's events (the message): the turn `confirmed` (`reconciled-from-events`) | result step, as J | 1 | 1 |
+| L | with the turn `confirmed`, during the wait | the wait's first read of c1 never arrives, with the death | turn `confirmed` | no call; nothing | result step, as J | 1 | 1 |
+| C' | as C, then a restore of the store (an epoch open) | as C | K1 `dispatched`, an epoch open | the store's sweep: K1 `unknown` (its own reason); `GET` c1: 404, `failed` | the epoch closes; then as C | 1 | 1 |
+| D' | as D, then a restore | as D | K1 `dispatched`, an epoch open | the store's sweep: K1 `unknown`; `GET` c1: 200, `confirmed` | the epoch closes; then as D | 1 | 1 |
+| J' | as J, then a restore | as J | turn `dispatched`, an epoch open | the store's sweep: the turn `unknown`; `GET` c1, `GET` c1's events: `confirmed` | the epoch closes; then as J | 1 | 1 |
+| Z | nobody: another holder has the lock (a second handle), with rows in flight as C leaves them, and as D leaves them | as C; as D | as C; as D | `DISPATCHER_BUSY`: no call, the store's canonical dump unchanged | | 0 (as C); 1 (as D) | 0 |
+
+**In every row:** at most one `POST /api/conversations` per operation key; at most one conversation holds a message;
+`recover` made `GET`s only; a second `recover` changes nothing (the store's canonical dump unchanged); no row's
+verdict rests on an answer outside the catalog (the wrapper never answers, and no test knob is used). "Creates" and
+"messages received" count the core's call log over the whole row, the death included.
+
+**Against the design's table** (the restart-recovery design, slice 5c), updated only to reflect slices 5a and 5b as
+pushed and the engineering manager's readings of 2026-11-16:
+
+- G, H and I: the exit is `end_interrupted_attempt` (5b: once the attempt has an end record its turn journal is
+  reported in `ended`, not held). G has no turn journal, so nothing is `ended` there; its hold is the run's
+  `SEED_FAILED`, which `recover` does not report.
+- G: the second SEED is refused by the core's label, since no observation covers a second SEED (reading 2).
+- D: the repeat's refusal is named, `PRIOR_ATTEMPT_NOT_ENDED` (E-05.8's new-attempt rule reads ordinal 1's status,
+  `idle`), with its one call.
+- A to F ("run") and J, K, L ("result step"): both end at RESULT, refused by the label (reading 3); the verdict rests
+  on the counts and the turn state.
+- I: the result step's refusal is named, `TURN_NOT_CONFIRMED`.
+- K: made exact. With the core serving the message's event, `send_message`'s own reconcile would confirm the turn
+  at once (row L's state), so the death is at that reconcile's first request, leaving the turn `unknown`.
+- C', D', J': the store's sweep moves the `dispatched` row in place of `recover`'s own move (5b), and the epoch is
+  closed by `close_restore_epoch` once `recover` has run.
+- Z: run in two states, C's (no create received) and D's (one).
+
 ## The live transport (E-01.3.3)
 
 [`guest_transport.py`](guest_transport.py) is the dispatcher's one live transport.
