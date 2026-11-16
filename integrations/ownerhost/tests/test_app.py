@@ -8,7 +8,8 @@
 - Host and Origin are checked against literals (``HOST_NOT_ALLOWED``, ``ORIGIN_NOT_ALLOWED``) before anything else.
 - Missing, foreign, expired and revoked are refused with their codes, and the store's canonical dump is equal before
   and after; no response and no log line holds the credential.
-- There is one route, ``POST /session``; no dispatch endpoint.
+- The route table is ``POST /session`` and the thread and history routes of U-02.1, every one behind the credential;
+  no dispatch endpoint.
 
 The application is driven through ASGI on an event loop in this process (no listener; the listener is
 test_listener.py's).
@@ -39,6 +40,9 @@ class CountingStore:
         self.lookups += 1
         return self.store.session_by_verifier(verifier)
 
+    def __getattr__(self, name):           # the thread and history routes (U-02.1) use the store itself
+        return getattr(self.store, name)
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -63,8 +67,15 @@ class EveryRequestNeedsTheCredential(Base):
         return [(route.path, sorted(route.methods)) for route in self.app.routes]
 
     def test_the_route_table_is_one_session_route_and_no_dispatch_endpoint(self):
-        self.assertEqual(self.routes(), [('/session', ['POST'])])
-        self.assertEqual([r.path for r in A.ROUTES], ['/session'])
+        """One session route, POST /session; since U-02.1 the thread and history routes beside it; no dispatch."""
+        self.assertEqual(self.routes(), [
+            ('/session', ['POST']), ('/threads', ['GET', 'HEAD', 'POST']), ('/threads/{thread_id}', ['GET', 'HEAD']),
+            ('/threads/{thread_id}/title', ['POST']), ('/threads/{thread_id}/archive', ['POST']),
+            ('/threads/{thread_id}/unarchive', ['POST']), ('/threads/{thread_id}/delete', ['POST']),
+            ('/threads/{thread_id}/messages', ['GET', 'HEAD', 'POST']),
+            ('/threads/{thread_id}/messages/{message_id}', ['POST'])])
+        self.assertEqual([r.path for r in A.ROUTES if r.path.startswith('/session')], ['/session'])
+        self.assertFalse([r.path for r in A.ROUTES if 'dispatch' in r.path or 'conversations' in r.path])
 
     def test_every_route_and_method_without_the_credential_is_missing(self):
         self.scratch.enroll(at=NOW)
@@ -78,13 +89,28 @@ class EveryRequestNeedsTheCredential(Base):
 
     def test_every_route_answers_with_the_credential(self):
         credential, record = self.scratch.enroll(at=NOW)
+        thread, _ = self.scratch.store.initialize_thread(session_id=record.session_id, local_id='__LOCALID_route',
+                                                         at=T.stamp(NOW))
+        item = {'parentId': None, 'message': {'id': 'A000001', 'role': 'assistant', 'status': {'type': 'complete'},
+                                              'content': [{'type': 'text', 'text': 'Recorded.'}]}}
+        bodies = {'/threads': {'localId': '__LOCALID_route'}, '/threads/{thread_id}/title': {'title': 'Route walk'},
+                  '/threads/{thread_id}/messages': item, '/threads/{thread_id}/messages/{message_id}': item}
         for path, methods in self.routes():
             for method in methods:
                 with self.subTest(method=method, path=path):
-                    status, headers, body = self.call(method, path, (S.HEADER, credential))
-                    self.assertEqual(status, 200, body)
-                    self.assertEqual(json.loads(body), {'sessionId': record.session_id, 'issuedAt': record.issued_at,
-                                                        'expiresAt': record.expires_at})
+                    concrete = path.replace('{thread_id}', thread.thread_id).replace('{message_id}', 'A000001')
+                    body = bodies.get(path) if method == 'POST' else None
+                    extra = ((('content-type', 'application/json'),) if body is not None else ())
+                    status, headers, answer = self.call(method, concrete, (S.HEADER, credential), *extra,
+                                                        body=json.dumps(body).encode() if body is not None else b'')
+                    if path == '/threads/{thread_id}/delete':        # answers, with its stable refusal
+                        self.assertEqual((status, T.code_of(answer)), (409, 'THREAD_DELETE_REFUSED'))
+                    else:
+                        self.assertEqual(status, 200, answer)
+                    if path == '/session':
+                        self.assertEqual(json.loads(answer), {'sessionId': record.session_id,
+                                                              'issuedAt': record.issued_at,
+                                                              'expiresAt': record.expires_at})
                     self.assertEqual(dict(headers)['cache-control'], 'no-store')
                     self.assertNotIn('set-cookie', dict(headers))
         status, _, body = self.call('GET', '/no-such-route', (S.HEADER, credential))
@@ -93,6 +119,8 @@ class EveryRequestNeedsTheCredential(Base):
         status, _, body = self.call('GET', '/session', (S.HEADER, credential))
         self.assertEqual((status, T.code_of(body)), (405, 'METHOD_NOT_ALLOWED'))
         self.assertNotIn(b'/session', body)
+        status, _, body = self.call('DELETE', f'/threads/{thread.thread_id}', (S.HEADER, credential))
+        self.assertEqual((status, T.code_of(body)), (405, 'METHOD_NOT_ALLOWED'))
 
     def test_the_preflight_is_the_one_exception_and_carries_no_data(self):
         credential, record = self.scratch.enroll(at=NOW)

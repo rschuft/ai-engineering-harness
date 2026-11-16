@@ -7,15 +7,15 @@ component lock pins, in the hash-locked tools set), run under the tools interpre
 only. The Owner UI shell ([`apps/owner-host`](../../apps/owner-host/README.md)) reaches it with the Owner UI session
 credential, `cred-owner-ui-session`, which the Owner mints himself at a console.
 
-In this slice it does one thing behind the credential: `POST /session` answers the authenticated session's public id
-and validity (the shell's sign-in). Threads and messages (U-02.1), capture (P-01.3), acceptance (P-04.4) and the
-projection (U-04.1) attach later. It has no dispatch endpoint.
+Behind the credential: `POST /session` answers the authenticated session's public id and validity (the shell's
+sign-in), and since U-02.1 the thread and history routes keep the Owner chat in the conversation store (below).
+Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. It has no dispatch endpoint.
 
 ## Files
 
 | Path | What |
 |---|---|
-| `app.py` | The ASGI application (`create_app`), its three request checks and its one route; `bind_listener` and `serve`, the server process |
+| `app.py` | The ASGI application (`create_app`), its three request checks, the session route and the thread and history routes; `bind_listener` and `serve`, the server process |
 | `session.py` | The credential's shape and verifier, and `check`, which decides one request against the session table |
 | `enroll.py` | The Owner's enroll command: the console guard, minting, the session row, the one showing |
 | `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `recover`, `status`, `inspect`, `verify`, and the supervisor |
@@ -25,6 +25,8 @@ projection (U-04.1) attach later. It has no dispatch endpoint.
 | `tests/test_service.py` | The server's environment allowlist, the configuration, readiness from the TCP table, `up`'s refusals, `down`, with a fake adapter (unit) |
 | `tests/test_structure.py` | R2's structural tests: no client socket (syntax trees), the import census (a fresh interpreter), one declared port (unit, integration) |
 | `tests/test_listener.py` | The real start and stop on a throwaway layout: the listener table, the host census by port, every request over HTTP, the refusals, the environment and command line read from outside, the records and logs, the live import census, no window, no orphan (integration, Windows) |
+| `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
+| `tests/test_history_listener.py` | U-02.1's proof against the real service: a reload after a restart, repeats, the refusals, a quote cut from a received statement and a changed source byte (integration, Windows) |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
 ## The credential
@@ -80,6 +82,33 @@ The service log (`<logs>/owner-host/service.log`) records each decided request a
 session=<public id>` or `refused CODE METHOD ROUTE`, where ROUTE is the path of the route the request matched or
 `unmatched`, and METHOD a common method or `OTHER`: nothing the client wrote is logged verbatim, so no path can forge
 a log line or carry a credential into the log. uvicorn's access log is off.
+
+## Threads and messages (U-02.1)
+
+[Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
+point 6; the store's rules are in [`integrations/conversation`](../conversation/README.md#migration-0002-threads-and-messages-u-021).
+The backend of the shell's `RemoteThreadListAdapter` and `ThreadHistoryAdapter` (assistant-ui), every route behind the
+credential and every write attributed to the authenticated session:
+
+| Route | Adapter call | Answer |
+|---|---|---|
+| `GET /threads` | `list` | `{threads: [{remoteId, status, title?}]}` |
+| `POST /threads` `{localId}` | `initialize` | `{remoteId}`: the store mints it, once per session and local id |
+| `GET /threads/{thread_id}` | `fetch` | `{remoteId, status, title?}` |
+| `POST /threads/{thread_id}/title` `{title}` | `rename` | the thread |
+| `POST /threads/{thread_id}/archive`, `/unarchive` | `archive`, `unarchive` | the thread |
+| `POST /threads/{thread_id}/delete` | `delete` | always `THREAD_DELETE_REFUSED` (409): nothing is deleted |
+| `GET /threads/{thread_id}/messages` | history `load` | `{messages: [{seq, parentId, message}]}` in `seq` order, no head |
+| `POST /threads/{thread_id}/messages` `{parentId, message}` | history `append` | `{id, seq, revision, changed}`; `changed` is false for a repeat |
+| `POST /threads/{thread_id}/messages/{message_id}` `{parentId, message}` | history `update` | the same; an upsert for an assistant message, a user message is immutable |
+
+A body is one JSON object, `Content-Type: application/json` (else 415), at most 1 MiB (`REQUEST_TOO_LARGE`, 413), with
+no duplicate key and no NaN or Infinity (`REQUEST_INVALID`, 400). The store's refusals keep their codes:
+`THREAD_INVALID` and `MESSAGE_INVALID` (400), `THREAD_NOT_FOUND` and `MESSAGE_NOT_FOUND` (404),
+`MESSAGE_PARENT_NOT_FOUND`, `MESSAGE_ID_CONFLICT`, `MESSAGE_IMMUTABLE` and `THREAD_DELETE_REFUSED` (409), each changing
+nothing. The methods stay `GET` and `POST` (the CORS allowlist is unchanged), so a thread delete is a `POST` to its own
+route. The log names the route template (`accepted POST /threads/{thread_id}/messages 200 session=<public id>`): no
+thread id, message id or text reaches it.
 
 ## What it never does
 
@@ -138,5 +167,6 @@ rather than skip, when the port is already held.
 ## Not yet verified
 
 - The Owner's own enrollment and sign-in with his real credential (OA-32 (a)); a real browser against the service.
+- U-02.1's verdict (built 2026-11-16; its tests PASS offline and against the real service with throwaway layouts).
 - Linux and macOS (the platform contract's adapters, F-06.4 and F-06.5).
 - Ending with the Owner's session or a reboot (the job's declared behaviour, as for Gitea).

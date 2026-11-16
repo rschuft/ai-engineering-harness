@@ -1,4 +1,4 @@
-"""The Integration process: the Owner UI's backend on the host (plan leaf U-01.3; decision 0025).
+"""The Integration process: the Owner UI's backend on the host (plan leaves U-01.3 and U-02.1; decision 0025).
 
 A Starlette application on uvicorn, run under the tools interpreter, bound to ``127.0.0.1:13310`` only (one fixed
 port, declared in the network matrix's ``nm-owner-ui-integration`` and read by the host census; a busy port is a
@@ -20,6 +20,23 @@ Every request passes three checks, outermost first, and a refusal changes nothin
 Routes (all behind the credential): ``POST /session`` answers the authenticated session's public id, issue time and
 expiry (the login's one verified request). The process keeps no session table of its own: the conversation store's
 verifier is all it reads, so a restart loses nothing.
+
+The thread and history routes (U-02.1; decision 0025 point 6) are the backend of assistant-ui's two adapters in the
+shell, a RemoteThreadListAdapter and a ThreadHistoryAdapter, over the conversation store, which assigns every id it
+owns and the order:
+
+- ``GET /threads`` (list), ``POST /threads`` ``{localId}`` (initialize: the store mints the thread id),
+  ``GET /threads/{thread_id}`` (fetch), ``POST /threads/{thread_id}/title`` ``{title}`` (rename),
+  ``POST /threads/{thread_id}/archive`` and ``/unarchive``, ``POST /threads/{thread_id}/delete`` (always refused,
+  ``THREAD_DELETE_REFUSED``: nothing is deleted);
+- ``GET /threads/{thread_id}/messages`` (history load: every message in the store's order, no headId),
+  ``POST /threads/{thread_id}/messages`` ``{parentId, message}`` (append), ``POST
+  /threads/{thread_id}/messages/{message_id}`` (update, an upsert for assistant messages; a user message is
+  immutable).
+
+Every write is attributed to the authenticated session. A body is JSON (``Content-Type: application/json``), at most
+``MAX_BODY_BYTES``, with no duplicate key and no NaN or Infinity (``REQUEST_INVALID``); the store's refusals keep their
+stable codes. Nothing the client wrote is logged: a request is logged by its route's path template.
 
 What it never does (decision 0025 point 2): it opens no outbound connection (its one socket is the listener that
 ``bind_listener`` binds); it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it
@@ -71,6 +88,7 @@ from starlette.middleware import Middleware            # noqa: E402
 from starlette.middleware.cors import CORSMiddleware   # noqa: E402
 from starlette.responses import JSONResponse           # noqa: E402
 from starlette.routing import Match, Route             # noqa: E402
+from starlette.requests import ClientDisconnect        # noqa: E402
 
 LOOPBACK = '127.0.0.1'
 PORT = 13310                       # the Integration process's one fixed port (nm-owner-ui-integration)
@@ -88,7 +106,21 @@ REMEDIES = {
     'NOT_FOUND': 'the Integration process has no such route',
     'METHOD_NOT_ALLOWED': 'the route does not take this method',
     'PORT_IN_USE': f'stop what holds {LOOPBACK}:{PORT} (the Integration process uses no other port)',
+    'REQUEST_INVALID': 'send one JSON object (Content-Type: application/json, no duplicate key, no NaN)',
+    'REQUEST_TOO_LARGE': 'a request body is at most 1 MiB',
+    'THREAD_INVALID': 'send an assistant-ui local thread id or a title of 1 to 200 characters',
+    'THREAD_NOT_FOUND': 'list the threads (GET /threads) and use one of their ids',
+    'THREAD_DELETE_REFUSED': 'nothing is deleted from the Owner conversation store; archive the thread instead',
+    'MESSAGE_INVALID': 'send the history item as assistant-ui writes it: {parentId, message}',
+    'MESSAGE_PARENT_NOT_FOUND': 'append the parent message to the thread first',
+    'MESSAGE_ID_CONFLICT': 'the thread already holds another message under this id',
+    'MESSAGE_IMMUTABLE': 'an Owner statement is never changed; send an edit as a new message',
+    'MESSAGE_NOT_FOUND': 'append the message first; an update never creates a user message',
 }
+MAX_BODY_BYTES = 1_048_576
+STORE_REFUSAL_STATUS = {'THREAD_INVALID': 400, 'MESSAGE_INVALID': 400, 'THREAD_NOT_FOUND': 404,
+                        'MESSAGE_NOT_FOUND': 404, 'MESSAGE_PARENT_NOT_FOUND': 409, 'MESSAGE_ID_CONFLICT': 409,
+                        'MESSAGE_IMMUTABLE': 409, 'THREAD_DELETE_REFUSED': 409}
 
 
 def now() -> str:
@@ -176,6 +208,129 @@ async def start_session(request):
                          'expiresAt': owner['expiresAt']}, headers=SECURITY_HEADERS)
 
 
+# ---------------------------------------------------------------------------- threads and messages (U-02.1)
+
+
+class RequestRefused(Exception):
+    def __init__(self, code: str, detail: str, status: int):
+        self.code, self.detail, self.status = code, detail, status
+
+
+def _no_constant(name):
+    raise ValueError(f'{name} is not JSON')
+
+
+def _no_duplicates(pairs):
+    found = {}
+    for key, value in pairs:
+        if key in found:
+            raise ValueError('a duplicate key')
+        found[key] = value
+    return found
+
+
+async def _body(request) -> dict:
+    """The request's JSON object: bounded, of the JSON media type, no duplicate key, no NaN or Infinity."""
+    media = request.headers.get('content-type', '').split(';')[0].strip().lower()
+    if media != 'application/json':
+        raise RequestRefused('REQUEST_INVALID', 'the body must be application/json', 415)
+    declared = request.headers.get('content-length')
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_BODY_BYTES):
+        raise RequestRefused('REQUEST_TOO_LARGE', f'the body exceeds {MAX_BODY_BYTES} bytes', 413)
+    data = bytearray()
+    try:
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > MAX_BODY_BYTES:
+                raise RequestRefused('REQUEST_TOO_LARGE', f'the body exceeds {MAX_BODY_BYTES} bytes', 413)
+    except ClientDisconnect:
+        raise RequestRefused('REQUEST_INVALID', 'the body was not received', 400) from None
+    try:
+        value = json.loads(bytes(data).decode('utf-8'), object_pairs_hook=_no_duplicates,
+                           parse_constant=_no_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise RequestRefused('REQUEST_INVALID', 'the body is not one JSON object', 400) from None
+    if not isinstance(value, dict):
+        raise RequestRefused('REQUEST_INVALID', 'the body is not one JSON object', 400)
+    return value
+
+
+def _store_call(handler):
+    """An endpoint over the conversation store: a store refusal answers its stable code, and changes nothing."""
+    async def endpoint(request):
+        try:
+            return JSONResponse(await handler(request, request.app.state.store(), request.app.state.clock(),
+                                              request.scope['state']['owner_session']['sessionId']),
+                                headers=SECURITY_HEADERS)
+        except RequestRefused as exc:
+            return refusal(exc.code, exc.detail, exc.status)
+        except conversation.ConversationRefused as exc:
+            return refusal(exc.code, exc.detail, STORE_REFUSAL_STATUS[exc.code])
+    endpoint.__name__ = handler.__name__
+    return endpoint
+
+
+def _written(written) -> dict:
+    stored = written.message
+    return {'id': stored.message_id, 'seq': stored.seq, 'revision': stored.revision, 'changed': written.changed}
+
+
+@_store_call
+async def threads(request, store, at, session_id):
+    if request.method in ('GET', 'HEAD'):
+        return {'threads': [thread.public() for thread in store.threads()]}
+    body = await _body(request)
+    if set(body) != {'localId'}:
+        raise RequestRefused('REQUEST_INVALID', 'initialize takes {localId}', 400)
+    thread, _ = store.initialize_thread(session_id=session_id, local_id=body['localId'], at=at)
+    return {'remoteId': thread.thread_id}
+
+
+@_store_call
+async def thread(request, store, at, session_id):
+    return store.thread(request.path_params['thread_id']).public()
+
+
+@_store_call
+async def thread_title(request, store, at, session_id):
+    body = await _body(request)
+    if set(body) != {'title'}:
+        raise RequestRefused('REQUEST_INVALID', 'rename takes {title}', 400)
+    return store.rename_thread(request.path_params['thread_id'], body['title'], session_id=session_id, at=at).public()
+
+
+@_store_call
+async def thread_archive(request, store, at, session_id):
+    return store.archive_thread(request.path_params['thread_id'], session_id=session_id, at=at).public()
+
+
+@_store_call
+async def thread_unarchive(request, store, at, session_id):
+    return store.unarchive_thread(request.path_params['thread_id'], session_id=session_id, at=at).public()
+
+
+@_store_call
+async def thread_delete(request, store, at, session_id):
+    store.delete_thread(request.path_params['thread_id'])
+
+
+@_store_call
+async def messages(request, store, at, session_id):
+    thread_id = request.path_params['thread_id']
+    if request.method in ('GET', 'HEAD'):
+        return store.load(thread_id)
+    return _written(store.append_message(thread_id, await _body(request), session_id=session_id, at=at))
+
+
+@_store_call
+async def message(request, store, at, session_id):
+    body = await _body(request)
+    sent = body.get('message')
+    if not isinstance(sent, dict) or sent.get('id') != request.path_params['message_id']:
+        raise RequestRefused('MESSAGE_INVALID', 'the message id in the path and in the body differ', 400)
+    return _written(store.update_message(request.path_params['thread_id'], body, session_id=session_id, at=at))
+
+
 async def _not_found(request, exc):
     return refusal('NOT_FOUND', 'no route answers this path', 404)
 
@@ -184,7 +339,17 @@ async def _method_not_allowed(request, exc):
     return refusal('METHOD_NOT_ALLOWED', 'the route does not take this method', 405)
 
 
-ROUTES = (Route('/session', start_session, methods=['POST']),)
+ROUTES = (
+    Route('/session', start_session, methods=['POST']),
+    Route('/threads', threads, methods=['GET', 'POST']),
+    Route('/threads/{thread_id}', thread, methods=['GET']),
+    Route('/threads/{thread_id}/title', thread_title, methods=['POST']),
+    Route('/threads/{thread_id}/archive', thread_archive, methods=['POST']),
+    Route('/threads/{thread_id}/unarchive', thread_unarchive, methods=['POST']),
+    Route('/threads/{thread_id}/delete', thread_delete, methods=['POST']),
+    Route('/threads/{thread_id}/messages', messages, methods=['GET', 'POST']),
+    Route('/threads/{thread_id}/messages/{message_id}', message, methods=['POST']),
+)
 LOGGED_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')
 
 
@@ -203,10 +368,12 @@ def described(scope) -> str:
 
 
 def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Callable[[], str] = now,
-               log: Callable[[str], None] = lambda line: None, lifespan=None) -> Starlette:
+               log: Callable[[str], None] = lambda line: None, lifespan=None,
+               store: Callable[[], object] | None = None) -> Starlette:
     """The ASGI application. SESSIONS returns the object that answers ``session_by_verifier`` (the conversation
-    store); CLOCK the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request."""
-    return Starlette(
+    store); STORE the conversation store the thread and history routes use (SESSIONS' object when not given); CLOCK
+    the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request."""
+    app = Starlette(
         routes=list(ROUTES),
         middleware=[
             Middleware(HostOriginGuard, port=port, log=log),
@@ -216,6 +383,9 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
         ],
         exception_handlers={404: _not_found, 405: _method_not_allowed},
         lifespan=lifespan)
+    app.state.store = store or sessions
+    app.state.clock = clock
+    return app
 
 
 # ---------------------------------------------------------------------------- the server process
