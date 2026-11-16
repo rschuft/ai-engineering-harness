@@ -4875,6 +4875,41 @@ push never implies parent acceptance.
     - R8: a decision record at E-05.5's completion.
     - The slice-C stop mappings, and a resumed run reading the native entry only to search with it.
   - **After the promotion:** execution runs one live D1 run of TASK-1 (`d1-run-plan`, main session). It gives the evidence for E-01.3.2, E-05.4 and E-05.5. No commit may touch `profile.json` or `routes.json` between this promotion and the run.
+- <a id="d1-promotion-v2-2026-11-16"></a>**2026-11-16: D1 manifest promotion, version 2 (product manager).** Taken in the product manager's own session on the [handoff](#handoff-d1-promotion-v2-2026-11-16), as the [commitment](#commitment-d1-2026-11-15) decided ("The D1 manifest": "A later digest change is a new promotion inside (j)"). Decision 0020 point 2 refuses it to execution. The commitment, its criteria, the leaves and the Owner-actions queue are unchanged.
+  - **Where it ran.** From the harness at `9cbc9e2` on `main` (equal to `origin/main`), under the tools interpreter, against the managed data root. It wrote the managed integration store, the delegated decision copy and the live manifest, outside the repository.
+  - **Checked before the act** (the product manager's own reading, not execution's report):
+    - `profile.json` at `9cbc9e2` hashes to `b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7`. At `9684d9c^` it hashed to `7d01e62c...a17b`, version 1's profile. `9684d9c` is the only commit since then touching the profile's folder.
+    - The profile's diff from `9684d9c^` to `9cbc9e2` is one value: `routes.sha256`, `04953de1...e38730` to `919d67e2...bc09`. `routes.json` hashes to `919d67e2...bc09`. Its diff is one row: `POST /api/conversations/{conversation_id}/{tail}` goes from `dispatcher: validation` to `allowed`, with `tails` `events` and `bash/execute_bash_command` and a note.
+    - The candidate at `9cbc9e2`, copied outside the checkout: sha256 `0809dc32261d444be0c401368eef6ee3babf36d02b7389bc6c5bc9da98329218`, version 2. `check-manifest` exit 0, `problems []`.
+    - The candidate differs from version 1 in two values only, the version and the profile digest. This held both against the candidate at `95bf279` (sha256 `6e6d17f1...723d`) and against the live manifest before the act.
+    - Its other entries are version 1's:
+      - repository `aieh-d1-demo`;
+      - design `add-slugify` at C2 `dd18102d...`;
+      - binding (`aieh-d1-demo`, `implement`, the profile, `d1-implement`);
+      - pin `d1-implement`: `catalog/assignments/d1-implement.json` at `135fb94`, sha256 `d06a1fc0...be40`, at `135fb94` and at `9cbc9e2`.
+  - **P0** (`input_recorder.py status`): promotion head version 1 (`802e1e10…`), `next` 2. The design series `aieh-d1-demo`/`add-slugify` head is sequence 1 at C2. Nothing is failed or unsettled.
+  - **Containment in the envelope** (the product manager's judgment; decision 0020 point 9.2). Every entry lies inside OA-22 (j) as approved on 2026-11-14 and read in the [standing authorization](#owner-direction-d1-planning-2026-11-15). The repository, design, binding and pin are version 1's, already judged inside (j) in [the version 1 record](#d1-planning-acts-2026-11-15). The profile is still the qualified native profile at its current digest:
+    - E-05.11 qualified the guest side, which this change does not touch. The guest composition, the create template, secrets admission, the tunnel and the seed are byte-identical, since the one changed value is the dispatcher's route pin.
+    - The newly admitted route stays on edge `nm-dispatcher-agent-server`. OA-22 (d) approved that edge at endpoint level (`policy/network-matrix.json`: endpoint `api-agent-server-management`, no route list). The route is used for agent attempts on the demo repository's content, which is OA-22 (f).
+    - It adds no connection, edge, credential, principal, egress or guest change.
+    - No entry lies outside (j), so no per-act Owner decision is needed.
+  - **The promotion** (decision 0018 point 3.3; `manifest delegate`, decided by `agent:product-manager`):
+    - Decision `909e607c-38ca-41b5-ba13-1c4f9a019582` (`delegated-decision/v1`, `promote-manifest`).
+    - Version 2; digest `sha256:0809dc32261d444be0c401368eef6ee3babf36d02b7389bc6c5bc9da98329218`.
+    - `previous`: version 1, `sha256:6e6d17f1cd2fbee0f747890c5a0f65678bf3babde4d16ae0e9f6da167e02723d`.
+    - Designs: `aieh-d1-demo`, `add-slugify`, C2, acceptance `3d3f2d5e-c914-4e18-a4d3-26c719875fb9`, sequence 1.
+    - Delegation read at `9cbc9e2`; decision 0018's blob is `sha256:49afb6e9d7c5c4101c162a49c4454c69ee49e395f820723d1bda86eab897bacc`.
+    - Basis `envelope`, link `evidence/bootstrap-log.md#owner-direction-d1-planning-2026-11-15`, quote "Reconcile the manifest with the current native execution profile and its digest."
+    - Receipt `dispatch-inputs/v1/promotion/2`: confirmed; recorded `2026-11-16T00:52:14Z`.
+  - **P4** (`status`):
+    - The promotion head is version 2 (decision `909e607c…`), `next` 3. The design series is unchanged: sequence 1 at C2, `next` 2.
+    - Nothing is failed or unsettled.
+    - The live manifest (`dispatch_inputs.py manifest-path`) reads back at sha256 `0809dc32...9218`.
+  - **Not verified here; disclosed** (decision 0020 point 7):
+    - The recorder does not check who ran the command. It does not check containment either, which rests on the judgment above.
+    - The resolution of TASK-1 under version 2, and the live D1 run, have not run yet.
+  - **Delegated decision in this entry, for the D1 milestone report:** the D1 manifest's promotion, version 2, and its containment in (j) (point 3.3).
+  - **Handoff to execution.** Execution runs the live D1 run of TASK-1, which gives the evidence for E-01.3.2, E-05.4 and E-05.5. The handoff's rule stands: no commit touches `profile.json` or `routes.json` before that run. A later change to either is a new promotion. There is no question for the Owner.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
