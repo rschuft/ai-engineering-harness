@@ -162,6 +162,24 @@ class Rules(unittest.TestCase):
                     self.assertTrue((REPO / 'integrations' / 'dispatch' / f'{module}.py').is_file(), by)
                     self.assertRegex(function, r'^[A-Za-z_][A-Za-z0-9_.]*$')
 
+    def test_the_server_timeouts_are_not_served(self):
+        """Dispatch 14 (follow-up): the two timeouts come from openhands-tools, not among the extracted wheels, and the
+        profile's environment changed since F-04.1c; unread, so not served."""
+        fields = ('runtime_idle_timeout_seconds', 'max_foreground_terminal_timeout_seconds')
+        for name in fields:
+            with self.subTest(field=name):
+                r = row('server-info', f'`body.{name}`')
+                self.assertEqual((r['class'], r['read'], r['served'], r['readBy']), ('none', False, False, []))
+                for text in ('openhands-tools', 'not among the extracted wheels', 'LITELLM_LOCAL_MODEL_COST_MAP',
+                             '574d8db', RANGE):
+                    self.assertIn(text, r['citation'])
+        entry = CATALOG['answers']['server-info']
+        self.assertTrue(set(fields) <= set(entry['recorded']))
+        self.assertFalse(set(fields) & set(entry['body']))
+        core = AC.AgentServerCore()
+        self.addCleanup(core.close)
+        self.assertFalse(set(fields) & set(core('GET', '/server_info')['body']))
+
     def test_the_runtime_stops_body_is_the_production_paths_rule_for_no_content(self):
         """Dispatch 14, S1: built on the observed 204, cited to the probe's and the transport's own code by line."""
         stop = row('runtime-stop', '`body`')
@@ -231,7 +249,12 @@ class Citations(unittest.TestCase):
 
     def test_server_info_is_f_04_1c_section_3_complete(self):
         recorded = json_block(section('evidence/F-04.1c-agent-server.md', '## 3. Run 1'))
-        self.assertEqual(CATALOG['answers']['server-info']['body'], recorded)
+        entry = CATALOG['answers']['server-info']
+        self.assertEqual(entry['recorded'], recorded)
+        # the served body is the recorded block less exactly the rows not served
+        unserved = {path[len('body.'):] for r in ROWS if r['answer'] == 'server-info' and not r['served']
+                    for path in AC.field_paths(r['field'])}
+        self.assertEqual(entry['body'], {k: v for k, v in recorded.items() if k not in unserved})
 
     def test_the_create_answer_is_f_04_2_section_4_2_and_its_request_the_profiles_fixture(self):
         recorded = json_block(section('evidence/F-04.2-conversation-lifecycle.md', '### 4.2 (b) Create'))

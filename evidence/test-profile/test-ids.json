@@ -2408,6 +2408,7 @@
     "test_agentfixture_core.Rules.test_the_creates_status_is_determined_by_what_the_core_checks",
     "test_agentfixture_core.Rules.test_the_pinned_rule_is_harness_code_the_production_path_runs",
     "test_agentfixture_core.Rules.test_the_runtime_stops_body_is_the_production_paths_rule_for_no_content",
+    "test_agentfixture_core.Rules.test_the_server_timeouts_are_not_served",
     "test_agentfixture_core.Seed.test_a_command_that_is_not_the_harness_seed_is_refused_without_running",
     "test_agentfixture_core.Seed.test_a_seed_whose_script_exits_other_than_0_is_refused",
     "test_agentfixture_core.Seed.test_seed_runs_the_harness_script_once_per_conversation",

@@ -105,7 +105,11 @@ Citations below are `sdk:<in-wheel path>:<line>` for the first and `as:<in-wheel
   `conversation_image_has_browser` unset (F-04.1c §2, "Configuration as written";
   `as:openhands/agent_server/launch.py:109-122`, `:128-134`; `as:openhands/agent_server/config.py:87`); from it, by
   `enable_browser` false (`as:openhands/agent_server/launch.py:118-119`). So F-04.1c's `usable_tools` is the value
-  over the whole range `90816fa..9684d9c`, the range each configuration-determined row names.
+  over the whole range `90816fa..9684d9c`, the range each configuration-determined row names. Two unread fields
+  cannot be shown equal over it, and are not served (dispatch 14, follow-up): `runtime_idle_timeout_seconds` and
+  `max_foreground_terminal_timeout_seconds` take no configuration argument but come from openhands-tools
+  (`:15-18`, `:62-64`, `:98-100`), which is not among the extracted wheels, and the profile's server environment
+  gained `LITELLM_LOCAL_MODEL_COST_MAP` at 574d8db, within the range.
 - **A conversation never created** (the `conversation-absent` `status` row). `GET /api/conversations/{id}` answers
   404 when the outer server's conversation service has neither a record nor an event service for the id
   (`as:openhands/agent_server/conversation_router.py:229-231`,
@@ -142,10 +146,10 @@ element of a list; `fixture` is the label. The configuration range `90816fa..968
 | `server-info` | `body.build_git_ref` | observation | F-04.1c §3 | the server's build | no | yes | |
 | `server-info` | `body.build_git_sha` | observation | F-04.1c §3 | the server's build | no | yes | |
 | `server-info` | `body.docs` | observation | F-04.1c §3 | the server's build | no | yes | |
-| `server-info` | `body.max_foreground_terminal_timeout_seconds` | observation | F-04.1c §3 | the profile's server configuration | no | yes | |
+| `server-info` | `body.max_foreground_terminal_timeout_seconds` | none | not served: its value comes from openhands-tools (`as:openhands/agent_server/server_details_router.py:15-18`, `:98-100`), which is not among the extracted wheels, and the profile's environment changed since the observation (`LITELLM_LOCAL_MODEL_COST_MAP`, 574d8db, within 90816fa..9684d9c), so its determining inputs cannot be shown equal; not read | | no | no | |
 | `server-info` | `body.python_version` | observation | F-04.1c §3 | the server's build | no | yes | |
 | `server-info` | `body.redoc` | observation | F-04.1c §3 | the server's build | no | yes | |
-| `server-info` | `body.runtime_idle_timeout_seconds` | observation | F-04.1c §3 | the profile's server configuration | no | yes | |
+| `server-info` | `body.runtime_idle_timeout_seconds` | none | not served: its value comes from openhands-tools (`as:openhands/agent_server/server_details_router.py:15-18`, `:62-64`), which is not among the extracted wheels, and the profile's environment changed since the observation (`LITELLM_LOCAL_MODEL_COST_MAP`, 574d8db, within 90816fa..9684d9c), so its determining inputs cannot be shown equal; not read | | no | no | |
 | `server-info` | `body.sdk_version` | observation | F-04.1c §3 | the server's build | no | yes | |
 | `server-info` | `body.title` | observation | F-04.1c §3 | the server's build | no | yes | |
 | `server-info` | `body.tools_version` | observation | F-04.1c §3 | the server's build | no | yes | |
@@ -207,7 +211,9 @@ element of a list; `fixture` is the label. The configuration range `90816fa..968
 | `refusal` | `status` | label | the fixture's refusal: `501` | | no | yes | |
 | `refusal` | `fixture` | label | the fixture's label, with the reason it refused | | no | yes | |
 
-**Not served**, by answer: `create-new`, every top-level field but those listed served (and, for a request that is not
+**Not served**, by answer: `server-info`, `runtime_idle_timeout_seconds` and `max_foreground_terminal_timeout_seconds`
+(the catalog keeps F-04.1c's whole block as `recorded`; `body`, the served answer, is that block less exactly these
+two); `create-new`, every top-level field but those listed served (and, for a request that is not
 F-04.2's fixture request, every field but `id` and `created_at`); `conversation`, every field but `id` and
 `execution_status`; `conversation-absent`, its body; `seed`, `stderr`; `message`, its body; `message-event`, every
 field but `kind`, `source`, `llm_message.content[].text` and the two containers that hold it.
