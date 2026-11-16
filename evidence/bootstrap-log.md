@@ -5328,6 +5328,21 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   - **Carried, inside committed scope:**
     - To E-01.5, the 404 race. A create still being processed when the lookup answers 404 leaves the attempt `failed`, while its conversation may appear later under the reserved id. E-01.5's non-overlap rule must therefore query the prior ordinal's reserved conversation whatever the store says of it, and refuse ordinal N+1 while it executes or is unobserved.
     - To E-01.4.2's restart matrix, a dispatcher that dies after `dispatched` outside a restore epoch.
+- <a id="i1-execution-questions-2-2026-11-16"></a>**2026-11-16: Execution's second set of questions for planning on I1, E-01.4.2 (engineering manager; handoff, records only).** E-01.4.2's engineer stopped before building, on two findings:
+  - **Its citation clause cannot be met.** F-04.2 never sent a message (its finding 2).
+  - **A liveness gap.** A dispatcher that dies after reserving or dispatching a create, or after dispatching a turn, leaves a permanent live claim that nothing settles. There is no duplicate, but the Work is stuck.
+
+  The architect's second consultation (gates A and G) is recorded with my rulings in [`evidence/I1-restart-recovery-design-2026-11-16.md`](I1-restart-recovery-design-2026-11-16.md). The liveness gap is mine to fix, inside committed scope: a dispatcher lock and an explicit `recover` (slices 5a and 5b, draft decision 0027), with no store contract change. Three items need planning (that file, section 5):
+  - **PB-10, a blocker for E-01.4.2's verdict, on the critical path to E-01.5.** "Each fake answer cites its F-04.2 observation" cannot be met as written.
+    - The message route, the native D1 create, `count`, `execution_status` finished and the SEED answer were observed only in the D1 run record, F-04.1c, or the E-01.3.x or S-01.3.1 evidence.
+    - Some fields are observed nowhere: the 404 `detail`, clock values, the message answer's body, `stderr`.
+    - The user message event that `reconcile_turn` reads is in no committed record.
+    - The architect's recommended whole proof, with the field-class readings, is in section 4.3 and 4.4 of the design file. Its observation clause reads: "an observation is cited to the committed record of the live run that observed it (F-04.2's lifecycle; where F-04.2 did not observe it, F-04.1c, the E-01.3.x or S-01.3.1 evidence, or the D1 run record of 2026-11-16) and only for an equivalent request".
+    - Clock-valued fields are replayed unchanged and marked. Fields that are unobserved and unread are not served. The one unobserved field that is read, the event recording the dispatcher's own initial message, is source-derived and marked; its observed counterpart goes to E-01.6.
+  - **PB-11, a reading; blocks only E-01.4.2's restart-matrix slice (5c).** At three restart points (after SEED with no turn journal; turn journal `reserved`; turn `dispatched` with the message not in the events), "Same conversation is recovered" is read as the blueprint's "attach to existing run or report unknown state" (`#integration-contracts`): the attempt is held on its conversation, and E-05.8's end is the exit. Continuing an interrupted turn would need a seed receipt and a turn resume, which is a leaf of its own or a deferral.
+  - **PB-12, conditional, E-01.7.** If gate G4 finds properties the response model requires that no committed record observes for the D1-shaped create, "not served" conflicts with E-01.7's validation clause on the dispatcher's face. Raised early to save a round trip.
+  - **Carried by me to E-01.5 (no planning action):** on the restart path, the next ordinal is refused before reservation while any earlier ordinal whose history holds a `dispatched` event is not known ended at the server (R22).
+  - **Execution continues** with slices 5a and 5b, then U-02.2 and the other ready leaves.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

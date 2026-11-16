@@ -4,6 +4,7 @@ title: 'E-01.4.2: Exercise interruption and idempotency behavior'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T19:15:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -25,3 +26,9 @@ Plan contract: leaf E-01.4.2 of AI_Engineering_Implementation_Project_Plan_Overs
 - [ ] #1 Same conversation is recovered without repeated effects; original E-01.4 proof satisfied.
 - [ ] #2 Offline, against the fake, across a lost create response and a dispatcher restart at each step (before the create, after it, after the initial message): no second create and no second initial message, shown by the fake's call log; each fake answer cites its F-04.2 observation.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Blocker for planning (2026-11-16): PB-10 (the F-04.2 citation clause cannot be met as written) and PB-11 (reading at three hold points). See evidence/bootstrap-log.md#i1-execution-questions-2-2026-11-16
+<!-- SECTION:NOTES:END -->
