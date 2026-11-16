@@ -1,6 +1,6 @@
 # 0024 - The D1 attempt run and result path: two vantages, the conversation proxy's two tails, the result's custody chain, the journals and stops, and the draft pull request
 
-Status: Proposed - 2026-11-16, drafted after D1's live run under the engineering manager's ruling R8 ("a decision record at E-05.5's completion"), for acceptance by the engineering manager under decision 0018 points 1 and 3.1: it is an architectural decision inside committed scope, and it changes no acceptance criterion, no other leaf's contract and no Owner-approved policy. The acceptance is a later commit. It authorizes no reserved act.
+Status: Accepted (engineering manager) - 2026-11-16, under decision 0018 points 1 and 3.1, after D1's live run published (E-01.3.2, E-05.4 and E-05.5 PASS; [verdicts](../evidence/bootstrap-log.md#d1-verdicts-2026-11-16)). Proposed - 2026-11-16, drafted after D1's live run under the engineering manager's ruling R8 ("a decision record at E-05.5's completion"), for acceptance by the engineering manager under decision 0018 points 1 and 3.1: it is an architectural decision inside committed scope, and it changes no acceptance criterion, no other leaf's contract and no Owner-approved policy. The acceptance is a later commit. It authorizes no reserved act.
 
 **Authority:** plan leaves E-01.3.2, E-05.4 and E-05.5 (their actions, artifacts and proofs unchanged); the
 [D1 commitment](../evidence/bootstrap-log.md#commitment-d1-2026-11-15); decision 0018 points 1, 3.1, 3.3 and 4.8;
