@@ -322,10 +322,57 @@ class Busy(Fixture):
                 self.assertEqual(caught.exception.code, 'DISPATCHER_BUSY')
                 self.assertEqual((self.store.canonical_dump(), transport.calls), (dump, []))
         with tdl._process(self, self.store.path):
-            dump = self.store.canonical_dump()
+            dump, transport = self.store.canonical_dump(), Recording(self.server)
             with self.assertRaises(di.DispatchRefused) as caught:
-                RR.recover(self.store, transport=self.server, actor=ACTOR, read_artifact=self.fixture.read_artifact)
+                RR.recover(self.store, transport=transport, actor=ACTOR, read_artifact=self.fixture.read_artifact)
             self.assertEqual((caught.exception.code, self.store.canonical_dump()), ('DISPATCHER_BUSY', dump))
+            self.assertEqual(transport.calls, [], 'zero calls with the lock held by another process (review N4)')
+
+
+class Reentrant(Fixture):
+    """The review of dispatch 10, S2: recover called by a thread that already holds the dispatcher lock (a callback
+    inside dispatch's or the run's held region) would find that very act's rows reserved or dispatched and settle them
+    on the lock's evidence, which there proves nothing. It is refused before the lock is taken or any call made."""
+
+    def test_recover_inside_dispatchs_held_region_is_refused_before_any_call(self):
+        seen = {}
+
+        def transport(method, path, body, **kwargs):
+            if (method, path) == cc.CREATE and 'refused' not in seen:
+                inner = Recording(self.server)
+                key = self.only_attempt().operation_key
+                events = self.store.events(key)
+                try:
+                    RR.recover(self.store, transport=inner, actor=ACTOR, read_artifact=self.fixture.read_artifact)
+                    seen['refused'] = None
+                except di.DispatchRefused as refusal:
+                    seen['refused'] = refusal.code
+                seen['calls'], seen['unchanged'] = inner.calls, self.store.events(key) == events
+                seen['state'] = self.store.get(key).state
+                seen['still_held'] = tdl.DL.held_by_this_thread(self.store.path)
+            return self.server(method, path, body, **kwargs)
+        result = self.dispatch(transport)
+        self.assertEqual(seen, {'refused': RR.RECOVER_INSIDE_HELD_REGION, 'calls': [], 'unchanged': True,
+                                'state': 'dispatched', 'still_held': True})
+        # the act it was called inside goes on undisturbed: its create recorded, one create in all
+        self.assertEqual([(e.from_state, e.to_state) for e in self.store.events(result.operation_key)],
+                         [(None, 'reserved'), ('reserved', 'dispatched'), ('dispatched', 'confirmed')])
+        self.assertEqual(len(self.server.creates), 1)
+        self.assertTrue(tdl.free_elsewhere(self.store.path))
+
+    def test_recover_with_the_lock_held_by_this_thread_is_refused_and_leaves_the_hold(self):
+        self.dies_at_create(received=True)
+        dump, transport = self.store.canonical_dump(), Recording(self.server)
+        with tdl.DL.held(self.store.path):
+            with self.assertRaises(di.DispatchRefused) as caught:
+                RR.recover(self.store, transport=transport, actor=ACTOR, read_artifact=self.fixture.read_artifact)
+            self.assertTrue(tdl.DL.held_by_this_thread(self.store.path), 'the caller\'s hold is left as it was')
+        self.assertEqual(caught.exception.code, RR.RECOVER_INSIDE_HELD_REGION)
+        self.assertIn(RR.RECOVER_INSIDE_HELD_REGION, di.REFUSALS)
+        self.assertEqual((self.store.canonical_dump(), transport.calls), (dump, []))
+        self.assertTrue(tdl.free_elsewhere(self.store.path))
+        report, _ = self.recover()                     # outside any held region it runs as before
+        self.assertEqual(report['creates']['confirmed'], [self.only_attempt().operation_key])
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +458,33 @@ class Namespace(Fixture):
         self.recover()
         self.assertEqual(self.store.get(turn.operation_key).state, 'confirmed')
         self.assertEqual(len(self.store.close_restore_epoch(actor='owner')), 1)
+
+    def test_a_reserved_turn_inside_an_epoch_is_held_without_claiming_it_was_not_sent(self):
+        """The review's N2: inside a restore epoch a reserved turn journal proves nothing (decision 0004 point 7: the
+        lost history may have sent its message). Still held, with the same resolver, but neither its verdict nor its
+        basis nor its code says it was not sent."""
+        result = self.confirmed()
+        key = self.turn_key(result)
+        real = di._mark
+
+        def dying(integration_store, k, from_state, to_state, *args):
+            if k == key and to_state == 'dispatched':
+                raise te.Crash('dies with the journal reserved')
+            return real(integration_store, k, from_state, to_state, *args)
+        with mock.patch.object(di, '_mark', dying), self.assertRaises(te.Crash):
+            self.run_attempt(result.operation_key)
+        self.restore()
+        events = self.store.events(key)
+        report, calls = self.recover()
+        self.assertTrue(report['epoch'])
+        self.assertEqual((calls, self.store.events(key)), ([], events))
+        self.assertEqual(report['held'], [{'operationKey': key, 'class': RR.TURN, 'code': RR.TURN_RESERVED_UNPROVEN,
+                                           'resolver': RR.RESOLVERS['TURN_NOT_SENT'],
+                                           'basis': RR.RESTORED_HISTORY_UNPROVEN}])
+        (entry,) = [e for e in report['entries'] if e['operationKey'] == key]
+        self.assertEqual((entry['basis'], entry['verdict']), (RR.RESTORED_HISTORY_UNPROVEN, RC.INDETERMINATE))
+        self.assertNotIn('not-sent', json.dumps(report['held']) + json.dumps(entry))
+        self.assertNotIn('NOT_SENT', json.dumps(report['held']) + json.dumps(entry))
 
     def test_a_dispatched_create_inside_an_epoch_is_the_sweeps_then_e_01_4_1s(self):
         attempt = self.dies_at_create(received=False)
@@ -639,8 +713,53 @@ class Holds(Fixture):
                                        'ref': 'attempt:x#turn'}], read_artifact=self.fixture.read_artifact)
         report, calls = self.recover()
         self.assertEqual((calls, self.store.get(turn.operation_key).state), ([], 'unknown'))
-        self.assertEqual([(h['code'], h['basis']) for h in report['held']],
-                         [('TURN_UNRECONCILED', RR.ATTEMPT_NOT_RUNNABLE)])
+        # the engineering manager's ruling 1 (dispatch 11, S1): held on its conversation until the end, which is the
+        # exit; once ended it is reported in `ended` with the end record as its basis, no longer held
+        self.assertEqual(report['held'], [])
+        self.assertEqual([(e['operationKey'], e['basis']) for e in report['ended']],
+                         [(turn.operation_key, RR.END_RECORD_BASIS)])
+
+    def grant(self, attempt, state='confirmed'):
+        """A grant journal of ATTEMPT left in STATE (confirmed: issued and never revoked, a live grant)."""
+        journal = di.GRANT_JOURNAL_KEY.format(attempt_id=store_mod.attempt_id_for(attempt.operation_key))
+        self.store.reserve(journal, {'format': 'e-01.4.2-fixture'}, actor='dispatch')
+        for step in ('dispatched', 'confirmed')[:('reserved', 'dispatched', 'confirmed').index(state)]:
+            self.store.transition(journal, step, actor='dispatch', reason='issue')
+        return journal
+
+    def test_a_live_grant_of_an_attempt_recover_fails_is_reported_and_left(self):
+        """The review's N3 (carried to E-01.5's launch gate): a grant issued and never revoked, of an attempt recover
+        fails, is reported with its attempt, its state and end_attempt, and left: no revocation is made here."""
+        attempt = self.dies_at_create(received=False)
+        journal = self.grant(attempt)
+        events = self.store.events(journal)
+        report, calls = self.recover()
+        self.assertEqual(self.store.get(attempt.operation_key).state, 'failed')
+        attempt_id = store_mod.attempt_id_for(attempt.operation_key)
+        self.assertEqual(report['grants'], [{'attemptId': attempt_id, 'operationKey': attempt.operation_key,
+                                             'journal': journal, 'state': 'confirmed', 'resolver': 'end_attempt'}])
+        self.assertEqual(self.store.events(journal), events)
+        self.assertIsNone(self.store.get(di.REVOCATION_KEY.format(attempt_id=attempt_id, n=1)))
+        self.assertEqual(calls, [self.lookup(attempt.conversation_id)])
+
+    def test_the_grant_of_a_held_turns_attempt_is_reported(self):
+        """N3: the attempt of a held turn journal (its typed attempt confirmed, so not an entry itself) has its grant
+        reported too."""
+        result = self.confirmed()
+        journal = self.grant(result)
+        real = di._mark
+
+        def dying(integration_store, key, from_state, to_state, *args):
+            if key == self.turn_key(result) and to_state == 'dispatched':
+                raise te.Crash('dies with the journal reserved')
+            return real(integration_store, key, from_state, to_state, *args)
+        with mock.patch.object(di, '_mark', dying), self.assertRaises(te.Crash):
+            self.run_attempt(result.operation_key)
+        report, _ = self.recover()
+        self.assertEqual([h['code'] for h in report['held']], ['TURN_NOT_SENT'])
+        self.assertEqual(report['grants'], [{'attemptId': store_mod.attempt_id_for(result.operation_key),
+                                             'operationKey': result.operation_key, 'journal': journal,
+                                             'state': 'confirmed', 'resolver': 'end_attempt'}])
 
     def test_a_grant_journal_is_reported_with_its_resolver_and_left(self):
         attempt = self.dies_at_create(received=False)
@@ -653,6 +772,88 @@ class Holds(Fixture):
                                              'operationKey': attempt.operation_key, 'journal': journal,
                                              'state': 'dispatched', 'resolver': 'end_attempt'}])
         self.assertEqual(self.store.events(journal), events)
+
+
+class Ended(Fixture):
+    """The review of dispatch 10, S1 (the engineering manager's ruling 1): a hold outlived its resolver. The attempt
+    was held on its conversation and E-05.8's end is the exit (PB-11's reading); once the attempt has an end record,
+    its turn journal, in any non-terminal state, is no longer held: it is reported in ``ended`` with the end record as
+    its basis, and asked about by no call."""
+
+    def end(self, result):
+        """The resolver the hold names: end_interrupted_attempt, trigger attempt-stopped (a run that did not start)."""
+        attempt_id = store_mod.attempt_id_for(result.operation_key)
+        AE.end_interrupted_attempt(self.store, result.operation_key, transport=self.server, actor=ACTOR,
+                                   trigger=AE.ATTEMPT_STOPPED, dispatcher_records=[{
+                                       'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED',
+                                       'ref': f'attempt:{attempt_id}#turn'}], read_artifact=self.fixture.read_artifact)
+        record = AE.end_record(self.store, attempt_id)
+        self.assertIsNotNone(record)
+        return record
+
+    def ended(self, result, key, state, record):
+        attempt_id = store_mod.attempt_id_for(result.operation_key)
+        return [{'operationKey': key, 'class': RR.TURN, 'state': state, 'attempt': result.operation_key,
+                 'basis': RR.END_RECORD_BASIS, 'end': AE.END_KEY.format(attempt_id=attempt_id),
+                 'trigger': record['trigger'], 'classification': record['classification']}]
+
+    def reserved_turn(self):
+        result = self.confirmed()
+        real = di._mark
+
+        def dying(integration_store, key, from_state, to_state, *args):
+            if key == self.turn_key(result) and to_state == 'dispatched':
+                raise te.Crash('dies with the journal reserved')
+            return real(integration_store, key, from_state, to_state, *args)
+        with mock.patch.object(di, '_mark', dying), self.assertRaises(te.Crash):
+            self.run_attempt(result.operation_key)
+        return result, self.turn_key(result)
+
+    def test_a_reserved_turn_is_no_longer_held_once_its_resolver_has_run(self):
+        """R21 H: held TURN_NOT_SENT, its resolver run, then recover (twice): nothing held for the triple."""
+        result, key = self.reserved_turn()
+        report, _ = self.recover()
+        self.assertEqual([(h['operationKey'], h['code']) for h in report['held']], [(key, 'TURN_NOT_SENT')])
+        self.assertEqual(report['ended'], [])
+        record = self.end(result)
+        events = self.store.events(key)
+        for n in (1, 2):
+            with self.subTest(recover=n):
+                report, calls = self.recover()
+                self.assertEqual((report['held'], calls, self.store.events(key)), ([], [], events))
+                self.assertEqual(report['ended'], self.ended(result, key, 'reserved', record))
+
+    def test_an_unreconciled_turn_is_no_longer_held_once_its_resolver_has_run(self):
+        """R21 I: held TURN_UNRECONCILED, its resolver run, then recover: nothing held, and the events not read."""
+        result, turn = self.dies_at_message(received=False)
+        key = turn.operation_key
+        report, _ = self.recover()
+        self.assertEqual([(h['operationKey'], h['code']) for h in report['held']], [(key, 'TURN_UNRECONCILED')])
+        record = self.end(result)
+        report, calls = self.recover()
+        self.assertEqual((report['held'], calls, self.store.get(key).state), ([], [], 'unknown'))
+        self.assertEqual(report['ended'], self.ended(result, key, 'unknown', record))
+
+    def test_a_dispatched_turn_of_an_ended_attempt_is_moved_by_the_lock_then_ended(self):
+        """A turn journal dispatched when its attempt was ended (the end does not take the lock): the lock's move to
+        unknown (R18) is made, with no call, and the journal is reported ended, not held."""
+        result, turn = self.dies_at_message(received=True)
+        key = turn.operation_key
+        self.assertEqual(turn.state, 'dispatched')
+        record = self.end(result)
+        report, calls = self.recover()
+        self.assertEqual([m[:3] for m in self.moves(key, 2)], [('dispatched', 'unknown', RR.REASON_TURN_UNKNOWN)])
+        self.assertEqual((report['held'], calls), ([], []))
+        self.assertEqual(report['ended'], self.ended(result, key, 'unknown', record))
+
+    def test_without_an_end_record_the_holds_and_their_resolvers_are_unchanged(self):
+        result, key = self.reserved_turn()
+        report, _ = self.recover()
+        self.assertEqual([(h['code'], h['resolver']) for h in report['held']],
+                         [('TURN_NOT_SENT', RR.RESOLVERS['TURN_NOT_SENT'])])
+        self.assertEqual(RR.RESOLVERS['TURN_NOT_SENT'],
+                         'end_interrupted_attempt (trigger attempt-stopped), then a new attempt')
+        self.assertEqual(report['ended'], [])
 
 
 if __name__ == '__main__':

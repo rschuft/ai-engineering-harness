@@ -864,12 +864,16 @@ Owner's account that does not take it is not stopped (decision 0010 point 1).
 ## Recovering after a dispatcher restart (E-01.4.2, slice 5b)
 
 [`restart_recovery.py`](restart_recovery.py): `recover(store, transport=, actor=, read_artifact=)` is
-the restart procedure, run by a dispatcher composition root before its first act (the fixture's
-composition root, slice 11, calls it; there is no command line). It keeps two questions apart: whether
-the act that wrote a row will still record its outcome (only the lock answers: R16, R17) and what
-happened at the Agent Server (only the Agent Server answers: E-01.4.1's lookup for a create, decision
-0024 point 6.1's event read for a message). Under the lock (`DISPATCHER_BUSY`, nothing read or
-changed, when another act holds it) it settles exactly R18's table:
+the restart procedure, to be run by a dispatcher composition root before its first act. No
+composition root calls it yet: slice 11's fixture composition root will (R22 point 3), and the native
+driver (`tools/guest.py` `d1_run`) does not (R22 point 5: that goes to the leaf that next runs it
+live); there is no command line. It keeps two questions apart: whether the act that wrote a row will
+still record its outcome (only the lock answers: R16, R17) and what happened at the Agent Server (only
+the Agent Server answers: E-01.4.1's lookup for a create, decision 0024 point 6.1's event read for a
+message). Under the lock (`DISPATCHER_BUSY`, nothing read or changed, when another act holds it) it
+settles exactly R18's table. Called by a thread that already holds the lock (a callback inside
+`dispatch`'s or the run's held region, where that act's own rows would read as ended), it is refused
+`RECOVER_INSIDE_HELD_REGION` before the lock is taken or anything is read:
 
 | Found | What is read | Then |
 |---|---|---|
@@ -878,7 +882,8 @@ changed, when another act holds it) it settles exactly R18's table:
 | typed attempt `unknown` | E-01.4.1's lookup, unchanged (`IntegrationStore.reconcile` with `create_oracle`) | `200`: `confirmed`, reattached. `404`: `failed`. Anything else: stays `unknown`, held `OUTCOME_UNKNOWN` |
 | turn journal `dispatched` | nothing yet | `unknown` (code `OUTCOME_UNKNOWN`), then as the next row |
 | turn journal `unknown`, its attempt `confirmed` with no end record | the conversation's events (`reconcile_turn`, unchanged) | the message is there: `confirmed`, reason `reconciled-from-events`. Not there, or the conversation cannot be read: stays `unknown`, held `TURN_UNRECONCILED` |
-| turn journal `reserved` | nothing | no change; held `TURN_NOT_SENT` (R21) |
+| turn journal `reserved` | nothing | no change; held `TURN_NOT_SENT` (R21). Inside a restore epoch the row proves nothing about the message (decision 0004 point 7): held `TURN_RESERVED_UNPROVEN`, basis `restored-history-unproven`, verdict `indeterminate`, with the same resolver |
+| turn journal in any non-terminal state, its attempt with an end record | nothing (a `dispatched` one is first moved to `unknown`, as above) | no further change; not held: reported in `ended` with the end record as its basis |
 | any other key | nothing | not read, not asked, not changed |
 
 Inside a restore epoch the store's own sweep runs first, unchanged, in place of the two `dispatched`
@@ -908,16 +913,22 @@ conversation and sends nothing:
 | I: turn journal `dispatched`, the message not in the events | `unknown` | held `TURN_UNRECONCILED`; the result step is refused (`TURN_NOT_CONFIRMED`); a later `recover` confirms it if the events come to hold it |
 
 The exit from a hold is `end_interrupted_attempt`, trigger `attempt-stopped` (E-05.8), which stops the
-runtime before any new ordinal is admissible. A turn journal `unknown` whose attempt is not
-`confirmed` or has an end record is held `TURN_UNRECONCILED` with basis
-`attempt-not-confirmed-or-ended`, and not asked about.
+runtime before any new ordinal is admissible. Once the attempt has an end record its turn journal, in
+any non-terminal state, is no longer held: the attempt was held on its conversation and the end was
+the exit (PB-11's reading). It is reported in `ended` (the turn journal, its state, its attempt, basis
+`attempt-end-record`, the end journal's key, the end's trigger and classification), and no call is made
+for it. A turn journal `unknown` whose attempt is not `confirmed` (and has no end record) is held
+`TURN_UNRECONCILED` with basis `attempt-not-confirmed-or-ended`, and not asked about.
 
 **The report** (`recovery-report/v1`, in memory, as E-01.4.1's observations are): `entries` (each
 typed attempt and turn journal found unsettled: its class, the state found, the basis, the verdict, the
 HTTP status of a lookup and the state left), `held` (each with its code and the act that resolves it),
-`grants` (an attempt's broker grant journal, its state and `end_attempt` as its resolver; never
-touched), `conflicts` and `creates` (the store reconcile's outcome for the typed attempts it asked
-about, with their observations). The durable trace is the transitions' reasons and details.
+`ended` (above), `grants` (the broker grant journal of each typed attempt reported and of the attempt
+of each turn journal reported, held or ended: its attempt, its state and `end_attempt` as its
+resolver; never touched, so a grant left live is visible; E-01.5's launch gate is what refuses a next
+ordinal while an earlier one's grant is not revoked), `conflicts` and `creates` (the store reconcile's
+outcome for the typed attempts it asked about, with their observations). The durable trace is the
+transitions' reasons and details.
 
 **Not this slice:** the cited fixture core and the restart matrix (slice 5c), E-01.5's non-overlap rule
 (R22), the live restart (E-01.6). Nothing here has run against a live Agent Server: **not yet
@@ -1315,6 +1326,12 @@ A receipt that conflicts with an earlier one is `RESULT_RECEIPT_CONFLICT`. Any f
   reused, its staged file re-checked against the recorded digests (`RESULT_STAGED_UNVERIFIED` otherwise), and is
   never pulled again. A staged file without a recorded verified pull is not reused: the pull refuses to overwrite
   it (`RESULT_PULL_FAILED`), for the engineering manager.
+- A delivery, pull or intake receipt an interrupted step left `dispatched` is settled by reading what it records
+  (reason `settled-by-read`): a delivery against the verified pull's staged bundle, the delivered digest
+  cross-checked. A delivery that cannot be (no verified pull to read it against, another digest, or another
+  unsettled state) holds the attempt: `RESULT_DELIVERY_UNSETTLED`, never verified, never read as no delivery
+  (the review of slices 5a and 5b, N1). A resumed step's fresh pull is cross-checked against a confirmed delivery
+  (`RESULT_NOT_VERIFIED` on another digest).
 
 **Saved, not started** (review A4 D3). A turn confirmed by reading the events (a lost answer), whose conversation
 stays `idle` with no agent event after the message until the ceiling, is ended as `run-not-started`, the same
@@ -1826,6 +1843,8 @@ acceptance takes effect when a manifest naming it is promoted.
 | `OUTBOUND_SEARCH_REQUIRED`, `OUTBOUND_TOKEN_MISMATCH`, `OUTBOUND_TOKEN_FOUND`, `OUTBOUND_SEARCH_NOT_PASSED` | the outbound search before any write: no not-found report naming the bundle and every text (or no token held); a held token other than the attempt's; the token found (a security stop); an invalid or incomplete search |
 | `BOT_ROUTE_REFUSED`, `RESULT_GITEA_UNAVAILABLE`, `RESULT_BASE_MOVED`, `RESULT_BRANCH_CONFLICT`, `RESULT_EARLIER_PR_OPEN`, `RESULT_PR_CONFLICT` | the reconciliation: a request outside the bot session's routes (nothing sent); a read not answered as its kind; `main` not at the base; `work/<attempt>` at another commit; an earlier attempt's pull request open; the branch's pull request not the one opened here |
 | `DISPATCHER_BUSY`, `DISPATCHER_LOCK_UNAVAILABLE` | the dispatcher lock (E-01.4.2): another thread, handle or process holds it; its file beside the store cannot be opened, created or locked. Either before anything is reserved or sent |
+| `RECOVER_INSIDE_HELD_REGION` | `recover` called by a thread that already holds the dispatcher lock (inside an act's held region): before the lock is taken, nothing read or changed |
+| `RESULT_DELIVERY_UNSETTLED` | the result step's delivery receipt is not confirmed and cannot be settled by reading it against a verified pull: the attempt is held, the delivered digest never left unchecked |
 | `RESULT_WRITE_UNSETTLED`, `RESULT_READBACK` | after the dispatch: a push or pull request refused or its answer lost, or the read-back not answered (the journal `unknown`, settled by the next run's reading); the read-back not as written |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
@@ -2029,7 +2048,7 @@ native fixture with the attempt run's `RunServer`; a holder in another process i
 | `Interrupted` | condition 3: a BaseException in the transport during the create, during the run's message and during a direct send leaves the lock free and the row `dispatched` |
 | `KilledHolder` | condition 2: a holder process killed after its `dispatched` transition leaves the lock free once its exit is observed (waited on, never a duration); the row stays `dispatched` |
 | `LockFile` | condition 5: the file is beside the store, outside the checkout, 0 bytes and kept; a backup and a restore with it present (and held) |
-| `StaticCensus` (contract) | condition 4 by the call sites (G14): every `reserve_attempt` and every move into `dispatched` in `integrations/dispatch/*.py` is in the listed table (the typed and turn sites one `reserve_attempt` and one transition in `_dispatch`, one transition in `send_message`; every other key a journal or receipt of its own); `_dispatch` is called once, inside `dispatch`'s held block, and `send_message`'s reservation, transition and POST lie in its held block; negative control: a planted site is seen |
+| `StaticCensus` (contract) | condition 4 by the call sites (G14): every `reserve_attempt` and every move into `dispatched` in `integrations/dispatch/*.py` is in the listed table (the typed and turn sites one `reserve_attempt` and one transition in `_dispatch`, one transition in `send_message`; every other key a journal or receipt of its own); `_dispatch` is called once, inside `dispatch`'s held block, and `send_message`'s reservation, transition and POST lie in its held block; the target state is read by position or as `to_state=`, a move whose target cannot be resolved to a literal (computed, absent, behind `*` or `**`) is classed variable, and a mover or `reserve_attempt` referenced other than by a direct call (an alias, a value passed on, a `getattr`) is flagged; negative controls: a planted site, the keyword forms, the unresolvable forms and the aliases are each seen, and the real tree holds no alias |
 | `DynamicCensus` | condition 4 by a recording wrapper around the store, under the dispatch suite's modules that reach the sites (`test_conversation_create`, `test_reconcile`, `test_attempt_run`'s `Turn` and `Run`, `test_d1_stage_secrets`, `test_restart_recovery`): every production `reserve_attempt` and move of a typed attempt or a turn journal into `dispatched` found the lock held by the calling thread; negative control: with the lock taken out of `dispatch`, the recorder sees both unheld |
 
 [`tests/test_restart_recovery.py`](tests/test_restart_recovery.py) (E-01.4.2 slice 5b), on the same
@@ -2039,13 +2058,15 @@ death: the act's continuation and its lock dropped):
 | Class | What it shows |
 |---|---|
 | `Table` | each row of R18's table with the store's events (states, reasons, details) and the transport's calls: a reserved attempt not found is `failed` `NOT_SENT` and the next dispatch is ordinal 2; found, held unchanged; any other answer held and asked again; a dispatched create not received is `unknown` then `failed`, received is reattached and a repeat of the dispatch reserves nothing; an unknown attempt settled by E-01.4.1's lookup; a dispatched turn received is `confirmed` from the events, not received stays `unknown` (held; the result step refused; confirmed later once the events hold it); an unknown turn reconciled; a confirmed attempt asks nothing |
-| `Busy` | condition 2: with the lock held by a second handle, another thread or another process, `DISPATCHER_BUSY`, the canonical dump unchanged and zero calls |
-| `Namespace` | condition 3: outside an epoch, P-04.2's and P-04.3's receipts, a credential receipt, a broker journal and the dispatcher's end, result, grant, revocation, delivery, pull and intake receipts (and a turn-shaped key without a turn's intent), each left `reserved`, `dispatched` and `unknown`, keep their rows and events, with no call for them, through a transport that would answer "found"; inside an epoch exactly the store's sweep, then the turn arm, which lets the epoch close |
+| `Busy` | condition 2: with the lock held by a second handle, another thread or another process, `DISPATCHER_BUSY`, the canonical dump unchanged and zero calls (each recorded by the transport) |
+| `Reentrant` | `recover` called inside `dispatch`'s held region (from the transport, at the create) and with the lock held by the calling thread: `RECOVER_INSIDE_HELD_REGION`, zero calls, nothing changed, the caller's hold left; the act it was called inside completes, one create |
+| `Namespace` | condition 3: outside an epoch, P-04.2's and P-04.3's receipts, a credential receipt, a broker journal and the dispatcher's end, result, grant, revocation, delivery, pull and intake receipts (and a turn-shaped key without a turn's intent), each left `reserved`, `dispatched` and `unknown`, keep their rows and events, with no call for them, through a transport that would answer "found"; inside an epoch exactly the store's sweep, then the turn arm, which lets the epoch close; inside an epoch a reserved turn is held `TURN_RESERVED_UNPROVEN` (basis `restored-history-unproven`), never as not sent |
 | `NoSend` (contract) | condition 4: the module names no sender, end, reservation or broker call, and its one client call is a `GET`; the read-only transport refuses anything else before the transport |
 | `Convergence` | condition 5: a second `recover` changes nothing and asks only about an unsettled row; a death at each of its transitions in four scenarios, then a re-run, converges on the clean run's store |
 | `RefusedClients` | condition 6: a drifted or unreadable allowlist and a call the client refuses settle nothing and make no call |
 | `Conflicts` | condition 7: a row another writer moved before `recover`'s transition (at the lock's move and at the lookup's) is reported and left, never retried, and the lookup is made once |
-| `Holds` | R21: a reserved turn is held not sent and the run refuses with zero calls; a turn of an ended attempt is held and not asked about; a grant journal is reported with `end_attempt` and left |
+| `Holds` | R21: a reserved turn is held not sent and the run refuses with zero calls; a turn of an ended attempt is not asked about and is reported in `ended`, not held; a grant journal (dispatched, or confirmed and never revoked: a live grant) of an attempt `recover` settles, and of a held turn's attempt, is reported with its attempt, its state and `end_attempt`, and left with no revocation |
+| `Ended` | the review's S1: a reserved turn (H) and an unreconciled turn (I), held, then their named resolver run (`end_interrupted_attempt`, trigger `attempt-stopped`): the next `recover`s hold nothing for the triple, report the turn in `ended` with the end record, and make no call; a dispatched turn of an ended attempt is moved to `unknown` by the lock, then ended; without an end record the holds and their resolvers are unchanged |
 
 [`tests/test_result_receipts.py`](tests/test_result_receipts.py) (defect 3 of the restart-recovery
 design, fixed forward): a run whose dispatcher dies between an intake's (or a pull's) `dispatched` and
@@ -2053,8 +2074,13 @@ design, fixed forward): a run whose dispatcher dies between an intake's (or a pu
 (`RESULT_STAGED_UNVERIFIED`) while the resumed step was refused; `resume_result` now settles such a
 receipt by reading what it records (the staged bundle and the verify repository against its digests:
 reason `settled-by-read`) and resumes from it with no second pull and no second RESULT; one that no
-longer checks is left `dispatched`. A delivery receipt left `dispatched` is read by nothing and stays
-so (a residual).
+longer checks is left `dispatched`. A delivery receipt left `dispatched` was read as none, which
+skipped the delivered digest's cross-check (the review's N1); `DeliveryReceipt` shows it settled the
+same way, against the verified pull's staged bundle (`settled-by-read`), the cross-check run (another
+recorded digest holds the resume), and, where there is nothing to read it against (the dispatcher died
+before the pull), the resume refused `RESULT_DELIVERY_UNSETTLED` with no pull and no RESULT: held,
+never verified. `recorded_result` never reads such a delivery as none, and a resumed step's fresh pull
+is cross-checked against a confirmed delivery (`RESULT_NOT_VERIFIED` on another digest).
 
 [`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
 

@@ -1259,6 +1259,42 @@ def _settled_receipt(integration_store, key: str, form: str, check: Callable[[di
     return intent
 
 
+def _delivery_receipt(integration_store, attempt_id: str) -> dict | None:
+    """The delivery receipt's intent, confirmed; None when the attempt has none (a resumed RESULT delivers nothing).
+    A receipt in any other state is never read as none (the review of dispatch 10, N1: that skipped the delivered
+    digest's cross-check): RESULT_DELIVERY_UNSETTLED."""
+    key = DELIVERY_KEY.format(attempt_id=attempt_id)
+    held = integration_store.get(key)
+    if held is None:
+        return None
+    intent = _receipt_of(integration_store, key, DELIVERY_FORMAT)
+    if intent is None:
+        raise _refused('RESULT_DELIVERY_UNSETTLED', f'the delivery receipt is {held.state}, not a confirmed delivery: '
+                       'the delivered digest cannot be cross-checked', state=held.state)
+    return intent
+
+
+def _settle_delivery(integration_store, attempt_id: str, actor: str) -> None:
+    """A delivery receipt an interrupted step left ``dispatched`` settled by reading what it records against the
+    verified pull's staged bundle (``_staged_again``: the file's digest the pull receipt's and the delivery's), as a
+    pull or an intake is (``_settled_receipt``, reason ``settled-by-read``). Where there is no verified pull to read it
+    against, the read does not match, or the receipt is in another unsettled state, it cannot be re-checked: the
+    attempt is held (RESULT_DELIVERY_UNSETTLED), never verified (N1)."""
+    key = DELIVERY_KEY.format(attempt_id=attempt_id)
+    held = integration_store.get(key)
+    if held is None or held.state == 'confirmed':
+        return
+    pull = integration_store.get(PULL_KEY.format(attempt_id=attempt_id))
+    receipt = json.loads(pull.intent_json) if pull is not None and pull.state in ('dispatched', 'confirmed') else None
+    if held.state == 'dispatched' and isinstance(receipt, dict) and receipt.get('format') == PULL_FORMAT \
+            and _settled_receipt(integration_store, key, DELIVERY_FORMAT,
+                                 lambda delivery: _staged_again(receipt, delivery), actor) is not None:
+        return
+    raise _refused('RESULT_DELIVERY_UNSETTLED', f'the delivery receipt is {held.state} and cannot be settled by '
+                   'reading it against a verified pull: the attempt is held', state=held.state,
+                   pull=None if pull is None else pull.state)
+
+
 def _pull(pull, name: str) -> Mapping:
     """The exchange pull (tools/guest.py exchange_pull, the retained verifier); any failure, its Refused included, is
     RESULT_PULL_FAILED (review A4 D2)."""
@@ -1312,6 +1348,10 @@ def _result_step(integration_store, operation_key, client, *, base, prepared, pu
         pulled = _pull(pull, name)
         bundle = pulled.get('bundle') if isinstance(pulled.get('bundle'), Mapping) else {}
         staged = pulled.get('staged') if isinstance(pulled.get('staged'), Mapping) else {}
+        delivery = _delivery_receipt(integration_store, attempt_id) if resumed else None
+        if delivery is not None and {'sha256': staged.get('sha256'), 'size': staged.get('bytes')} != delivery['bundle']:
+            # a resumed step's pull is cross-checked against the delivery recorded before (N1): never left unchecked
+            raise _refused('RESULT_NOT_VERIFIED', 'the pulled bundle is not the one the recorded delivery delivered')
         if pulled.get('result') == 'pulled' and bundle.get('verified') is True:
             header = bundle.get('header') if isinstance(bundle.get('header'), Mapping) else {}
             _receipt(integration_store, PULL_KEY.format(attempt_id=attempt_id), {
@@ -1469,7 +1509,7 @@ def _resumed_result(integration_store, operation_key, base, receipt) -> Verified
     pull = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
     if pull is None:
         raise _refused('RESULT_STAGED_UNVERIFIED', 'the intake was recorded without its verified pull')
-    _staged_again(pull, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id), DELIVERY_FORMAT))
+    _staged_again(pull, _delivery_receipt(integration_store, attempt_id))
     ra = _repository_access()
     try:
         opened = ra.open_repository(receipt['verifyRepo'], config='repository', work_tree=False)
@@ -1540,10 +1580,11 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     def stopped(records, outcome='stopped', problems=(), status=None):
         end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
         return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
-    # a pull or an intake receipt an interrupted step left dispatched is settled by reading what it records
+    # a delivery, pull or intake receipt an interrupted step left dispatched is settled by reading what it records;
+    # a delivery that cannot be is held (N1)
+    _settle_delivery(integration_store, attempt_id, actor)
     _settled_receipt(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT, lambda receipt:
-                     _staged_again(receipt, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id),
-                                                        DELIVERY_FORMAT)), actor)
+                     _staged_again(receipt, _delivery_receipt(integration_store, attempt_id)), actor)
     intake = _settled_receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id), INTAKE_FORMAT,
                               lambda receipt: _resumed_result(integration_store, operation_key, base, receipt), actor)
     if intake is not None:
@@ -1560,8 +1601,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     pulled = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
     reuse = None
     if pulled is not None:
-        reuse = _staged_again(pulled, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id),
-                                                  DELIVERY_FORMAT))
+        reuse = _staged_again(pulled, _delivery_receipt(integration_store, attempt_id))
     resumed = reuse is not None or bool(exists(result_name(attempt_id)))
     prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
                        deliver=not resumed)

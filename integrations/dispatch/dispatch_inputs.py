@@ -454,6 +454,12 @@ REFUSALS = {
                        'or sent',
     'DISPATCHER_LOCK_UNAVAILABLE': 'the integration store\'s dispatcher lock file cannot be opened, created or locked: '
                                    'nothing was reserved or sent',
+    # the review of slices 5a and 5b (dispatch 11): S2 and N1
+    'RECOVER_INSIDE_HELD_REGION': 'recover was called by a thread that already holds the dispatcher lock, inside an '
+                                  'act\'s held region: nothing was read or changed',
+    'RESULT_DELIVERY_UNSETTLED': 'the result step\'s delivery receipt is not confirmed and cannot be settled by '
+                                 'reading it against the verified pull: the delivered digest is never left unchecked, '
+                                 'and the attempt is held for the engineering manager',
 }
 
 

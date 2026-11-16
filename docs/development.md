@@ -838,15 +838,20 @@ before the request is resolved until the create's outcome is recorded, the attem
 first call until the message's outcome is recorded (never while the turn is waited for), and
 `send_message` re-entrantly; another thread, handle or process is `DISPATCHER_BUSY`, a lock file that
 cannot be used `DISPATCHER_LOCK_UNAVAILABLE`, both before anything is reserved or sent. The ends and the
-cause commands never take it. `restart_recovery.recover(store, transport=, actor=, read_artifact=)`, run
-under the lock by a dispatcher composition root before its first act (there is no command line), settles
-only typed attempts and turn journals an interrupted act left in flight: a `reserved` attempt is `failed`
-when the Agent Server answers `404` for its reserved conversation (held when it answers `200`); a
-`dispatched` attempt or turn journal becomes `unknown`, then E-01.4.1's lookup or the conversation's
-events settle it; what cannot be observed or repeated is held for the engineering manager (R21). It
-makes `GET`s only and never sends, ends, reserves or deletes; every other key is untouched. Measured on
-Windows only (a killed holder's lock is free once its exit is observed; an orphaned child does not keep
-it); Linux, macOS and the live transport are **not yet verified**.
+cause commands never take it. `restart_recovery.recover(store, transport=, actor=, read_artifact=)`, to
+be run under the lock by a dispatcher composition root before its first act (none calls it yet: slice
+11's fixture composition root will; there is no command line; a thread that already holds the lock is
+refused `RECOVER_INSIDE_HELD_REGION`), settles only typed attempts and turn journals an interrupted act
+left in flight: a `reserved` attempt is `failed` when the Agent Server answers `404` for its reserved
+conversation (held when it answers `200`); a `dispatched` attempt or turn journal becomes `unknown`, then
+E-01.4.1's lookup or the conversation's events settle it; what cannot be observed or repeated is held for
+the engineering manager (R21) until the attempt is ended: a turn journal of an attempt with an end record
+is reported `ended`, not held. It makes `GET`s only and never sends, ends, reserves or deletes. Outside a
+restore epoch every other key is untouched; inside one the store's own sweep runs first, unchanged, and
+moves every `dispatched` row, whatever its key, to `unknown` (`recover` then reconciles only the typed
+attempts and turn journals). Measured on Windows only (a killed holder's lock is free once its exit is
+observed; an orphaned child does not keep it); Linux, macOS and the live transport are **not yet
+verified**.
 
 `attempt_role_token` (plan leaf E-01.3.3) delivers a confirmed attempt's stage bot token into the
 dispatcher's own attempt context: `implement` the builder's, `review` the reviewer's, each read by

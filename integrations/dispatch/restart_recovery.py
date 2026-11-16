@@ -1,15 +1,17 @@
 """Recovering after a dispatcher restart (plan leaf E-01.4.2, slice 5b; the architect's rulings R16 and R18 to R21;
 draft decision 0027 points 4 to 7).
 
-``recover(store, transport=, actor=, read_artifact=)`` is the restart procedure, run by a dispatcher composition root
-before its first act. It keeps two questions apart (R16): whether the act that wrote a row will still record its
+``recover(store, transport=, actor=, read_artifact=)`` is the restart procedure, to be run by a dispatcher composition
+root before its first act (none calls it yet: slice 11's fixture composition root will, R22 point 3; the native driver
+does not, R22 point 5). It keeps two questions apart (R16): whether the act that wrote a row will still record its
 outcome, which only the dispatcher lock answers (``dispatcher_lock.py``: a holder that finds a typed attempt
 ``reserved`` or ``dispatched``, or a turn journal ``dispatched``, knows its act has ended), and what happened at the
 Agent Server, which only the Agent Server answers (E-01.4.1's lookup for a create, decision 0024 point 6.1's event read
 for a message). It never infers the second from the first, nor from the store alone (decision 0004 point 7).
 
-Holding the lock throughout (DISPATCHER_BUSY, nothing read or changed, when another act holds it), it settles exactly
-this table (R18), and nothing else:
+Holding the lock throughout (DISPATCHER_BUSY, nothing read or changed, when another act holds it; refused
+RECOVER_INSIDE_HELD_REGION before the lock is taken when the calling thread already holds it, inside an act whose own
+rows would then read as ended), it settles exactly this table (R18), and nothing else:
 
 =======================================  ==========================  =================================================
 Found                                    What is read                Then
@@ -27,7 +29,13 @@ turn journal ``dispatched``              nothing yet                 ``unknown``
 turn journal ``unknown``, its attempt    the conversation's events   the message is there: ``confirmed``
 ``confirmed`` with no end record         (``reconcile_turn``,        (``reconciled-from-events``); not there, or not
                                          unchanged)                  readable: stays ``unknown``, held
-turn journal ``reserved``                nothing                     no change; held, not sent (R21)
+turn journal ``reserved``                nothing                     no change; held, not sent (R21). Inside a
+                                                                     restore epoch: held TURN_RESERVED_UNPROVEN
+                                                                     (basis ``restored-history-unproven``), never as
+                                                                     not sent, with the same resolver
+turn journal not terminal, its attempt   nothing                     no further change (a ``dispatched`` one is moved
+with an end record                                                   to ``unknown`` first, as above); not held:
+                                                                     reported in ``ended``, the end record its basis
 any other key                            nothing                     not read, not asked, not changed
 =======================================  ==========================  =================================================
 
@@ -42,14 +50,16 @@ indeterminate. A row that another writer moved between recover's read and its tr
 ``IllegalTransition``) is reported in ``conflicts`` and left as it now is; the transition is never retried.
 
 **Holds** (R21): where the effect cannot be observed or repeated, the attempt is held on its conversation, never
-resumed. Each held row is reported with its code and the act that resolves it. An attempt with a broker grant journal
-is reported with that journal's state and ``end_attempt`` as its resolver; recover never touches it.
+resumed. Each held row is reported with its code and the act that resolves it. E-05.8's end is the exit: once the
+attempt has an end record its turn journal is reported in ``ended``, no longer held (the review of dispatch 10, S1).
+An attempt reported (a typed attempt found unsettled, or a turn journal's attempt) with a broker grant journal has
+that journal reported with its state and ``end_attempt`` as its resolver; recover never touches it.
 
 The report (``recovery-report/v1``, in memory, as E-01.4.1's observations are): ``entries`` (for each typed attempt
 and turn journal found unsettled: its class, the state found, the basis, the verdict, the HTTP status of a lookup and
-the state left), ``held``, ``grants``, ``conflicts`` and ``creates`` (the store reconcile's outcome for the typed
-attempts it asked about). The durable trace is the transitions' reasons and details. A second recover changes nothing
-settled and asks only about what is still unsettled. Standard library only.
+the state left), ``held``, ``ended``, ``grants``, ``conflicts`` and ``creates`` (the store reconcile's outcome for the
+typed attempts it asked about). The durable trace is the transitions' reasons and details. A second recover changes
+nothing settled and asks only about what is still unsettled. Standard library only.
 """
 from __future__ import annotations
 
@@ -104,8 +114,17 @@ RESOLVERS = {
     TURN_NOT_SENT: 'end_interrupted_attempt (trigger attempt-stopped), then a new attempt',
     TURN_UNRECONCILED: 'recover, which reads the events again; or end_interrupted_attempt (trigger attempt-stopped)',
 }
+# Inside a restore epoch a reserved turn journal proves nothing about the message (decision 0004 point 7: the lost
+# history may have sent it): held under its own code and basis, never as not sent, with TURN_NOT_SENT's resolver.
+TURN_RESERVED_UNPROVEN = 'TURN_RESERVED_UNPROVEN'
+RESTORED_HISTORY_UNPROVEN = 'restored-history-unproven'
+RESOLVERS[TURN_RESERVED_UNPROVEN] = RESOLVERS[TURN_NOT_SENT]
 GRANT_RESOLVER = 'end_attempt'
-ATTEMPT_NOT_RUNNABLE = 'attempt-not-confirmed-or-ended'   # a turn's attempt not confirmed, or with an end record
+ATTEMPT_NOT_RUNNABLE = 'attempt-not-confirmed-or-ended'   # a turn's attempt not confirmed
+# A turn journal of an attempt that has an end record: E-05.8's end was the hold's exit; reported in ``ended``.
+END_RECORD_BASIS = 'attempt-end-record'
+NOT_TERMINAL = ('reserved', 'dispatched', 'unknown')
+RECOVER_INSIDE_HELD_REGION = 'RECOVER_INSIDE_HELD_REGION'
 
 
 class ReadOnlyRefused(Exception):
@@ -179,7 +198,8 @@ class _Recovery:
     def __init__(self, integration_store, transport, actor, read_artifact):
         self.store, self.reads, self.actor, self.read_artifact = (integration_store, _ReadOnly(transport), actor,
                                                                   read_artifact)
-        self.entries, self.held, self.conflicts = {}, [], []
+        self.entries, self.held, self.conflicts, self.ended = {}, [], [], []
+        self.turn_attempts = {}     # each turn journal's typed attempt (its grant is reported too)
 
     def entry(self, reservation, kind):
         return self.entries.setdefault(reservation.operation_key, {
@@ -298,17 +318,44 @@ class _Recovery:
             return
         entry.update(basis='events', verdict=RC.PERFORMED)
 
+    def ended_turn(self, reservation, operation_key, end):
+        """A turn journal, in any non-terminal state, of an attempt that has an end record (the review of dispatch
+        10, S1): the attempt was held on its conversation and E-05.8's end was the exit, so it is no longer held. It is
+        reported in ``ended`` with the end record as its basis; no call is made for it."""
+        entry = self.entry(reservation, TURN)
+        if entry['basis'] is None:
+            entry.update(basis=END_RECORD_BASIS, verdict='not-asked')
+        self.ended.append({'operationKey': reservation.operation_key, 'class': TURN, 'state': reservation.state,
+                           'attempt': operation_key, 'basis': END_RECORD_BASIS,
+                           'end': AE.END_KEY.format(attempt_id=store.attempt_id_for(operation_key)),
+                           'trigger': end.get('trigger'), 'classification': end.get('classification')})
+
+    def reserved_turn(self, reservation, epoch: bool):
+        """R21 H: a reserved turn journal is held. Inside a restore epoch its row proves nothing about the message
+        (decision 0004 point 7; the review's N2): held under its own code and basis, with the same resolver."""
+        entry, key = self.entry(reservation, TURN), reservation.operation_key
+        if epoch:
+            entry.update(basis=RESTORED_HISTORY_UNPROVEN, verdict=RC.INDETERMINATE)
+            self.hold(key, TURN, TURN_RESERVED_UNPROVEN, basis=RESTORED_HISTORY_UNPROVEN)
+        else:
+            entry.update(basis=None, verdict='not-sent')
+            self.hold(key, TURN, TURN_NOT_SENT)
+
     def grants(self) -> list:
-        out = []
+        """The broker grant journal of each attempt reported: each typed attempt found unsettled and the attempt of
+        each turn journal found (held or ended), with its state and end_attempt as its resolver; never touched."""
+        out, seen = [], set()
         for key, entry in self.entries.items():
-            if entry['class'] != ATTEMPT:
+            operation_key = key if entry['class'] == ATTEMPT else self.turn_attempts.get(key)
+            if operation_key is None or operation_key in seen:
                 continue
-            attempt_id = store.attempt_id_for(key)
+            seen.add(operation_key)
+            attempt_id = store.attempt_id_for(operation_key)
             journal = di.GRANT_JOURNAL_KEY.format(attempt_id=attempt_id)
             held = self.store.get(journal)
             if held is not None:
-                out.append({'attemptId': attempt_id, 'operationKey': key, 'journal': journal, 'state': held.state,
-                            'resolver': GRANT_RESOLVER})
+                out.append({'attemptId': attempt_id, 'operationKey': operation_key, 'journal': journal,
+                            'state': held.state, 'resolver': GRANT_RESOLVER})
         return out
 
     def run(self) -> dict:
@@ -318,8 +365,9 @@ class _Recovery:
         turns = [(r, op) for r in found if (op := turn_attempt(self.store, r)) is not None]
         for reservation in attempts:
             self.entry(reservation, ATTEMPT)
-        for reservation, _ in turns:
+        for reservation, operation_key in turns:
             self.entry(reservation, TURN)
+            self.turn_attempts[reservation.operation_key] = operation_key
         if not epoch:   # inside an epoch the store's sweep moves every dispatched row (unknown_attempts)
             for reservation in attempts:
                 if reservation.state == 'dispatched':
@@ -333,15 +381,17 @@ class _Recovery:
         creates = self.unknown_attempts()
         for reservation, operation_key in turns:
             now = self.store.get(reservation.operation_key)
-            if now.state == 'reserved':
-                self.entry(reservation, TURN).update(basis=None, verdict='not-sent')
-                self.hold(reservation.operation_key, TURN, TURN_NOT_SENT)
+            end = AE.end_record(self.store, store.attempt_id_for(operation_key))
+            if end is not None and now.state in NOT_TERMINAL:
+                self.ended_turn(now, operation_key, end)
+            elif now.state == 'reserved':
+                self.reserved_turn(now, epoch)
             elif now.state == 'unknown':
                 self.unknown_turn(now, operation_key)
         for key, entry in self.entries.items():
             entry['state'] = self.store.get(key).state
         return {'format': REPORT_FORMAT, 'epoch': epoch, 'entries': list(self.entries.values()), 'held': self.held,
-                'grants': self.grants(), 'conflicts': self.conflicts, 'creates': creates}
+                'ended': self.ended, 'grants': self.grants(), 'conflicts': self.conflicts, 'creates': creates}
 
 
 def recover(integration_store, *, transport: Callable[[str, str, dict | None], object], actor: str,
@@ -350,5 +400,10 @@ def recover(integration_store, *, transport: Callable[[str, str, dict | None], o
     DISPATCHER_LOCK_UNAVAILABLE) before anything is read or changed when it cannot be taken. Returns the report."""
     if not callable(transport):
         raise TypeError('transport must be callable as transport(method, path, body)')
+    path = getattr(integration_store, 'path', None)
+    if di._dispatcher_lock_module().held_by_this_thread(path):
+        raise DispatchRefused(RECOVER_INSIDE_HELD_REGION, 'recover was called by a thread that holds the dispatcher '
+                              'lock, inside an act\'s held region: that act\'s own rows would read as ended. Nothing '
+                              'was read or changed', lock=str(path))
     with di.dispatcher_lock(integration_store):
         return _Recovery(integration_store, transport, actor, read_artifact).run()

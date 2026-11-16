@@ -47,7 +47,8 @@ two points, the one-dispatcher assumption that decision 0024 records as its resi
 3. What the lock is evidence of. A holder that finds a typed attempt reserved or dispatched, or a turn journal
    dispatched, has established that the act which wrote it ended without recording its outcome. It is evidence of
    nothing at the Agent Server.
-4. Recovery. recover, run under the lock by every dispatcher composition root before its first act:
+4. Recovery. recover, run under the lock before its first act by every dispatcher composition root except the native
+   driver (d1_run does not call it; that goes to the leaf that next runs it live):
    - a dispatched typed attempt becomes unknown, and is then settled as E-01.4.1 settles any unknown attempt;
    - a reserved typed attempt is failed when the Agent Server does not know its reserved conversation, and is held
      when it does;
@@ -77,5 +78,7 @@ journal's own resume arms take the lock; a resolver for a reserved attempt whose
 (decision 0004 point 7).
 
 ## Not verified
-Linux and macOS, where the lock belongs to the open file description and a child that inherited it keeps it; the lock
-and the recovery on the live transport; how long a create stays invisible to the lookup on a live server.
+Linux and macOS, where the lock belongs to the open file description and a child that inherited it keeps it; there, a
+fork without exec inherits the lock's open file description, so a forked child alive after its holder ended keeps the
+lock held (the handle's being non-inheritable closes it only at exec); the lock and the recovery on the live
+transport; how long a create stays invisible to the lookup on a live server.

@@ -595,11 +595,35 @@ SITES = {
 }
 
 
+# The movers the census reads: each one's target-state position and keyword, and its key's position and keywords.
+MOVERS = {'_mark': (3, 1, ('key',)), '_mark_end': (3, 1, ('key',)), 'transition': (1, 0, ('key', 'operation_key')),
+          'move': (2, 0, ('key',))}
+TARGET_KEYWORD = 'to_state'
+ALIAS = 'alias'
+
+
+def _argument(node, position, names):
+    """The expression passed to NODE (a call) at POSITION or under one of NAMES; None when it cannot be told (absent,
+    or behind a ``*`` or ``**``)."""
+    if any(isinstance(a, ast.Starred) for a in node.args[:position + 1]):
+        return None
+    if len(node.args) > position:
+        return node.args[position]
+    for keyword in node.keywords:
+        if keyword.arg in names:
+            return keyword.value
+    return None
+
+
 def census(trees):
     """The write-ahead sites of TREES ({module name: syntax tree}): (sites, variable) where SITES are the
-    (module, function, call, key) of each reserve_attempt and each move into a constant 'dispatched', and VARIABLE
-    the (module, function) of each move whose target state is not a constant."""
+    (module, function, call, key) of each reserve_attempt and each move into a literal 'dispatched' (its target state
+    given by position or as ``to_state=``), and VARIABLE the (module, function) of each move whose target state is
+    not a literal or cannot be told (a computed value, absent, or behind ``*``/``**``), and the (module, function,
+    'alias', expression) of each reference to a mover or to reserve_attempt that is not a direct call (an alias, a
+    ``getattr``, a value passed on): the review of dispatch 10, S3."""
     sites, variable = [], set()
+    named = set(MOVERS) | {'reserve_attempt'}
     for name, tree in sorted(trees.items()):
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
@@ -610,22 +634,31 @@ def census(trees):
                     return node.name
             return '<module>'
         for node in ast.walk(tree):
+            reference = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) \
+                else None
+            if reference in named and not (isinstance(parents.get(node), ast.Call) and parents[node].func is node):
+                variable.add((name, function(node), ALIAS, ast.unparse(node)))
             if not isinstance(node, ast.Call):
                 continue
             call = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
+            if call == 'getattr' and len(node.args) > 1 and isinstance(node.args[1], ast.Constant) \
+                    and node.args[1].value in named:
+                variable.add((name, function(node), ALIAS, ast.unparse(node)))
+                continue
             if call == 'reserve_attempt':
                 sites.append((name, function(node), call, None))
                 continue
-            position = {'_mark': 3, '_mark_end': 3, 'transition': 1, 'move': 2}.get(call)
-            if position is None or len(node.args) <= position:
+            if call not in MOVERS:
                 continue
-            target = node.args[position]
-            values = [target.body, target.orelse] if isinstance(target, ast.IfExp) else [target]
-            if not all(isinstance(v, ast.Constant) for v in values):
+            position, key_position, key_names = MOVERS[call]
+            target = _argument(node, position, (TARGET_KEYWORD,))
+            values = [] if target is None else [target.body, target.orelse] if isinstance(target, ast.IfExp) \
+                else [target]
+            if not values or not all(isinstance(v, ast.Constant) for v in values):
                 variable.add((name, function(node)))
             elif any(v.value == 'dispatched' for v in values):
-                sites.append((name, function(node), call, ast.unparse(node.args[0 if call in ('transition', 'move')
-                                                                               else 1])))
+                key = _argument(node, key_position, key_names)
+                sites.append((name, function(node), call, None if key is None else ast.unparse(key)))
     return sites, variable
 
 
@@ -687,6 +720,50 @@ class StaticCensus(unittest.TestCase):
         self.assertIn(('attempt_end.py', 'planted', '_mark', 'k'), sites)
         self.assertIn(('attempt_end.py', 'planted', 'reserve_attempt', None), sites)
         self.assertIn(('attempt_end.py', 'planted'), variable)
+
+    def planted(self, text):
+        trees = package_trees()
+        trees['attempt_end.py'] = ast.parse((HERE.parent / 'attempt_end.py').read_text(encoding='utf-8') + text)
+        return census(trees)
+
+    def test_the_census_reads_a_target_state_given_by_keyword(self):
+        """Negative control (the review of dispatch 10, S3): a move into dispatched whose target state is the
+        ``to_state`` keyword, through the store's transition and through _mark, is a site the list lacks."""
+        sites, _ = self.planted(
+            "\n\ndef planted_kw(s, k):\n    s.transition(k, to_state='dispatched', actor='a')\n"
+            "\n\ndef planted_mark_kw(s, k):\n    di._mark(s, k, 'reserved', to_state='dispatched', actor='a', "
+            "reason='r', detail=None)\n"
+            "\n\ndef planted_all_kw(s, k):\n    s.transition(key=k, to_state='dispatched', actor='a')\n")
+        self.assertIn(('attempt_end.py', 'planted_kw', 'transition', 'k'), sites)
+        self.assertIn(('attempt_end.py', 'planted_mark_kw', '_mark', 'k'), sites)
+        self.assertIn(('attempt_end.py', 'planted_all_kw', 'transition', 'k'), sites)
+
+    def test_a_target_state_the_census_cannot_resolve_is_variable(self):
+        """Negative control (S3): a transition or _mark whose target state is behind ``*``/``**``, absent, or not a
+        literal is classed variable, never skipped."""
+        _, variable = self.planted(
+            "\n\ndef planted_star(s, args):\n    s.transition(*args, actor='a')\n"
+            "\n\ndef planted_kwargs(s, k, kw):\n    s.transition(k, **kw)\n"
+            "\n\ndef planted_mark_short(s, k, kw):\n    di._mark(s, k, **kw)\n"
+            "\n\ndef planted_computed(s, k, to):\n    s.transition(k, to_state=to, actor='a')\n")
+        for planted in ('planted_star', 'planted_kwargs', 'planted_mark_short', 'planted_computed'):
+            self.assertIn(('attempt_end.py', planted), variable)
+
+    def test_a_mover_referenced_other_than_by_a_direct_call_is_flagged(self):
+        """Negative control (S3): an alias of ``.transition`` or ``_mark``, one passed on, and a ``getattr`` of one
+        are flagged, so a move made through them cannot escape the list."""
+        _, variable = self.planted(
+            "\n\ndef planted_alias(s, k):\n    go = s.transition\n    go(k, 'dispatched', actor='a')\n"
+            "\n\ndef planted_mark_alias(s, k):\n    mark = di._mark\n    mark(s, k, 'reserved', 'dispatched', 'a', "
+            "'r', None)\n"
+            "\n\ndef planted_passed(s, k):\n    functools.partial(di._mark, s)(k, 'reserved', 'dispatched', 'a', 'r', "
+            "None)\n"
+            "\n\ndef planted_getattr(s, k):\n    getattr(s, 'transition')(k, 'dispatched', actor='a')\n")
+        aliases = {(v[1], v[3]) for v in variable if len(v) == 4 and v[2] == ALIAS}
+        self.assertEqual(aliases, {('planted_alias', 's.transition'), ('planted_mark_alias', 'di._mark'),
+                                   ('planted_passed', 'di._mark'), ('planted_getattr', "getattr(s, 'transition')")})
+        real = census(package_trees())[1]           # the real tree holds no alias
+        self.assertEqual([v for v in real if len(v) == 4], [])
 
 
 class DynamicCensus(unittest.TestCase):

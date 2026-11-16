@@ -276,7 +276,7 @@ this contract:
 
 | State | Entered by (who, when) | What it permits |
 |---|---|---|
-| `reserved` | the dispatcher, through `reserve_attempt`, before any external call | dispatching with the reserved `conversation_id`; after a restart, dispatching it again (the ID is deterministic, decision 0001); no other ordinal on the triple |
+| `reserved` | the dispatcher, through `reserve_attempt`, before any external call | dispatching with the reserved `conversation_id`, by the act that reserved it; after a restart it is never dispatched again: the dispatcher's `recover` (E-01.4.2) looks the reserved `conversation_id` up (the ID is deterministic, decision 0001) and moves the row to `failed` (code `NOT_SENT`) when the Agent Server does not know it, or leaves it `reserved`, held, when the server knows it or the answer decides nothing; no other ordinal on the triple |
 | `dispatched` | the dispatcher, immediately before it sends the create (E-01.3.x) | waiting for and recording the outcome; a create retry only with the same `conversation_id` and only when the pinned server advertises `idempotent_conversation_create_v1` (decision 0001); no other ordinal |
 | `unknown` | the dispatcher on a lost acknowledgement or an interrupted create (an interruption established under the dispatcher lock: `recover`, E-01.4.2), or `reconcile` while a restore epoch is open | reconciliation only: query the reserved `conversation_id` (E-01.4.x); "a lost HTTP reply is not permission to start a new conversation"; no other ordinal |
 | `confirmed` | the dispatcher on an observed successful create, or the reconciler when the conversation is found | terminal; the next ordinal on the triple (rework, a fresh review) if policy calls for one |
