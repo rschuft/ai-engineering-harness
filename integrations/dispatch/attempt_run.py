@@ -1239,6 +1239,26 @@ def _receipt_of(integration_store, key: str, form: str) -> dict | None:
     return intent if intent.get('format') == form else None
 
 
+def _settled_receipt(integration_store, key: str, form: str, check: Callable[[dict], object], actor: str) -> dict | None:
+    """``_receipt_of``, and a receipt an interrupted step left ``dispatched`` settled by a read (defect 3 of the
+    restart-recovery design: ``_receipt`` marks ``dispatched`` and ``confirmed`` in two transactions). CHECK(intent)
+    re-reads what the receipt records (the staged bundle and the verify repository, against its digests) and refuses
+    when that no longer holds; when it holds the receipt is ``confirmed`` (reason ``settled-by-read``) and its intent
+    returned. None otherwise, the receipt left as it is."""
+    held = integration_store.get(key)
+    if held is None or held.state != 'dispatched':
+        return _receipt_of(integration_store, key, form)
+    intent = json.loads(held.intent_json)
+    if not isinstance(intent, dict) or intent.get('format') != form:
+        return None
+    try:
+        check(intent)
+    except DispatchRefused:
+        return None
+    di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'settled-by-read', None)
+    return intent
+
+
 def _pull(pull, name: str) -> Mapping:
     """The exchange pull (tools/guest.py exchange_pull, the retained verifier); any failure, its Refused included, is
     RESULT_PULL_FAILED (review A4 D2)."""
@@ -1520,7 +1540,12 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     def stopped(records, outcome='stopped', problems=(), status=None):
         end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
         return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
-    intake = _receipt_of(integration_store, INTAKE_KEY.format(attempt_id=attempt_id), INTAKE_FORMAT)
+    # a pull or an intake receipt an interrupted step left dispatched is settled by reading what it records
+    _settled_receipt(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT, lambda receipt:
+                     _staged_again(receipt, _receipt_of(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id),
+                                                        DELIVERY_FORMAT)), actor)
+    intake = _settled_receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id), INTAKE_FORMAT,
+                              lambda receipt: _resumed_result(integration_store, operation_key, base, receipt), actor)
     if intake is not None:
         verified = _resumed_result(integration_store, operation_key, base, intake)
         return _after_intake(integration_store, operation_key, client, verified, observe=observe,
