@@ -2880,6 +2880,10 @@
   },
   "conversation": {
    "tests": [
+    "test_conversation_store.AlteredSchema.test_a_fresh_and_a_reopened_store_have_exactly_the_migrated_schema",
+    "test_conversation_store.AlteredSchema.test_a_replaced_trigger_is_refused_at_open",
+    "test_conversation_store.AlteredSchema.test_an_added_object_is_refused_at_open",
+    "test_conversation_store.AlteredSchema.test_resurrecting_a_superseded_session_by_dropping_the_triggers_is_refused_at_open",
     "test_conversation_store.Identity.test_a_location_inside_the_checkout_or_in_memory_is_refused",
     "test_conversation_store.Identity.test_an_edited_migration_is_refused",
     "test_conversation_store.Identity.test_backup_and_restore_are_not_decided",
@@ -2908,16 +2912,19 @@
     "test_app.Refusals.test_a_credential_in_a_cookie_or_another_header_is_not_accepted",
     "test_app.Refusals.test_every_other_inventory_credential_shape_is_refused_as_foreign",
     "test_app.Refusals.test_missing_foreign_expired_revoked_each_with_its_code_changing_nothing",
+    "test_app.Refusals.test_no_client_path_reaches_the_log",
     "test_app.Refusals.test_the_log_records_outcomes_and_the_public_session_id_only",
     "test_enroll.Guard.test_a_pipe_a_file_or_the_null_device_is_not_a_console",
     "test_enroll.Guard.test_either_handle_not_a_console_is_refused",
     "test_enroll.Guard.test_the_command_checks_the_validity_before_anything_is_written",
     "test_enroll.Guard.test_the_command_refuses_before_resolving_the_root_or_opening_the_store",
-    "test_enroll.RealConsole.test_a_console_passes_and_a_pipe_on_either_handle_is_refused",
+    "test_enroll.GuardScope.test_a_pipe_is_refused_and_any_console_passes_even_one_without_a_window",
+    "test_listener.Listener.test_a_killed_server_is_recorded_as_failed",
     "test_listener.Listener.test_down_leaves_no_process_and_frees_the_port",
     "test_listener.Listener.test_every_other_inventory_credential_shape_is_foreign",
     "test_listener.Listener.test_every_route_and_method_without_the_credential_is_refused_as_missing",
     "test_listener.Listener.test_missing_foreign_expired_and_revoked_each_refused_with_its_code_changing_nothing",
+    "test_listener.Listener.test_no_client_path_reaches_the_service_log",
     "test_listener.Listener.test_no_console_window",
     "test_listener.Listener.test_the_enrolled_current_session_is_accepted",
     "test_listener.Listener.test_the_host_census_by_port_finds_it_on_loopback_only",
@@ -2927,10 +2934,14 @@
     "test_listener.Listener.test_the_server_and_supervisor_environments_and_command_lines_hold_no_credential",
     "test_listener.Listener.test_the_server_listens_on_127_0_0_1_13310_and_nowhere_else",
     "test_listener.Listener.test_the_supervisor_s_live_import_census_has_no_credential_module",
+    "test_listener.Listener.test_two_concurrent_ups_leave_one_tracked_server_or_a_clean_refusal",
     "test_service.Environment.test_the_configuration_holds_no_secret_shaped_key_and_names_the_one_port",
     "test_service.Environment.test_the_port_is_declared_once",
     "test_service.Environment.test_the_server_argv_names_the_app_and_the_two_directories_only",
     "test_service.Environment.test_the_server_gets_only_the_allowlisted_variables",
+    "test_service.Instance.test_a_second_holder_is_refused_until_the_first_releases",
+    "test_service.Instance.test_a_supervisor_that_finds_the_lock_held_touches_nothing",
+    "test_service.Instance.test_up_refuses_while_another_holds_the_lock_and_starts_nothing",
     "test_service.Readiness.test_not_ready_for_each_way_the_listener_can_be_wrong",
     "test_service.Readiness.test_nothing_runs_without_a_record",
     "test_service.Readiness.test_ready_when_the_server_listens_on_the_declared_port_only",
@@ -2941,6 +2952,7 @@
     "test_service.Verbs.test_the_verbs_are_the_contract_s_service_verbs_without_install",
     "test_service.Verbs.test_up_refuses_a_held_port_and_never_another_port",
     "test_service.Verbs.test_up_refuses_a_running_environment_and_starts_nothing",
+    "test_session.Check.test_a_session_issued_more_than_five_minutes_ahead_is_foreign",
     "test_session.Check.test_a_superseded_session_is_revoked_and_the_new_one_passes",
     "test_session.Check.test_an_enrolled_current_session_passes_until_its_expiry",
     "test_session.Check.test_each_refusal_names_its_remedy",
@@ -2960,6 +2972,7 @@
     "test_session.Shape.test_the_shape_is_exactly_32_bytes_of_base32",
     "test_session.Shape.test_the_verifier_is_the_domain_separated_sha256",
     "test_session.Shape.test_values_off_the_shape_are_not_shaped",
+    "test_structure.ExclusiveListener.test_a_reuse_bind_of_the_held_address_and_port_is_refused",
     "test_structure.ImportCensus.test_building_the_server_loads_only_its_four_modules",
     "test_structure.ImportCensus.test_loading_the_enroll_command_loads_no_broker_until_its_console_check",
     "test_structure.ImportCensus.test_the_supervisor_loads_no_credential_gitea_dispatch_inference_or_owner_module",
@@ -2980,10 +2993,10 @@
     "conversation",
     "ownerhost"
    ],
-   "revision": "66886ccea4571c536d2c2fb7eb61f28a87dd3062",
+   "revision": "6a62cb27501768932468340812e669cbffe7dbb2",
    "dirty": false,
    "measured": "2026-11-16",
-   "runs": 3,
+   "runs": 1,
    "host": {
     "system": "Windows",
     "release": "11",
@@ -2991,7 +3004,7 @@
     "cpus": 32,
     "python": "3.12.10"
    },
-   "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording."
+   "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording. Re-recorded for these two suites only at 6a62cb2 after the review fixes of dispatch 4c (renamed and added tests)."
   }
  ]
 }
