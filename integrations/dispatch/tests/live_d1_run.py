@@ -37,7 +37,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 ACTOR = 'd1-run'
-ARG_LIMIT = 131072        # Linux MAX_ARG_STRLEN: one argument of /bin/sh -c
+ARG_LIMIT = 131072        # Linux MAX_ARG_STRLEN: one argument of /bin/sh -c (step 0, live: 139264 bytes refused, errno 7)
+STOP_KEY = 'dispatch/attempt/{attempt_id}/stop/{kind}/{code}'
+STOP_FORMAT = 'ai-engineering-harness/dispatch/attempt-stop/v1'
 
 
 def _load(name, path):
@@ -184,7 +186,35 @@ class D1Dispatcher:
     def run(self, key, transport, inspect, pull, observe):
         return AR.run_attempt(self.store, key, transport=transport, base=self.base, actor=ACTOR, inspect=inspect,
                               pull=pull, observe=observe, reserve_result=RP.result_hook(self.store, key, actor=ACTOR),
-                              read_artifact=self.read_artifact, **self.run_kwargs)
+                              read_artifact=self.read_artifact, defer_interruption_end=True, **self.run_kwargs)
+
+    def record_stop(self, key, records) -> list:
+        """Each observed stop's dispatcher record kept durably as it is observed (the review of B and C, B1):
+        ``dispatch/attempt/<attempt id>/stop/<kind>/<code>``, its intent the attempt, kind and code (no text), the
+        first ref in its confirmed detail. A repeat of the same kind and code is the same receipt."""
+        attempt, written = store.attempt_id_for(key), []
+        for record in AE.check_records(list(records)):
+            stop_key = STOP_KEY.format(attempt_id=attempt, kind=record['kind'], code=record['code'])
+            intent = {'format': STOP_FORMAT, 'attemptId': attempt, 'kind': record['kind'], 'code': record['code']}
+            held = self.store.reserve(stop_key, intent, actor=ACTOR).reservation
+            if held.state == 'reserved':
+                di._mark(self.store, stop_key, 'reserved', 'dispatched', ACTOR, 'stop-observed', None)
+                di._mark(self.store, stop_key, 'dispatched', 'confirmed', ACTOR, 'stop-observed',
+                         {'ref': record['ref']})
+            written.append(stop_key)
+        return written
+
+    def stops(self, key) -> list:
+        """The attempt's recorded stops (kind, code), oldest first."""
+        prefix = STOP_KEY.format(attempt_id=store.attempt_id_for(key), kind='', code='').rstrip('/')
+        return [{'kind': json.loads(r.intent_json)['kind'], 'code': json.loads(r.intent_json)['code']}
+                for r in self.store.attempts() if r.operation_key.startswith(prefix + '/')]
+
+    def _no_stop(self, key):
+        found = self.stops(key)
+        if found:
+            raise ResumeRefused('ATTEMPT_STOP_RECORDED', f'the attempt has {len(found)} recorded stop(s): no resume '
+                                'and no result path (the engineering manager decides)')
 
     def _same_base(self, key):
         turn = AR.turn_record(self.store, key)
@@ -192,6 +222,7 @@ class D1Dispatcher:
             raise ResumeRefused('RESUME_BASE_MOVED', 'the base read now is not the attempt\'s (its turn journal)')
 
     def resume(self, key, transport, pull, exists, observe):
+        self._no_stop(key)
         self._same_base(key)
         return AR.resume_result(self.store, key, transport=transport, base=self.base, actor=ACTOR, pull=pull,
                                 exists=exists, observe=observe,
@@ -199,6 +230,7 @@ class D1Dispatcher:
                                 read_artifact=self.read_artifact)
 
     def recorded(self, key):
+        self._no_stop(key)
         self._same_base(key)
         return AR.recorded_result(self.store, key, base=self.base)
 
@@ -212,7 +244,7 @@ class D1Dispatcher:
         return {'operation_key': key, 'attempt_id': attempt, 'conversation_id': store.conversation_id_for(key),
                 'turn': getattr(turn, 'state', None), 'intake': getattr(intake, 'state', None),
                 'result': getattr(result, 'state', None),
-                'end': AE.end_record(self.store, attempt) is not None}
+                'end': AE.end_record(self.store, attempt) is not None, 'stops': self.stops(key)}
 
     def end(self, key, transport, records, trigger):
         return AE.end_interrupted_attempt(self.store, key, transport=transport, actor=ACTOR, trigger=trigger,
@@ -232,6 +264,8 @@ class D1Dispatcher:
         held = []
         provider = OneNativeRead(self.provider, held.append)
         token = NT.read(provider)
+        for copy in held:            # the wrapper's own copy: the caller holds TOKEN only (review of B and C, NIT 2)
+            copy.drop()
         self.native_reads.append({'reads': list(provider.reads), 'refused': list(provider.refused), 'resumed': True})
         expected = AE.native_fingerprint(self.store, key) if key else None
         if expected is not None and token.fingerprint != expected:
@@ -241,6 +275,7 @@ class D1Dispatcher:
         on_token(token)
 
     def publish(self, key, verified, native, observations, extra_texts, report_dir) -> dict:
+        self._no_stop(key)
         resolved = di.stored_inputs(self.store, key, state='confirmed')
         bot = AllowedEntries(self.provider, [RP.roles.target(RP.AT.STAGE_ROLES[resolved.stage])])
         try:
@@ -250,9 +285,36 @@ class D1Dispatcher:
                                         report_dir=report_dir)
         finally:
             self.bot_reads.append({'reads': list(bot.reads), 'refused': list(bot.refused)})
+        regenerated = None
+        if outcome.outcome == 'already-confirmed' and report_dir is not None \
+                and not (Path(report_dir) / 'report.json').exists():
+            regenerated = self.regenerate_report(key, resolved, verified, native, observations, outcome.receipt,
+                                                 report_dir)
         return {'outcome': outcome.outcome, 'pushed': outcome.pushed, 'opened': outcome.opened,
                 'receipt': outcome.receipt, 'report_dir': None if report_dir is None else str(report_dir),
-                'bot_entry_reads': list(bot.reads)}
+                'bot_entry_reads': list(bot.reads), 'report_regenerated': regenerated}
+
+    def regenerate_report(self, key, resolved, verified, native, observations, receipt, report_dir) -> dict:
+        """A resumed run whose result journal is already confirmed but whose report was never written (review of B
+        and C, NIT 6): the Owner report rebuilt from the receipt and the verified objects (a recorded result's test
+        output and excluded paths are digests only, and the report says so), searched for the native token before it
+        is written; its digests may differ from the receipt's (the observations are this run's)."""
+        target = RP.gitea_target(resolved.repository, self.gitea_port, http=self.http)
+        read = RP.read_verified(verified, resolved)
+        refs = RP.lineage_refs(resolved, verified)
+        tests_text, tests = RP.test_section(verified.tests)
+        excluded_text, excluded = RP.exclusion_section(verified)
+        pull = {k: receipt['pullRequest'][k] for k in ('number', 'url', 'state', 'draft')}
+        report = RP.owner_report(resolved, verified, target, read, refs, tests=tests, excluded=excluded,
+                                 tests_text=tests_text, excluded_text=excluded_text, pull=pull,
+                                 search=(receipt.get('search') or {}).get('before'), observations=observations)
+        report_json, report_md = RP.report_texts(report)
+        texts = {'report-json': report_json, 'report-md': report_md}
+        RP.require_not_found(RP.outbound_search(native, expected_fingerprint=AE.native_fingerprint(self.store, key),
+                                                texts=texts), bundle_sha256=None, texts=texts)
+        written = RP.write_report(report_dir, report_json, report_md)
+        return {'written': written, 'from': 'the receipt and the verified objects', 'digest_only_texts':
+                not isinstance(verified.tests.get('output'), str)}
 
 
 def live_dispatcher(args, res):

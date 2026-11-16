@@ -51,15 +51,20 @@ class D1Guest(nqd.FakeGuest):
 
 
 class Outcome:
-    def __init__(self, outcome, result=None, runtime=None, problems=(), end=None):
+    def __init__(self, outcome, result=None, runtime=None, problems=(), end=None, pending=()):
         self.outcome, self.result, self.runtime, self.problems, self.end = outcome, result, runtime, problems, end
+        self.pending = pending
 
     def to_json(self):
         return {'outcome': self.outcome, 'result': None if self.result is None else self.result.to_json(),
-                'runtime': self.runtime, 'problems': list(self.problems), 'end': self.end}
+                'runtime': self.runtime, 'problems': list(self.problems), 'end': self.end,
+                'pending': list(self.pending)}
 
 
 class Verified:
+    def __init__(self, status='0'):
+        self.tests = {'status': status}
+
     def to_json(self):
         return {'format': 'test', 'commit': 'c' * 40, 'bundle': {'sha256': 'b' * 64}}
 
@@ -75,6 +80,10 @@ class FakeDispatcher:
         self.turn = 'confirmed'
         self.status = 'finished'
         self.journal = None
+        self.stop_records = []             # the durable stop records (record_stop)
+        self.not_started = False           # the message saved, the run not started (the end deferred)
+        self.tests_status = '0'
+        self.fail_end = False
 
     def prepare(self):
         self.acts.append('prepare')
@@ -107,6 +116,9 @@ class FakeDispatcher:
         if records:
             return self._stop(records)
         self.acts.append('message')
+        if self.not_started:
+            return Outcome('run-not-started', pending=({'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED',
+                                                        'ref': f'attempt:{ATTEMPT}#turn'},))
         self.guest.sent = True
         records = observe('after-message')
         if records:
@@ -125,7 +137,13 @@ class FakeDispatcher:
             return self._stop(records)
         self.acts.append('runtime-stop')
         self.journal = 'reserved'
-        return Outcome('verified', result=Verified(), runtime='missing')
+        return Outcome('verified', result=Verified(self.tests_status), runtime='missing')
+
+    def record_stop(self, key, records):
+        self.acts.append('record-stop')
+        for record in records:
+            if (record['kind'], record['code']) not in [(r['kind'], r['code']) for r in self.stop_records]:
+                self.stop_records.append(dict(record))
 
     def resume(self, key, transport, pull, exists, observe):
         self.acts.append('resume')
@@ -141,12 +159,18 @@ class FakeDispatcher:
 
     def state(self, key):
         return {'operation_key': OPERATION, 'attempt_id': ATTEMPT, 'conversation_id': CID, 'turn': self.turn,
-                'result': self.journal, 'end': bool(self.ends)}
+                'result': self.journal, 'end': bool(self.ends),
+                'stops': [{'kind': r['kind'], 'code': r['code']} for r in self.stop_records]}
 
     def end(self, key, transport, records, trigger):
         self.acts.append(f'end {trigger}')
+        if self.fail_end:
+            raise guest.Refused('RUNTIME_NOT_STOPPED', 'the runtime stop answered 502')
         self.ends.append((trigger, records))
-        return {'classification': 'non-retryable' if records else 'unclassified', 'causes': []}
+        kinds = {r['kind'] for r in records}
+        classification = 'non-retryable' if kinds - {'run-not-started', 'provider-path-lost'} else 'interruption'
+        return {'classification': classification, 'causes': sorted(kinds), 'conversationStopped': True,
+                'resultHandedOn': False}
 
     def delete(self, key, transport):
         self.acts.append('delete')
@@ -168,7 +192,9 @@ class FakeDispatcher:
         return {'outcome': 'confirmed', 'pushed': True, 'opened': True}
 
 
-class D1Run(unittest.TestCase):
+class D1Harness(unittest.TestCase):
+    """The driver run against the fakes (no tests of its own)."""
+
     def setUp(self):
         self.state = Path(tempfile.mkdtemp(prefix='aieh-d1-'))
         self.addCleanup(nqd.tg.remove_tree, self.state)
@@ -211,7 +237,11 @@ class D1Run(unittest.TestCase):
         self.assertEqual(len(found), 1, key)
         return found[0]
 
+
+class D1Run(D1Harness):
     def test_the_rule_passes_and_publishes(self):
+        self.guest.events[1].append({'id': 'e4', 'kind': guest.ACP_TOOL_CALL_KIND, 'title': 'Bash',
+                                     'raw_input': {'command': 'python -m unittest discover -s tests'}})
         out = self.run_driver()
         self.assertEqual(out['result'], 'PASS', [(s['step'][:6], s['verdict'], s.get('detail')) for s in out['steps']
                                                  if s['verdict'] != 'PASS'])
@@ -235,7 +265,7 @@ class D1Run(unittest.TestCase):
         self.assertEqual({c['verdict'] for c in out['clauses']}, {'PASS', 'OFFLINE'})
         observations, extra = self.dispatcher.published[0]
         self.assertEqual(observations['interruption'], 'none: no interruption occurred')
-        self.assertEqual(observations['events']['agent_ran_its_tests'], 'not observed')
+        self.assertEqual(observations['events']['agent_ran_its_tests'], 'observed')
         self.assertEqual(list(extra), ['run-record-draft'])
         self.assertEqual(self.step(out, '11')['detail']['verdict'], 'not-found')
 
@@ -256,12 +286,18 @@ class D1Run(unittest.TestCase):
                 self.assertNotIn('publish', self.dispatcher.acts)
                 self.assertEqual(out['result'], 'FAIL')
 
-    def test_a_selected_profile_not_named_is_unknown_never_a_stop(self):
+    def test_an_undecided_inspection_holds_before_the_message(self):
+        """Review of B and C, NIT 10 (the engineering manager's ruling): an UNKNOWN inspection is never a stop, and
+        it sends no message: the attempt is held for the engineering manager, unended, its conversation kept."""
         self.guest.agent = {'kind': 'ACPAgent'}
         out = self.run_driver()
         self.assertEqual(self.step(out, '3')['verdict'], 'UNKNOWN')
-        self.assertIn('message', self.dispatcher.acts)
-        self.assertEqual(out['result'], 'UNKNOWN')
+        self.assertNotIn('message', self.dispatcher.acts)
+        self.assertEqual(self.dispatcher.ends, [])
+        self.assertNotIn('delete', self.dispatcher.acts)
+        self.assertEqual((out['disposition'], out['refusal']['code']),
+                         ('held-for-engineering-manager', 'INSPECTION_UNDECIDED'))
+        self.assertFalse(out['guest_may_be_destroyed'])
 
     def test_each_stop_ends_the_attempt_with_its_record(self):
         cases = {
@@ -290,12 +326,20 @@ class D1Run(unittest.TestCase):
                 self.assertEqual(self.step(out, '7e')['verdict'] in ('PASS', 'UNKNOWN', 'FAIL'), True)  # it ran
 
     def test_a_turn_that_did_not_finish_is_ended_through_e_05_8(self):
+        """S1: ended after the teardown observations and before the delete."""
         self.dispatcher.status = 'error'
         out = self.run_driver()
         self.assertEqual(self.dispatcher.ends, [('conversation-ended', [])])
+        self.assertLess(self.dispatcher.acts.index('end conversation-ended'), self.dispatcher.acts.index('delete'))
+        self.assertTrue(self.step(out, '10a') and self.step(out, '10b'))
         self.assertEqual(self.step(out, '6')['verdict'], 'FAIL')
         self.assertNotIn('result', self.dispatcher.acts)
         self.assertEqual(out['disposition'], 'ended')
+        clauses = {c['clause']: c for c in out['clauses']}
+        self.assertEqual(clauses['if a provider interruption ended an attempt, it ended through E-05.8\'s mechanism '
+                                 '(its runtime stopped, its end record written, no result returned) and the record '
+                                 'names the attempt and how it ended']['verdict'], 'PASS')
+        self.assertEqual(clauses['if no interruption occurred, the record says so']['verdict'], 'NOT-APPLICABLE')
 
     def test_a_refusal_after_the_turn_tears_nothing_down(self):
         self.dispatcher.refuse_at = 'run'
@@ -329,7 +373,8 @@ class D1Run(unittest.TestCase):
     def test_an_ended_attempt_is_not_resumed(self):
         self.dispatcher.ends.append(('attempt-stopped', []))
         out = self.run_driver(resume=OPERATION)
-        self.assertEqual(out['refusal']['code'], 'REFUSED')
+        self.assertEqual(out['refusal']['code'], 'ATTEMPT_ENDED')
+        self.assertNotIn('read-native', self.dispatcher.acts)        # NIT 2: decided before the entry is read
         self.assertNotIn('publish', self.dispatcher.acts)
 
     def test_the_read_only_resolution_refusing_dispatches_nothing(self):
@@ -361,6 +406,160 @@ class D1Run(unittest.TestCase):
         self.assertEqual(out['disposition'], 'ended')
 
 
+class EchoGuest(D1Guest):
+    """The guest whose GET answers echo the native token while ``echo_token`` is set (the review's probe P1)."""
+
+    def answer(self, method, path, body):
+        status, out = super().answer(method, path, body)
+        if self.echo_token and method == 'GET' and isinstance(out, dict):
+            out = dict(out, echo=TOKEN)
+        return status, out
+
+
+class StopThenRefusal(FakeDispatcher):
+    """After the turn, an answer echoing the token (a credential stop), then a refusal that is not a stop."""
+
+    def run(self, key, transport, inspect, pull, observe):
+        self.acts.append('run')
+        self.test.assertEqual(list(inspect(CID)), [])
+        self.test.assertFalse(observe('before-message'))
+        self.acts.append('message')
+        self.guest.sent = True
+        self.test.assertFalse(observe('after-message'))
+        self.test.turn_done = True
+        self.test.assertFalse(observe('after-turn', status='finished'))
+        self.guest.echo_token = True
+        transport('GET', f'/api/conversations/{CID}', None)
+        self.guest.echo_token = False
+        raise guest.Refused('RESULT_NOT_VERIFIED', 'the result step refused')
+
+
+class LateTunnel(nqd.FakeTunnel):
+    """A tunnel whose log gains LATE lines from its third read on: after (7c), before the teardown's (10a)."""
+
+    def __init__(self, guest_):
+        super().__init__(guest_)
+        self.reads, self.later = 0, []
+
+    def log_lines(self):
+        self.reads += 1
+        name_, lines = super().log_lines()
+        return name_, lines + (self.later if self.reads >= 3 else [])
+
+
+class ReviewOfBAndC(D1Harness):
+    """The independent review of slices B and C: its probes P1 to P3 and the rulings B1, S1, S2, NIT 3."""
+
+    def setUp(self):
+        super().setUp()
+        self.guest = EchoGuest(self)
+        self.tunnel = nqd.FakeTunnel(self.guest)
+        self.dispatcher = FakeDispatcher(self, self.guest)
+
+    def test_p1_a_stop_then_a_refusal_ends_the_attempt_and_nothing_resumes(self):
+        """B1: the stop is recorded durably as it is observed and ends the attempt on the refusal's path."""
+        self.dispatcher = StopThenRefusal(self, self.guest)
+        out = self.run_driver()
+        self.assertEqual(self.dispatcher.stop_records[0]['code'], 'TOKEN_ECHOED')
+        trigger, records = self.dispatcher.ends[0]
+        self.assertEqual((trigger, records[0]['kind'], records[0]['code']),
+                         ('attempt-stopped', 'credential-stop', 'TOKEN_ECHOED'))
+        self.assertLess(self.dispatcher.acts.index('record-stop'), self.dispatcher.acts.index('end attempt-stopped'))
+        self.assertEqual((out['disposition'], out['result']), ('ended', 'FAIL'))
+        self.assertEqual(out['refusal']['code'], 'RESULT_NOT_VERIFIED')
+        self.assertIn('delete', self.dispatcher.acts)
+        self.assertNotIn('publish', self.dispatcher.acts)
+        # the plan's D4 row: a resume afterwards does nothing
+        ends, stops = list(self.dispatcher.ends), list(self.dispatcher.stop_records)
+        self.dispatcher = FakeDispatcher(self, self.guest)
+        self.dispatcher.ends, self.dispatcher.stop_records = ends, stops
+        self.guest.created = True
+        self.tunnel = nqd.FakeTunnel(self.guest)
+        out = self.run_driver(resume=OPERATION)
+        self.assertEqual(out['refusal']['code'], 'ATTEMPT_ENDED')
+        self.assertFalse({'read-native', 'resume', 'recorded', 'publish'} & set(self.dispatcher.acts))
+
+    def test_a_recorded_stop_without_an_end_is_never_resumed_past(self):
+        """B1: the end could not be written; the recorded stop alone refuses the resume (before the entry is read)."""
+        self.dispatcher = StopThenRefusal(self, self.guest)
+        self.dispatcher.fail_end = True
+        out = self.run_driver()
+        self.assertEqual((out['disposition'], self.dispatcher.ends), ('held-for-engineering-manager', []))
+        self.assertFalse(out['guest_may_be_destroyed'])
+        stops = list(self.dispatcher.stop_records)
+        self.dispatcher = FakeDispatcher(self, self.guest)
+        self.dispatcher.stop_records = stops
+        self.guest.created = True
+        self.tunnel = nqd.FakeTunnel(self.guest)
+        out = self.run_driver(resume=OPERATION)
+        self.assertEqual((out['refusal']['code'], out['disposition']),
+                         ('ATTEMPT_STOP_RECORDED', 'held-for-engineering-manager'))
+        self.assertFalse({'read-native', 'resume', 'recorded', 'publish'} & set(self.dispatcher.acts))
+
+    def test_p2_a_resumed_run_never_seals_the_token_and_still_finds_its_echo(self):
+        """S2: every call of a resumed run is sealed with a nonce; the answers are searched in memory afterwards."""
+        self.guest.created = True
+        out = self.run_driver(resume=OPERATION)
+        self.assertEqual([s for s in self.guest.seals if s[2]], [])
+        self.assertEqual(out['disposition'], 'published')
+        self.assertEqual(out['resume_echo_search']['verdict'], 'not-found')
+        self.setUp()
+        self.guest.created = self.guest.echo_token = True
+        out = self.run_driver(resume=OPERATION)
+        self.assertEqual([s for s in self.guest.seals if s[2]], [])
+        self.assertEqual(out['resume_echo_search']['verdict'], 'found')
+        self.assertEqual(self.dispatcher.ends[0][1][0]['code'], 'TOKEN_ECHOED')
+        self.assertNotIn('publish', self.dispatcher.acts)
+        self.assertEqual(out['disposition'], 'ended')
+
+    def test_p3_a_teardown_stop_after_a_turn_not_finished_is_the_end_s_kind(self):
+        """S1: the end is written after the teardown observations; a stop seen there makes it a security stop."""
+        self.dispatcher.status = 'error'
+        self.tunnel = LateTunnel(self.guest)
+        self.tunnel.later = [nqd.log_line(event='connection', conn=9, target='example.org:443',
+                                          decision='admitted', reason=None, end='client-closed')]
+        out = self.run_driver()
+        trigger, records = self.dispatcher.ends[0]
+        self.assertEqual((trigger, [r['kind'] for r in records]), ('attempt-stopped', ['egress-stop']))
+        self.assertLess(self.dispatcher.acts.index('end attempt-stopped'), self.dispatcher.acts.index('delete'))
+        self.assertEqual(out['end']['classification'], 'non-retryable')
+
+    def test_p3_a_stop_seen_only_after_the_delete_is_recorded_for_escalation(self):
+        """The reviewer's P3 as written: a tunnel line visible only after the delete (the end, an interruption's,
+        already written): the stop is recorded durably and the record asks for the escalation."""
+        self.dispatcher.status = 'error'
+        self.tunnel.late_lines = [nqd.log_line(event='connection', conn=9, target='example.org:443',
+                                               decision='admitted', reason=None, end='client-closed')]
+        out = self.run_driver()
+        self.assertEqual(self.dispatcher.ends, [('conversation-ended', [])])
+        self.assertEqual([r['code'] for r in self.dispatcher.stop_records], ['OTHER_TARGET'])
+        self.assertTrue(out['end_escalation_needed'])
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_a_run_that_did_not_start_is_ended_after_the_teardown_observations(self):
+        """S1 with attempt_run's deferred end: the interruption's record, unless a stop was observed."""
+        self.dispatcher.not_started = True
+        out = self.run_driver()
+        trigger, records = self.dispatcher.ends[0]
+        self.assertEqual((trigger, [r['code'] for r in records]), ('attempt-stopped', ['TURN_RUN_NOT_STARTED']))
+        self.assertLess(self.dispatcher.acts.index('end attempt-stopped'), self.dispatcher.acts.index('delete'))
+        self.assertEqual((out['disposition'], out['end']['classification']), ('ended', 'interruption'))
+
+    def test_step_5_judges_the_turn_journal(self):
+        """NIT 3."""
+        self.dispatcher.turn = 'unknown'
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '5')['verdict'], 'FAIL')
+
+    def test_a_failed_result_test_run_is_e_05_5_not_met(self):
+        """S3: RESULT's tests failed: the pull request is still opened (R1), the clause FAIL."""
+        self.dispatcher.tests_status = '1'
+        out = self.run_driver()
+        self.assertEqual(out['disposition'], 'published')
+        [clause] = [c for c in out['clauses'] if c['clause'].startswith('the agent edits the demo repository')]
+        self.assertEqual(clause['verdict'], 'FAIL')
+
+
 class StopRecords(unittest.TestCase):
     def test_every_stop_maps_to_a_dispatcher_kind_in_its_grammar(self):
         texts = list(guest.NATIVE_STOPS.values()) + [guest.ACP_CONFIRMATION_STOP, 'an npx or npm process',
@@ -378,8 +577,20 @@ class StopRecords(unittest.TestCase):
 
     def test_the_clauses_are_judged_by_their_steps(self):
         steps = [{'step': v, 'verdict': 'PASS'} for v in guest.D1_STEPS.values()]
-        verdicts = {c['clause']: c['verdict'] for c in guest.d1_clause_verdicts(steps)}
+        facts = {'tests_status': '0', 'agent_ran_its_tests': 'observed', 'end': None,
+                 'interruption': 'none: no interruption occurred', 'published': True}
+        verdicts = {c['clause']: c['verdict'] for c in guest.d1_clause_verdicts(steps, facts)}
         self.assertEqual(set(verdicts.values()), {'PASS', 'OFFLINE'})
+        tests = 'the agent edits the demo repository and runs its tests in the container, offline, with what the ' \
+            'pinned image contains'
+        self.assertEqual(verdicts[tests], 'PASS')
+        for changed, verdict in (({'tests_status': '1'}, 'FAIL'), ({'agent_ran_its_tests': 'not observed'}, 'UNKNOWN'),
+                                 ({'tests_status': None}, 'UNKNOWN')):
+            judged = {c['clause']: c['verdict'] for c in guest.d1_clause_verdicts(steps, dict(facts, **changed))}
+            self.assertEqual(judged[tests], verdict, changed)
+        model = [c for c in guest.D1_CLAUSES if 'model identifiers' in c[1]][0]
+        self.assertEqual(model[2], ('3', '7f'))
+        self.assertIn('transcript (7f)', model[1])
         steps[[s['step'] for s in steps].index(guest.D1_STEPS['3'])]['verdict'] = 'FAIL'
         judged = guest.d1_clause_verdicts(steps)
         self.assertEqual({c['verdict'] for c in judged if c['leaf'] == 'E-01.3.2'}, {'FAIL'})

@@ -18840,47 +18840,73 @@ D1_STOP_RECORDS = (
     (ACP_CONFIRMATION_STOP, 'containment-stop', 'CONFIRMATION_ASKED'),
     ('the inspection before any work failed', 'containment-stop', 'INSPECTION_FAILED'),
 )
+D1_STEP0_OBSERVED = (
+    'Observed live at step 0 (the engineering manager\'s main session, 2026-11-16; one disposable create --provision '
+    'guest and one F-04.2 fixture conversation, destroyed): git 2.47.3 and Python 3.13.15 in the conversation '
+    'container; the bash route returns its output with CRLF kept as sent, the switch spelling tRuE unaltered (no '
+    'secret was registered, so no masking applied) and a 1 MiB output whole; a 126976-byte command ran and a '
+    '139264-byte one was answered 200 with exit -1 and "[Errno 7] Argument list too long: \'/bin/sh\'" (one /bin/sh -c '
+    'argument, 131072 bytes); the demo-size SEED was 19777 bytes and RESULT 52735; the exchange delivery (os.link), '
+    'the :(top,exclude,literal) pathspec exclusion, update-index --index-info, the pull, the retained verifier, the '
+    'commit-id equality, RESULT again without a delivery (the same commit) and a second delivery refused EXISTS.')
 D1_RUN_RULE = (
-    'Fixed before any run (D1 slice C; the engineering manager\'s rulings R1 to R8). One attempt of the committed '
-    'task on one disposable guest created with create --provision --inference, its forward to the tunnel held. The '
-    'run\'s steps, in this order: ' + '; '.join(D1_STEPS.values()) + '. Step (0) is host-only and read-only (no store '
-    'write); a failure there, at (1) or at (1a) dispatches nothing. Steps (1), (1a), (4) to (7h), (10) to (10b) and (11) '
-    'are E-05.11\'s steps (1), (1a), (3), (4a), (5), (6), (8) to (11c), (12) to (12b) and (13), unchanged and judged by '
-    'NATIVE_QUALIFICATION_RULE\'s judgements, from tools/guest.py\'s probe vantage; E-05.11\'s step (11d) (the Owner\'s '
-    'credentials by value) is not run: no D1 leaf carries it (the plan\'s amendment of 2026-11-15); the Owner\'s '
-    'credentials are judged absent by name and structure only, (7h). The dispatcher\'s acts ((2), SEED, (5), RESULT, '
-    'the runtime stop, the conversation\'s delete, the end, (12)) go through the dispatch module. (3) is E-01.3.2\'s '
-    'verdict: GET /api/conversations/count 1, the reserved conversation, its runtime available (attempt_run\'s API '
-    'half), and from the root facts exactly one conversation container, serving the reserved conversation, with no '
-    'container problem (the locked image, the declared mounts: the workspace scope, the user, no capability, no '
-    'privilege), the outer server listing exactly the reserved conversation, and its agent the selected profile '
-    '(acp_server claude-code, acp_model ' + NATIVE_MODEL_MAIN + '); a failure there sends no message and ends the '
-    'attempt (containment-stop INSPECTION_FAILED); a field the answer does not name leaves (3) UNKNOWN, never a stop. '
-    'STOP: any of NATIVE_QUALIFICATION_RULE\'s stop conditions, observed at any step after the dispatch, ends the '
-    'attempt through E-05.8\'s mechanism (attempt_end.end_interrupted_attempt, trigger attempt-stopped) with the '
-    'dispatcher record D1_STOP_RECORDS maps it to (a stop no entry names is a containment-stop), before the result '
-    'journal is dispatched: nothing reaches Gitea. Before a stop ends the attempt while its container runs, (7e) and '
-    '(7h) run. A turn that ends error, stuck or paused runs no RESULT and is ended through E-05.8 (trigger '
-    'conversation-ended: the classification is from its events). The result path (12) runs only when no stop '
-    'occurred and (11) passes; its own outbound search (the bundle, every text, the run record\'s draft) must find '
-    'nothing with valid controls; a failing test run proceeds marked FAILED and E-05.5\'s verified result is then not '
-    'met (R1). Run rules: nothing here destroys the guest; a dispatcher refusal after the turn that is not a stop '
-    'tears nothing down (the conversation and the guest are kept for a resumed result step, --resume); a dispatcher '
-    'refusal before the message, a lost create answer or a turn past its ceiling is held for the engineering manager; '
-    'the guest may be destroyed only once the result journal is confirmed or the attempt has an end record '
-    '(guest_may_be_destroyed). A resumed run reads the native entry once more, in its own process, only to search '
-    'with it (its fingerprint must be the attempt\'s), and never sends it. RESULT: PASS iff every step passes; FAIL '
-    'when a step fails or a stop occurred; otherwise UNKNOWN. Each proof clause (D1_CLAUSES) is PASS when every step '
-    'that decides it passes, FAIL when one fails, otherwise UNKNOWN; a clause the run does not decide names its '
-    'offline evidence and is OFFLINE. ' + NATIVE_PERMISSION_NOTE + ' ' + NATIVE_ENCRYPTED_STATE_NOTE + ' ' +
+    'Fixed before any run (D1 slice C, with the review of B and C; the engineering manager\'s rulings R1 to R8). One '
+    'attempt of the committed task on one disposable guest created with create --provision --inference, its forward '
+    'to the tunnel held. The run\'s steps, in this order: ' + '; '.join(D1_STEPS.values()) + '. Step (0) is host-only '
+    'and read-only (no store write); a failure there, at (1) or at (1a) dispatches nothing. E-05.11\'s steps, '
+    'unchanged and judged by NATIVE_QUALIFICATION_RULE\'s judgements from tools/guest.py\'s probe vantage, are: (1) '
+    'its (1); (1a) its (1a); (4) its (3); (5a) its (4a); (5b) its (5); (5c) its (6); (7a) its (8); (7b) its (9); (7c) '
+    'its (10); (7d) its (10a); (7e) its (11); (7f) its (11a); (7g) its (11b); (7h) its (11c); (10) its (12), the '
+    'delete made by the dispatcher; (10a) its (12a); (10b) its (12b); (11) its (13). E-05.11\'s step (11d) (the '
+    'Owner\'s credentials by value) is not run: no D1 leaf carries it (the plan\'s amendment of 2026-11-15); the '
+    'Owner\'s credentials are judged absent by name and structure only, (7h). Steps (2), (3), (5), (6), (8), (8a), (9) '
+    'and (12) are this run\'s: the dispatcher\'s acts ((2), SEED, (5), RESULT, the runtime stop, the conversation\'s '
+    'delete, the end, (12)) go through the dispatch module. (3) is E-01.3.2\'s verdict: GET /api/conversations/count '
+    '1, the reserved conversation, its runtime available (attempt_run\'s API half), and from the root facts exactly '
+    'one conversation container, serving the reserved conversation, with no container problem (the locked image, the '
+    'declared mounts: the workspace scope, the user, no capability, no privilege), the outer server listing exactly '
+    'the reserved conversation, and its agent the selected profile (acp_server claude-code, acp_model ' +
+    NATIVE_MODEL_MAIN + '); a FAIL sends no message and ends the attempt (containment-stop INSPECTION_FAILED); an '
+    'UNKNOWN (a field the answer does not name) sends no message, ends nothing and holds the attempt for the '
+    'engineering manager (its conversation kept). (5) passes when the turn journal is confirmed (by a 2xx, or '
+    'reconciled from the events). STOP: any of NATIVE_QUALIFICATION_RULE\'s stop conditions, observed at any step after '
+    'the dispatch, is recorded durably as it is observed (dispatch/attempt/<attempt id>/stop/<kind>/<code>: the '
+    'dispatcher record D1_STOP_RECORDS maps it to, a stop no entry names a containment-stop) and ends the attempt '
+    'through E-05.8\'s mechanism (attempt_end.end_interrupted_attempt, trigger attempt-stopped, with that record), on '
+    'every path, a dispatcher refusal\'s included, before the result journal is dispatched: nothing reaches Gitea, '
+    'and no resume and no result path runs past a recorded stop. Before a stop ends the attempt while its container '
+    'runs, (7e) and (7h) run. A turn that ends error, stuck or paused runs no RESULT, and a run that did not start '
+    '(the message saved, the run not started) ends nothing at once: after (10a) and (10b), and before the delete, the '
+    'attempt is ended through E-05.8, with a stop\'s record when one was observed (a security stop), else as the '
+    'interruption it is (trigger conversation-ended, classified from its events; or the run-not-started record). The '
+    'result path (12) runs only when no stop occurred and (11) passes; its own outbound search (the bundle, every '
+    'text, the run record\'s draft) must find nothing with valid controls; a failing test run proceeds marked FAILED '
+    'and E-05.5\'s verified result is then not met (R1). Run rules: nothing here destroys the guest; a dispatcher '
+    'refusal after the turn that is not a stop tears nothing down (the conversation and the guest are kept for a '
+    'resumed result step, --resume); a dispatcher refusal before the message, a lost create answer, an undecided '
+    'inspection or a turn past its ceiling is held for the engineering manager; the guest may be destroyed only once '
+    'the result journal is confirmed or the attempt has an end record (guest_may_be_destroyed). A resumed run first '
+    'refuses an attempt with an end record or a recorded stop; it then reads the native entry once more, in its own '
+    'process, only to search with it (its fingerprint must be the attempt\'s); it never sends the token into the '
+    'guest: every call of a resumed run is sealed with a fresh nonce, and only after its last call is the token held '
+    'and every answer of the run searched for it in memory, before anything is recorded (a hit is a stop). A resumed '
+    'run\'s evidence is its record together with the first run\'s. RESULT: PASS iff every step passes; FAIL when a '
+    'step fails or a stop occurred; otherwise UNKNOWN. Each proof clause (D1_CLAUSES) is PASS when every step that '
+    'decides it passes, FAIL when one fails, otherwise UNKNOWN; a clause the run does not decide names its offline '
+    'evidence and is OFFLINE; three clauses are judged as d1_clause_verdicts states (the agent\'s tests: RESULT\'s tests '
+    'passed on the committed tree and the events show the agent ran them, FAIL when RESULT\'s tests failed, UNKNOWN '
+    'when the agent\'s own run is not observed; the two interruption clauses from the record\'s interruption section). '
+    + D1_STEP0_OBSERVED + ' ' + NATIVE_PERMISSION_NOTE + ' ' + NATIVE_ENCRYPTED_STATE_NOTE + ' ' +
     NATIVE_OFF_LINK_NOTE)
-# Each proof clause of the three leaves and the steps that decide it (or its offline evidence).
+# Each proof clause of the three leaves and the steps that decide it, its offline evidence, or a judgement of
+# d1_clause_verdicts (``judged:<name>``).
 D1_CLAUSES = (
     ('E-01.3.2', 'exactly one approved Docker conversation matches the reserved UUID', ('2', '3')),
     ('E-01.3.2', 'the disposable work attempt creates one Docker conversation with the matching UUID, the selected '
                  'profile and the returned runtime identity (E-01.3)', ('2', '3')),
     ('E-05.4', 'from a reserved attempt\'s result in the exchange, the dispatcher, as the stage\'s bot, pushes '
-               'work/<attempt> and opens a pull request naming the repository, base, exact SHA and task', ('8', '9', '12')),
+               'work/<attempt> and opens a pull request naming the repository, base, exact SHA and task',
+     ('8', '9', '12')),
     ('E-05.4', 'untrusted code has no network path to Gitea, as observed', ('5b', '7a', '8a', '7c', '10a', '10b')),
     ('E-05.4', 'no bot can merge it', 'offline: the result path has no merge route (attempt_tokens.ResultSession), '
                'the Gitea fake refuses a bot\'s merge (test_result_path), the demo\'s protection; the read-back of (12) '
@@ -18891,7 +18917,8 @@ D1_CLAUSES = (
      'records what this run wrote'),
     ('E-05.5', 'the resolver resolves the task\'s approved inputs (the digest-bound agent assignment, the admitted '
                'create template)', ('0', '2')),
-    ('E-05.5', 'exactly one contained conversation per attempt in a disposable guest, never two at once', ('1', '3', '7a')),
+    ('E-05.5', 'exactly one contained conversation per attempt in a disposable guest, never two at once',
+     ('1', '3', '7a')),
     ('E-05.5', 'one coding agent through the qualified ACP provider on the native profile, model access only through '
                'the tunnel to the provider\'s one origin', ('5a', '7c', '7d', '10a')),
     ('E-05.5', 'no credential other than the native secret set enters the attempt (no other Owner credential, no host '
@@ -18901,18 +18928,23 @@ D1_CLAUSES = (
     ('E-05.5', 'before the result path, the outbound search finds no copy of the native token in the result bundle, '
                'the records and the reports', ('11', '12')),
     ('E-05.5', 'the agent edits the demo repository and runs its tests in the container, offline, with what the '
-               'pinned image contains', ('6', '8')),
+               'pinned image contains', 'judged:agent-tests'),
     ('E-05.5', 'the result returns through the guest exchange', ('8',)),
     ('E-05.5', 'the builder bot pushes a work/ branch and opens a pull request, a draft, not mergeable but by the '
                'Owner-authorized protected merge; no bot merges', ('12',)),
     ('E-05.5', 'the Owner receives a report with the diff and the test output, without a Gitea sign-in', ('12',)),
     ('E-05.5', 'every provider connection went through the tunnel to the provider\'s one origin, as the tunnel\'s log '
                'shows', ('7c', '10a')),
-    ('E-05.5', 'the model identifiers used are those the Owner approved, as the admitted create and the events show',
-     ('3', '7f')),
+    ('E-05.5', 'the model identifiers used are those the Owner approved: the conversation\'s selected model (3) and '
+               'the CLI\'s transcript (7f) (the events\' mentions are recorded as data)', ('3', '7f')),
     ('E-05.5', 'lineage from the task to the branch is recorded', ('12',)),
+    ('E-05.5', 'if no interruption occurred, the record says so', 'judged:no-interruption'),
+    ('E-05.5', 'if a provider interruption ended an attempt, it ended through E-05.8\'s mechanism (its runtime '
+               'stopped, its end record written, no result returned) and the record names the attempt and how it '
+               'ended', 'judged:interruption-ended'),
 )
-
+D1_INTERRUPTION_OFFLINE = ('offline: no interruption occurred, so the interruption path stands on E-05.8\'s offline '
+                           'evidence (integrations/dispatch/tests/test_attempt_end.py; attempt_end.py)')
 
 def d1_stop_record(stop, attempt_id, phase):
     """The dispatcher record ({kind, code, ref}) of one stop condition (D1_STOP_RECORDS)."""
@@ -18933,20 +18965,60 @@ def d1_stop_records(stop_conditions, attempt_id, phase):
     return out
 
 
-def d1_clause_verdicts(steps):
-    """Each D1_CLAUSES clause judged from the steps' verdicts (D1_RUN_RULE)."""
+def d1_clause_verdicts(steps, facts=None):
+    """Each D1_CLAUSES clause judged from the steps' verdicts (D1_RUN_RULE), and three from FACTS (the record's):
+    ``tests_status`` (RESULT's tests on the committed tree, '0' passed), ``agent_ran_its_tests`` (from the events),
+    ``end`` (the attempt's end record or None) and ``published`` (the result path confirmed).
+
+    - judged:agent-tests: (6) and (8) must pass; RESULT's tests failed is FAIL (R1: the pull request is still opened,
+      E-05.5 not met); PASS only when they passed AND the events show the agent ran its tests; else UNKNOWN;
+    - judged:no-interruption: PASS when the attempt has no end record and the record says no interruption occurred;
+      NOT-APPLICABLE when the attempt was ended (the next clause decides);
+    - judged:interruption-ended: OFFLINE (E-05.8's evidence) when no interruption occurred; for an interruption's end
+      (classification interruption or authentication-refusal) PASS when its runtime was stopped, it is the attempt's
+      record and no result was published, else UNKNOWN; an unclassified end UNKNOWN (the engineering manager
+      classifies it); a security stop's end NOT-APPLICABLE (not an interruption)."""
+    facts = facts or {}
     verdicts = {s['step'].split(' ', 1)[0].strip('()'): s.get('verdict') for s in steps}
+
+    def from_steps(deciding):
+        seen = [verdicts.get(k) for k in deciding]
+        return 'FAIL' if 'FAIL' in seen else 'PASS' if all(v == 'PASS' for v in seen) else 'UNKNOWN'
     out = []
     for leaf, clause, deciding in D1_CLAUSES:
-        if isinstance(deciding, str):
-            out.append({'leaf': leaf, 'clause': clause, 'verdict': 'OFFLINE', 'evidence': deciding})
-            continue
-        seen = [verdicts.get(k) for k in deciding]
-        verdict = 'FAIL' if 'FAIL' in seen else 'PASS' if all(v == 'PASS' for v in seen) else 'UNKNOWN'
-        out.append({'leaf': leaf, 'clause': clause, 'verdict': verdict,
-                    'steps': {f'({k})': verdicts.get(k) for k in deciding}})
+        entry = {'leaf': leaf, 'clause': clause}
+        if isinstance(deciding, tuple):
+            entry.update(verdict=from_steps(deciding), steps={f'({k})': verdicts.get(k) for k in deciding})
+        elif deciding == 'judged:agent-tests':
+            status, ran = facts.get('tests_status'), facts.get('agent_ran_its_tests')
+            base = from_steps(('6', '8'))
+            verdict = 'FAIL' if base == 'FAIL' or (status is not None and status != '0') else \
+                'PASS' if base == 'PASS' and status == '0' and ran == 'observed' else 'UNKNOWN'
+            entry.update(verdict=verdict, steps={'(6)': verdicts.get('6'), '(8)': verdicts.get('8')},
+                         result_tests=status, agent_ran_its_tests=ran)
+        elif deciding == 'judged:no-interruption':
+            end = facts.get('end')
+            entry.update(verdict='PASS' if end is None and str(facts.get('interruption', '')).startswith('none')
+                         else 'NOT-APPLICABLE' if end is not None else 'UNKNOWN',
+                         interruption=facts.get('interruption'))
+        elif deciding == 'judged:interruption-ended':
+            end = facts.get('end')
+            if end is None:
+                entry.update(verdict='OFFLINE', evidence=D1_INTERRUPTION_OFFLINE)
+            else:
+                kind = end.get('classification')
+                if kind in ('interruption', 'authentication-refusal'):
+                    ok = end.get('conversationStopped') is True and end.get('resultHandedOn') is False and \
+                        not facts.get('published')
+                    entry['verdict'] = 'PASS' if ok else 'UNKNOWN'
+                else:
+                    entry['verdict'] = 'NOT-APPLICABLE' if kind == 'non-retryable' else 'UNKNOWN'
+                entry['end'] = {k: end.get(k) for k in ('classification', 'causes', 'conversationStopped',
+                                                        'resultHandedOn')}
+        else:
+            entry.update(verdict='OFFLINE', evidence=deciding)
+        out.append(entry)
     return out
-
 
 def d1_event_facts(events):
     """What the record states from the conversation's events (E-05.5): whether the agent ran its tests (a tool call
@@ -19019,7 +19091,8 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                           log_label='d1-run')
     run, memo, steps = obs.run, obs.memo, obs.steps
     state = {'key': resume, 'attempt': None if current is None else current.get('attempt_id'), 'outcome': None,
-             'verified': None, 'end': None, 'disposition': 'not-dispatched', 'refusal': None, 'phase': 'preflight'}
+             'verified': None, 'end': None, 'disposition': 'not-dispatched', 'refusal': None, 'phase': 'preflight',
+             'pending_end': None, 'stops_recorded': []}
 
     def dispatcher_api(requests, timeout=900, secret=None):
         # the dispatcher's own calls ride the same sealed channel (sealed with the native token once it is held, the
@@ -19030,6 +19103,7 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
             obs.stop('a credential found in a recorded surface (the native token echoed in an Agent Server answer)',
                      route=' '.join(f"{r.get('method')} {str(r.get('path')).split('?')[0]}" for r in requests),
                      occurrences=memo['echoes'][-1]['occurrences'])
+            persist(state['phase'])
         return data
     transport = obs.gt.GuestTransport(dispatcher_api, obs.profile, api_login=GUEST_API_LOGIN)
 
@@ -19045,8 +19119,28 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
     def records(phase):
         return d1_stop_records(obs.stop_conditions, state['attempt'] or 'unknown', phase)
 
+    def persist(phase):
+        """B1 (review of B and C): every observed stop's dispatcher record kept durably in the integration store as
+        it is observed (the dispatcher's ``record_stop``: kind and code, no text), so that no resume and no result path
+        runs past it."""
+        done = len(state['stops_recorded'])
+        if state['key'] is None or len(obs.stop_conditions) <= done:
+            return
+        fresh = d1_stop_records(obs.stop_conditions[done:], state['attempt'] or 'unknown', phase)
+        try:
+            dispatcher.record_stop(state['key'], fresh)
+        except Exception as exc:  # noqa: BLE001 - recorded; the end still carries the stop
+            state['refusal'] = {'at': f'record-stop ({phase})', 'code': getattr(exc, 'code', type(exc).__name__)}
+            return
+        state['stops_recorded'] += [dict(r, stop=s.get('stop')) for r, s in zip(
+            [d1_stop_record(s, state['attempt'] or 'unknown', phase) for s in obs.stop_conditions[done:]],
+            obs.stop_conditions[done:])]
+
     def always_steps():
         # before a stop ends the attempt while its container runs: the persisted-token search and the Owner's names
+        # (not in a resumed run: it holds no token while it calls the guest, S2; the first run's record has them)
+        if resume is not None:
+            return
         if not ran('7e'):
             run(D1_STEPS['7e'], obs.persisted_step, always=True, needs=('present',))
         if not ran('7h'):
@@ -19057,6 +19151,7 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
             return []
         always_steps()
         state['phase'] = phase
+        persist(phase)
         return records(phase)
 
     def inspect(conversation_id):
@@ -19106,11 +19201,17 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
     def observe(phase, **facts):
         """attempt_run's hook: E-05.11's observations at each phase; the stops become dispatcher records."""
         if phase == 'before-message':
+            if (memo.get('inspection') or {}).get('verdict') == 'UNKNOWN':
+                # review of B and C, NIT 10 (the engineering manager's ruling): E-01.3.2's proof needs a decided
+                # inspection; an undecided one sends no message and ends nothing: held for the engineering manager
+                raise Refused('INSPECTION_UNDECIDED', 'the inspection is UNKNOWN: no message is sent')
             run(D1_STEPS['4'], obs.before_step, needs=('created',))
             return stopping(phase)
         if phase == 'after-message':
             memo['sent'] = True
-            step('5', 'PASS', {'turn': (dispatcher.state(state['key']) or {}).get('turn')})
+            turn = (dispatcher.state(state['key']) or {}).get('turn')
+            # review of B and C, NIT 3: the turn journal confirmed (by a 2xx, or reconciled from the events)
+            step('5', 'PASS' if turn == 'confirmed' else 'FAIL', {'turn': turn})
             run(D1_STEPS['5a'], obs.start_step, needs=('sent',))
             run(D1_STEPS['5b'], obs.during_step, needs=('sent',))
             run(D1_STEPS['5c'], obs.job_contract_step, needs=('sent',))
@@ -19146,17 +19247,22 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
         ssh = Ssh(obs.profile, idir, record['ports']['ssh'])
         return isinstance(guest_file_state(ssh, f'{ex["guest_dir"]}/{name_}'), tuple)
 
-    def end(trigger, phase):
+    def end(trigger, phase, pending=()):
+        """End the attempt through E-05.8 (review of B and C, B1 and S1): with the observed stops' records (trigger
+        attempt-stopped, a security stop) whenever a stop was observed, else TRIGGER with PENDING (an interruption)."""
+        persist(phase)
+        stopped_ = bool(obs.stop_conditions)
         try:
-            state['end'] = dispatcher.end(state['key'], transport,
-                                          records(phase) if trigger == 'attempt-stopped' else [], trigger)
+            state['end'] = dispatcher.end(state['key'], transport, records(phase) if stopped_ else list(pending),
+                                          'attempt-stopped' if stopped_ else trigger)
             state['disposition'] = 'ended'
         except Exception as exc:  # noqa: BLE001 - an end that cannot be written is the engineering manager's
             state['refusal'] = {'at': f'end ({phase})', 'code': getattr(exc, 'code', type(exc).__name__)}
             state['disposition'] = 'held-for-engineering-manager'
 
     def outcome_of(outcome):
-        """attempt_run's RunOutcome: the inspection's API half, the result, the runtime; the attempt's end."""
+        """attempt_run's RunOutcome: the inspection's API half, the result, the runtime; the attempt's end, or the
+        end left to this driver after its teardown observations (a turn not finished; a run that did not start)."""
         state['outcome'] = outcome.to_json()
         if outcome.outcome == 'inspection-failed' and memo.get('inspection') is not None:
             memo['inspection']['verdict'] = 'FAIL'
@@ -19167,12 +19273,22 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
             step('9', 'PASS' if outcome.runtime == 'missing' else 'FAIL',
                  {'runtime': outcome.runtime, 'result_journal': 'reserved'})
         elif outcome.outcome == 'turn-not-finished':
-            end('conversation-ended', 'turn')
+            state['pending_end'] = ('conversation-ended', ())
+        elif outcome.outcome == 'run-not-started' and outcome.end is None:
+            state['pending_end'] = ('attempt-stopped', tuple(getattr(outcome, 'pending', ()) or ()))
         else:
             state['end'] = outcome.end
             state['disposition'] = 'ended'
 
-    def teardown():
+    def teardown_observations():
+        run(D1_STEPS['10a'], obs.tunnel_whole_run_step, always=True, needs=('create_sent', 'log_name', 'sent'))
+        run(D1_STEPS['10b'], obs.guard_window_step, always=True, needs=('create_sent', 'guard_start'))
+        persist('teardown')
+
+    def teardown(pending=None):
+        """(10) to (10b). With PENDING (an end left to the driver, S1) the whole-run log and the guard window are read
+        first (the guards up to now), the attempt is ended (a stop's record if one was observed, else PENDING's
+        interruption) while its conversation still exists, and the conversation is deleted after that."""
         def delete():
             status = dispatcher.delete(state['key'], transport)
             report = obs.facts()
@@ -19182,9 +19298,40 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
             ok = status in (200, 204, 404) and not left and obs.ok_status(count) and count.get('body') == 0
             return ('PASS' if ok else 'FAIL'), {'delete': status, 'containers_left': len(left),
                                                  'outer_count_after': count.get('body')}
+        if pending is not None:
+            try:
+                memo['guard_end'] = native_guard_snapshot(obs.facts())
+            except obs.caught:
+                memo.pop('guard_end', None)
+            teardown_observations()
+            end(pending[0], 'teardown', pending[1])
+            run(D1_STEPS['10'], delete, always=True, needs=('create_sent',))
+            # the whole-run log read again after the delete (the end stopped the runtime first, so nothing of the
+            # attempt runs by then); a stop seen only here is recorded durably, the end already written
+            run(D1_STEPS['10a'] + ' (read again after the delete)', obs.tunnel_whole_run_step, always=True,
+                needs=('create_sent', 'log_name', 'sent'))
+            persist('teardown')
+            return
         run(D1_STEPS['10'], delete, always=True, needs=('create_sent',))
-        run(D1_STEPS['10a'], obs.tunnel_whole_run_step, always=True, needs=('create_sent', 'log_name', 'sent'))
-        run(D1_STEPS['10b'], obs.guard_window_step, always=True, needs=('create_sent', 'guard_start'))
+        teardown_observations()
+
+    def echo_search(phase):
+        """A resumed run seals its calls with nonces (S2): the token, held only now, is searched for in memory in
+        every answer of the run before anything is recorded; a hit is a stop."""
+        ns = native_token_search_module()
+        search = ns.new_search(obs.token())
+        for i, (where, blob) in enumerate(memo['surfaces']):
+            search.capture(f'run surface {i}', blob)
+        try:
+            report = ns.report(search, obs.token())
+        except ns.SearchRefused as exc:
+            memo['resume_echo_search'] = {'refused': exc.code}
+            return
+        memo['resume_echo_search'] = key_search_summary(report)
+        if report['verdict'] == 'found':
+            obs.stop('a credential found in a recorded surface (the native token echoed in an Agent Server answer)',
+                     phase=phase, resumed=True)
+            persist(phase)
 
     def record_now():
         return {'schema': D1_RUN_SCHEMA, 'operation': 'd1-run', 'plan_leaves': list(D1_RUN_LEAVES),
@@ -19192,8 +19339,10 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                 'resumed': resume, 'operation_key': state['key'], 'attempt': state['attempt'], 'conversation': cid,
                 'started_at': obs.started, 'transport_calls': transport.calls, 'observer_calls': obs.transport.calls,
                 'token_echoes': memo['echoes'], 'steps': steps, 'stop_conditions': obs.stop_conditions,
-                'outcome': state['outcome'], 'end': state['end'], 'refusal': state['refusal'],
-                'disposition': state['disposition'], 'prepared': {k: v for k, v in prepared.items() if k != 'base'}}
+                'stops_recorded': state['stops_recorded'], 'outcome': state['outcome'], 'end': state['end'],
+                'refusal': state['refusal'], 'disposition': state['disposition'],
+                'resume_echo_search': memo.get('resume_echo_search'),
+                'prepared': {k: v for k, v in prepared.items() if k != 'base'}}
 
     def merged(draft, key_):
         """Steps and stops the draft's redaction or search added, carried into the run's own lists."""
@@ -19218,7 +19367,16 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
         memo['ready'] = len(checks) == 4 and all(checks.values())
         return ('PASS' if memo['ready'] else 'FAIL'), {'checks': checks, 'resumed': resume}
 
-    interrupted, published = False, None
+    def refused(exc, at, disposition):
+        """A refusal of the dispatcher's (not a stop): recorded; B1: when a stop was observed, the attempt is ended
+        with its record whatever the refusal (allowed while the result journal is only reserved)."""
+        state['refusal'] = {'at': at, 'code': getattr(exc, 'code', type(exc).__name__)}
+        state['disposition'] = disposition
+        persist(at)
+        if obs.stop_conditions and state['key'] is not None and state['end'] is None and at != 'dispatch':
+            end('attempt-stopped', at)
+
+    interrupted, published, resumed_token = False, None, []
     try:
         step('0', 'PASS', {k: v for k, v in prepared.items() if k != 'base'})
         run(D1_STEPS['1'], obs.preconditions if resume is None else resume_preconditions)
@@ -19230,16 +19388,15 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                 result = dispatcher.dispatch(transport, obs.hold)
             except Exception as exc:  # noqa: BLE001 - a refused or unanswered create: recorded, never retried
                 result = None
-                code = getattr(exc, 'code', type(exc).__name__)
-                state['refusal'] = {'at': 'dispatch', 'code': code}
                 state['key'] = getattr(exc, 'operation_key', None)
                 memo['create_sent'] = type(exc).__name__ == 'CreateOutcomeUnknown'
-                state['disposition'] = 'held-for-engineering-manager' if memo['create_sent'] else 'not-dispatched'
-                step('2', 'UNKNOWN' if memo['create_sent'] else 'FAIL', {'refused': code})
+                refused(exc, 'dispatch', 'held-for-engineering-manager' if memo['create_sent'] else 'not-dispatched')
+                step('2', 'UNKNOWN' if memo['create_sent'] else 'FAIL', {'refused': state['refusal']['code']})
             if result is not None:
                 state['key'], state['attempt'] = result['operation_key'], result['attempt_id']
                 memo['create_sent'] = memo['created'] = memo['present'] = True
                 state['disposition'] = 'held-for-engineering-manager'
+                persist('dispatch')                       # a stop seen at the create (an echo of the token)
                 ok = result['conversation_id'] == cid and obs.holder() is not None
                 step('2', 'PASS' if ok else 'FAIL', dict(result, planned_conversation=cid,
                                                          token_held=obs.holder() is not None))
@@ -19248,12 +19405,12 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                     outcome = dispatcher.run(state['key'], transport, inspect, pull, observe)
                 except Exception as exc:  # noqa: BLE001 - a refusal that is not a stop: kept for a resumed step
                     outcome = None
-                    state['refusal'] = {'at': state['phase'], 'code': getattr(exc, 'code', type(exc).__name__)}
                     turn = (dispatcher.state(state['key']) or {}).get('turn')
-                    state['disposition'] = 'held-for-resume' if turn == 'confirmed' else \
-                        'held-for-engineering-manager'
+                    resumable = turn == 'confirmed' and getattr(exc, 'code', None) != 'INSPECTION_UNDECIDED'
+                    refused(exc, 'run', 'held-for-resume' if resumable else 'held-for-engineering-manager')
                 if outcome is not None:
                     outcome_of(outcome)
+                    persist('run')
         elif ready:
             state['phase'] = 'resume'
             memo['create_sent'] = memo['created'] = True
@@ -19262,41 +19419,61 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
             except obs.caught:
                 memo['present'] = False
             memo['sent'] = current.get('turn') == 'confirmed'
-            try:
-                dispatcher.read_native(obs.hold, resume)
-                if current.get('end'):
-                    raise Refused('REFUSED', f'attempt {current.get("attempt_id")} has an end record: nothing resumes')
-                if current.get('result') in ('dispatched', 'unknown', 'confirmed'):
-                    state['verified'] = dispatcher.recorded(resume)
-                    step('8', 'PASS', {'result': state['verified'].to_json(), 'resumed': 'the recorded intake'})
-                else:
-                    outcome_of(dispatcher.resume(resume, transport, pull, exists, observe))
-            except Exception as exc:  # noqa: BLE001 - recorded; nothing is torn down
-                state['refusal'] = {'at': 'resume', 'code': getattr(exc, 'code', type(exc).__name__)}
-                state['disposition'] = 'held-for-resume'
-        # the teardown: only an attempt that ended, or whose result is verified and reserved (run rule 2)
-        if state['disposition'] == 'ended' or state['verified'] is not None:
+            if current.get('end'):                # NIT 2: decided before the entry is read; nothing resumes
+                state['refusal'] = {'at': 'resume', 'code': 'ATTEMPT_ENDED'}
+                state['disposition'] = 'ended'
+            elif current.get('stops'):            # B1: a recorded stop is never resumed past
+                state['refusal'] = {'at': 'resume', 'code': 'ATTEMPT_STOP_RECORDED',
+                                    'stops': list(current['stops'])}
+                state['disposition'] = 'held-for-engineering-manager'
+            else:
+                try:
+                    dispatcher.read_native(resumed_token.append, resume)   # held, never sealed into a call (S2)
+                    if current.get('result') in ('dispatched', 'unknown', 'confirmed'):
+                        state['verified'] = dispatcher.recorded(resume)
+                        step('8', 'PASS', {'result': state['verified'].to_json(), 'resumed': 'the recorded intake'})
+                    else:
+                        outcome_of(dispatcher.resume(resume, transport, pull, exists, observe))
+                        persist('resume')
+                except Exception as exc:  # noqa: BLE001 - recorded; nothing torn down (unless B1 ends the attempt)
+                    refused(exc, 'resume', 'held-for-engineering-manager' if getattr(exc, 'code', None) in (
+                        'ATTEMPT_STOP_RECORDED', 'OUTBOUND_TOKEN_MISMATCH') else 'held-for-resume')
+        # the teardown: only an attempt that ended or is to be ended, or whose result is verified and reserved
+        if state.get('pending_end') is not None:
+            if memo.get('present'):
+                teardown(state['pending_end'])
+            else:
+                end(state['pending_end'][0], 'teardown', state['pending_end'][1])
+        elif state['disposition'] == 'ended' or state['verified'] is not None:
             if memo.get('present'):
                 teardown()
-            if state['verified'] is not None and state['end'] is None:
+        if resumed_token:                         # S2: only now, after every call of the resumed run
+            obs.hold(resumed_token[0])
+            echo_search('resume')
+            if obs.stop_conditions and state['end'] is None and state['key'] is not None:
+                end('attempt-stopped', 'resume')
+        if state['verified'] is not None and state['end'] is None:
+            if obs.stop_conditions:
+                end('attempt-stopped', 'teardown')
+            else:
+                state['disposition'] = 'held-for-resume'      # until the result path confirms
+                draft = obs.redact_record(record_now())
+                merged(draft, None)
+                if not obs.stop_conditions:
+                    obs.outbound_step(draft, 'the result bundle and the report: searched by the result path (12)',
+                                      step=D1_STEPS['11'])
+                    merged(draft, '11')
                 if obs.stop_conditions:
-                    end('attempt-stopped', 'teardown')
-                else:
-                    state['disposition'] = 'held-for-resume'      # until the result path confirms
-                    draft = obs.redact_record(record_now())
-                    merged(draft, None)
-                    if not obs.stop_conditions:
-                        obs.outbound_step(draft, 'the result bundle and the report: searched by the result path (12)',
-                                          step=D1_STEPS['11'])
-                        merged(draft, '11')
-                    if obs.stop_conditions:
-                        end('attempt-stopped', 'gate')
+                    end('attempt-stopped', 'gate')
     except BaseException:
         interrupted = True
         raise
     finally:
         if interrupted and obs.holder() is not None:
             obs.holder().drop()
+        for token_ in resumed_token:
+            if interrupted:
+                token_.drop()
     try:
         facts_ = d1_event_facts(memo.pop('event_items', None))
         observations = {'format': 'ai-engineering-harness/profiles/d1-run-observations/v1', 'rule': 'D1_RUN_RULE',
@@ -19320,10 +19497,18 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
         out_record = dict(record_now(), events=facts_, observations=observations,
                           interruption=observations['interruption'],
                           guest_may_be_destroyed=state['disposition'] in ('published', 'ended', 'not-dispatched'),
+                          # a stop observed only after an interruption's end was written: the end is not a security
+                          # stop; the engineering manager escalates it (attempt_end.py record-end-cause security-stop)
+                          end_escalation_needed=bool(state['end'] is not None and obs.stop_conditions and
+                                                     state['end'].get('classification') != 'non-retryable'),
                           ended_at=utc_now())
         out_record = obs.redact_record(out_record)
         obs.withhold(out_record)
-        out_record['clauses'] = d1_clause_verdicts(out_record['steps'])
+        out_record['clauses'] = d1_clause_verdicts(out_record['steps'], {
+            'tests_status': (state['verified'].tests or {}).get('status')
+            if state['verified'] is not None else None,
+            'agent_ran_its_tests': facts_['agent_ran_its_tests'], 'end': state['end'],
+            'published': state['disposition'] == 'published', 'interruption': observations['interruption']})
         out_record['result'] = custody_verdict(out_record['steps'], out_record['stop_conditions'])
     finally:
         obs.release()

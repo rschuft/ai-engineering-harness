@@ -140,6 +140,86 @@ class Dispatch(Fixture):
         self.assertEqual(caught.exception.code, 'OUTBOUND_TOKEN_MISMATCH')
 
 
+class Stops(Fixture):
+    """Review of B and C, B1: a stop recorded durably refuses the resume, the recorded result and the result path."""
+
+    def test_a_recorded_stop_refuses_every_later_act(self):
+        dispatcher = self.dispatcher()
+        result = dispatcher.dispatch(self.server, lambda token: None)
+        key = result['operation_key']
+        self.assertEqual(dispatcher.stops(key), [])
+        record = {'kind': 'credential-stop', 'code': 'TOKEN_ECHOED', 'ref': f'attempt:{result["attempt_id"]}#run'}
+        written = dispatcher.record_stop(key, [record])
+        self.assertEqual(dispatcher.record_stop(key, [dict(record, ref='attempt:x#later')]), written)   # one receipt
+        held = self.store.get(written[0])
+        self.assertEqual(held.state, 'confirmed')
+        self.assertNotIn('ref', held.intent_json)                     # the intent: attempt, kind and code
+        self.assertEqual(dispatcher.stops(key), [{'kind': 'credential-stop', 'code': 'TOKEN_ECHOED'}])
+        self.assertEqual(dispatcher.state(key)['stops'], dispatcher.stops(key))
+        for call in (lambda: dispatcher.resume(key, self.server, None, None, None), lambda: dispatcher.recorded(key),
+                     lambda: dispatcher.publish(key, None, None, None, {}, None)):
+            with self.assertRaises(LD.ResumeRefused) as caught:
+                call()
+            self.assertEqual(caught.exception.code, 'ATTEMPT_STOP_RECORDED')
+        with self.assertRaises(di.DispatchRefused):
+            dispatcher.record_stop(key, [{'kind': 'not-a-kind', 'code': 'X', 'ref': 'a'}])
+
+    def test_the_run_defers_a_run_that_did_not_start_to_the_driver(self):
+        dispatcher = self.dispatcher()
+        with mock.patch.object(LD.AR, 'run_attempt', return_value='outcome') as run:
+            dispatcher.base = object()
+            self.assertEqual(dispatcher.run('k', self.server, None, None, None), 'outcome')
+        self.assertTrue(run.call_args.kwargs['defer_interruption_end'])
+
+    def test_the_resumed_read_keeps_one_open_token(self):
+        """NIT 2: the wrapper's own copy is dropped; only the token handed on stays open."""
+        dispatcher = self.dispatcher()
+        result = dispatcher.dispatch(self.server, lambda token: None)
+        made = []
+        real = NT.NativeToken
+
+        class Counting(real):
+            __slots__ = ()
+
+            def __init__(self, token):
+                super().__init__(token)
+                made.append(self)
+        held = []
+        with mock.patch.object(NT, 'NativeToken', Counting):
+            dispatcher.read_native(held.append, result['operation_key'])
+        self.assertEqual(len(held), 1)
+        self.assertTrue(held[0].open)
+        self.assertEqual([t.open for t in made if t is not held[0]], [False] * (len(made) - 1))
+
+
+trp = _load('test_result_path', HERE / 'test_result_path.py')
+
+
+class Regenerate(trp.Fixture):
+    """NIT 6: a resume with a confirmed result journal and no report regenerates the report from the receipt and
+    the verified objects (searched before it is written), saying which texts are digests only."""
+
+    def test_the_report_is_regenerated_from_the_receipt(self):
+        verified = self.reserved(resumed=True)       # as recorded_result makes it from the intake: digests only
+        self.assertEqual(self.publish(verified).outcome, 'confirmed')            # no report directory then
+        dispatcher = LD.D1Dispatcher(
+            request={}, integration_store=self.store, workspaces=None, work_source=None, project=None,
+            load_manifest=None, resolve=None, expected={}, provider=self.bot_provider, gitea_port=trp.PORT,
+            http=self.gitea, read_artifact=self.read_artifact)
+        recorded = verified
+        report_dir = self.scratch / 'report'
+        with mock.patch.object(LD.RP, 'gitea_target', return_value=self.target):
+            out = dispatcher.publish(self.key, recorded, self.native, {'run': 'resumed'}, {}, report_dir)
+        self.assertEqual(out['outcome'], 'already-confirmed')
+        self.assertTrue(out['report_regenerated']['digest_only_texts'])
+        text = (report_dir / 'report.md').read_text(encoding='utf-8')
+        self.assertIn(str(out['receipt']['pullRequest']['number']), text)
+        self.assertNotIn(trp.te.TOKEN, text + (report_dir / 'report.json').read_text(encoding='utf-8'))
+        with mock.patch.object(LD.RP, 'gitea_target', return_value=self.target):   # a report there is kept
+            again = dispatcher.publish(self.key, recorded, self.native, {'run': 'resumed'}, {}, report_dir)
+        self.assertIsNone(again['report_regenerated'])
+
+
 class Providers(unittest.TestCase):
     def test_one_native_read(self):
         held = []
