@@ -536,7 +536,9 @@ class NoMerge(Fixture):
                                  ('DELETE', f'/repos/{DEMO}/branches/{self.branch()}'),
                                  ('GET', f'/repos/{DEMO}/pulls/1/merge'), ('GET', '/token'),
                                  ('POST', f'/repos/other/repo/pulls'), ('GET', f'/repos/{DEMO}/branches/other'),
-                                 ('GET', f'/repos/{DEMO}/pulls?state=all&page=1&limit=50')):
+                                 ('GET', f'/repos/{DEMO}/pulls?state=all&page=1&limit=50'),
+                                 # review of B and C, NIT 1: a trailing newline (re's $ matched before it)
+                                 ('GET', f'/repos/{DEMO}/branches/main\n'), ('POST', f'/repos/{DEMO}/pulls\n')):
                 with self.subTest(method=method, path=path):
                     with self.assertRaises(di.DispatchRefused) as caught:
                         session.call(method, path, {'Do': 'merge'} if method == 'POST' else None)

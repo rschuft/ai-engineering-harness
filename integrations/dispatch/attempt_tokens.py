@@ -228,7 +228,8 @@ class ResultSession:
         self._http = http or roles.host.http_get
 
     def allowed(self, method: str, path: str) -> bool:
-        return any(m == method and p.match(path) for m, p in self.routes)
+        # fullmatch: a pattern's $ also matches before a trailing newline (review of B and C, NIT 1)
+        return any(m == method and p.fullmatch(path) for m, p in self.routes)
 
     def call(self, method: str, path: str, body=None):
         if not isinstance(path, str) or not self.allowed(method, path):
