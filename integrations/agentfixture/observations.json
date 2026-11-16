@@ -1,0 +1,946 @@
+{
+  "format": "ai-engineering-harness/agentfixture/catalog/v1",
+  "use": "The one fixture catalog of the Agent Server fixture (E-01.4.2 slice 5c; served by E-01.7, slice 9). Each answer's values, and each field's provenance row exactly as the README's provenance table states it (a test binds the two). Nothing here was produced by the fixture: every value is cited.",
+  "label": {
+    "fixture": "ai-engineering-harness/agentfixture",
+    "authority": "fixture"
+  },
+  "records": {
+    "F-04.2": "evidence/F-04.2-conversation-lifecycle.md",
+    "F-04.1c": "evidence/F-04.1c-agent-server.md",
+    "D1": "evidence/D1-run-2026-11-16.md"
+  },
+  "upstream": {
+    "sdk": {
+      "wheel": "openhands_sdk-1.60.1-py3-none-any.whl",
+      "sha256": "f6efa8f8428ccc8abebbcf4c424bf3008a66a46f9f2340d37b3b306fcb45eb6b"
+    },
+    "as": {
+      "wheel": "openhands_agent_server-1.60.1-py3-none-any.whl",
+      "sha256": "df80a622059f3cce797ab2c08adfc5256a69d7c7a6b4712b2d5147df25be76f6"
+    }
+  },
+  "answers": {
+    "server-info": {
+      "status": 200,
+      "body": {
+        "app_backend_ingress_url": null,
+        "available_conversation_runtimes": [],
+        "build_git_ref": "unknown",
+        "build_git_sha": "unknown",
+        "capabilities": [
+          "conversation_runtime_routes_v1",
+          "profile_secret_scope_v1",
+          "profile_persona_v1",
+          "credential_binding_v1",
+          "credential_binding_readiness_probe_v1",
+          "credential_binding_activation_guard_v1",
+          "idempotent_conversation_create_v1",
+          "tool_catalog_v1",
+          "agent_profile_draft_materialize_v1",
+          "agent_launch_pipeline_v1",
+          "profile_public_skills_v1",
+          "skill_catalog_v1",
+          "canvas_app_backend_secret_grants_v1",
+          "canvas_app_backend_enable_lifecycle_v1"
+        ],
+        "conversation_runtime": "docker",
+        "docs": "/docs",
+        "idle_time": 31.0,
+        "max_foreground_terminal_timeout_seconds": null,
+        "python_version": "3.13.18 (main, Oct 26 2026, 14:08:20) [Clang 23.1.3 ]",
+        "redoc": "/redoc",
+        "runtime_idle_timeout_seconds": null,
+        "sdk_version": "1.60.1",
+        "title": "OpenHands Agent Server",
+        "tools_version": "1.60.1",
+        "uptime": 31.0,
+        "usable_tools": [
+          "ClassifyAndSwitchLLMTool",
+          "ask_oracle",
+          "file_editor",
+          "task_tool_set",
+          "task",
+          "task_tracker",
+          "terminal",
+          "workflow_tool_set",
+          "workflow",
+          "start_child_conversation",
+          "edit",
+          "list_directory",
+          "read_file",
+          "write_file",
+          "glob",
+          "grep",
+          "planning_file_editor"
+        ],
+        "version": "1.60.1",
+        "workspace_version": "1.60.1"
+      }
+    },
+    "create-new": {
+      "status": 201,
+      "clock": {
+        "created_at": "2026-11-07T07:25:46.090747Z"
+      },
+      "observedRequest": {
+        "conversation_id": "929f0d8a-f3d8-4da3-8ac3-9d0017709d71",
+        "conversation_runtime": "docker",
+        "workspace": {
+          "kind": "LocalWorkspace",
+          "working_dir": "/workspace"
+        },
+        "agent_settings": {
+          "agent_kind": "openhands",
+          "mcp_config": {},
+          "tools": []
+        },
+        "autotitle": false,
+        "container": {
+          "browser": false
+        },
+        "tags": {
+          "aieh": "f-04.2-disposable"
+        }
+      },
+      "equalRequest": {
+        "execution_status": "idle",
+        "tags": {
+          "aieh": "f-04.2-disposable"
+        },
+        "title": null,
+        "workspace": {
+          "kind": "LocalWorkspace",
+          "working_dir": "/workspace"
+        },
+        "agent": {
+          "kind": "Agent",
+          "tools": [],
+          "include_default_tools": [
+            "FinishTool"
+          ],
+          "mcp_config": {},
+          "llm": {
+            "model": "gpt-5.6",
+            "api_key": null,
+            "base_url": null,
+            "usage_id": "default"
+          }
+        },
+        "confirmation_policy": {
+          "kind": "NeverConfirm"
+        },
+        "stats": {
+          "usage_to_metrics": {}
+        },
+        "metrics": null,
+        "secret_registry": {
+          "secret_sources": {}
+        },
+        "runtime_info": null
+      },
+      "ownRequest": {
+        "persistence_dir": "/var/openhands/conversations/929f0d8af3d84da38ac39d0017709d71"
+      }
+    },
+    "conversation": {
+      "status": 200,
+      "execution_status": [
+        "idle",
+        "finished"
+      ]
+    },
+    "conversation-absent": {
+      "status": 404
+    },
+    "count": {
+      "status": 200,
+      "body": [
+        0,
+        1
+      ]
+    },
+    "runtime": {
+      "status": 200,
+      "runtime_status": [
+        "available",
+        "missing"
+      ],
+      "can_resume": true
+    },
+    "runtime-stop": {
+      "status": 204,
+      "body": null
+    },
+    "seed": {
+      "status": 200,
+      "rule": "integrations/dispatch/attempt_run.py SEED_SCRIPT"
+    },
+    "message": {
+      "status": 200
+    },
+    "events": {
+      "status": 200,
+      "next_page_id": null
+    },
+    "message-event": {
+      "kind": "MessageEvent",
+      "source": "user"
+    },
+    "refusal": {
+      "status": 501
+    }
+  },
+  "provenance": [
+    {
+      "answer": "server-info",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.1c §3; F-04.2 §4.1; D1 §5 calls",
+      "determinedBy": "the route (no input)",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.version`",
+      "class": "observation",
+      "citation": "F-04.1c §3; F-04.2 §4.1",
+      "determinedBy": "the server's build",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.capabilities`",
+      "class": "observation",
+      "citation": "F-04.1c §3 (F-04.2 §4.1 names two of them)",
+      "determinedBy": "the server's build",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.conversation_runtime`",
+      "class": "observation",
+      "citation": "F-04.1c §3; F-04.2 §4.1",
+      "determinedBy": "the profile's server configuration",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.available_conversation_runtimes`",
+      "class": "observation",
+      "citation": "F-04.1c §3; F-04.2 §4.1",
+      "determinedBy": "the profile's server configuration",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.uptime`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the clock",
+      "read": false,
+      "served": true,
+      "marks": "clock-valued"
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.idle_time`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the clock",
+      "read": false,
+      "served": true,
+      "marks": "clock-valued"
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.app_backend_ingress_url`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the profile's server configuration",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.build_git_ref`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.build_git_sha`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.docs`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.max_foreground_terminal_timeout_seconds`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the profile's server configuration",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.python_version`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.redoc`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.runtime_idle_timeout_seconds`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the profile's server configuration",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.sdk_version`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.title`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.tools_version`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.usable_tools`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`body.workspace_version`",
+      "class": "observation",
+      "citation": "F-04.1c §3",
+      "determinedBy": "the server's build",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "server-info",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "create-new",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2; D1 §5 (2)",
+      "determinedBy": "a valid create whose `conversation_id` the server does not hold",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.id`",
+      "class": "echo",
+      "citation": "the request's `conversation_id`",
+      "determinedBy": "the request",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.created_at`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the clock",
+      "read": false,
+      "served": true,
+      "marks": "clock-valued"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.execution_status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.tags`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.title`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.workspace`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.agent`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.confirmation_policy`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.stats`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.metrics`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.secret_registry`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.runtime_info`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.persistence_dir`",
+      "class": "observation",
+      "citation": "F-04.2 §4.2",
+      "determinedBy": "the whole request, `conversation_id` included (F-04.2's own request)",
+      "read": false,
+      "served": true,
+      "marks": "equal request only"
+    },
+    {
+      "answer": "create-new",
+      "field": "`body.<the other top-level fields of the 36>`",
+      "class": "none",
+      "citation": "not served: no committed observation (F-04.2 §4.2 records selected fields; the full answer is not committed)",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "create-new",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3; D1 §5 (3), (6)",
+      "determinedBy": "a conversation the server holds",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation",
+      "field": "`body.id`",
+      "class": "echo",
+      "citation": "the request path's `conversation_id`",
+      "determinedBy": "the request",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation",
+      "field": "`body.execution_status`",
+      "class": "observation",
+      "citation": "`idle`: F-04.2 §4.3 (a created conversation, no message); `finished`: D1 §5 (6) (its turn ended)",
+      "determinedBy": "the conversation's state",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation",
+      "field": "`body.<every other ConversationInfo field>`",
+      "class": "none",
+      "citation": "not served: no committed observation of its value",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "conversation",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation-absent",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.9 (`GET` after the delete: 404)",
+      "determinedBy": "a conversation the server does not hold",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "conversation-absent",
+      "field": "`body.detail`",
+      "class": "none",
+      "citation": "not served: F-04.2 §4.9 records the status only",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "conversation-absent",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "count",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.1c §3; D1 §5 (3), (10)",
+      "determinedBy": "the route (no input)",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "count",
+      "field": "`body`",
+      "class": "observation",
+      "citation": "`0`: F-04.1c §3, D1 §5 (10); `1`: D1 §5 (3)",
+      "determinedBy": "the number of conversations the server holds (0 or 1; any other number is refused)",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "count",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3, §4.6; D1 §5 (3), (9)",
+      "determinedBy": "a conversation the server holds",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime",
+      "field": "`body.runtime_status`",
+      "class": "observation",
+      "citation": "`available`: F-04.2 §4.3, D1 §5 (3) (after the create); `missing`: F-04.2 §4.6, D1 §5 (9) (after the runtime stop)",
+      "determinedBy": "the conversation's state",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime",
+      "field": "`body.can_resume`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3, §4.6; D1 §5 (3)",
+      "determinedBy": "the conversation's state (`true` in both)",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime-stop",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.6; D1 §5 calls (`DELETE .../runtime` 204)",
+      "determinedBy": "a held conversation whose runtime is `available`",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "runtime-stop",
+      "field": "`body`",
+      "class": "observation",
+      "citation": "F-04.2 §4.6; D1 §5 calls: `204` No Content, so the transport's body is `null`",
+      "determinedBy": "the status",
+      "read": true,
+      "served": true,
+      "marks": "see the note below the readings"
+    },
+    {
+      "answer": "runtime-stop",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "D1 §5 calls (`POST .../bash/execute_bash_command` 200, SEED) and (4)",
+      "determinedBy": "the harness's SEED command, the first on a held conversation",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
+      "field": "`body.stdout`",
+      "class": "pinned-rule",
+      "citation": "`integrations/dispatch/attempt_run.py` `SEED_SCRIPT`, run over the request's payload (its success line `AIEH-SEED ok <sha256> <files>`)",
+      "determinedBy": "the request's payload and digest",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
+      "field": "`body.exit_code`",
+      "class": "pinned-rule",
+      "citation": "`integrations/dispatch/attempt_run.py` `SEED_SCRIPT`, run over the request's payload",
+      "determinedBy": "the request's payload and digest",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
+      "field": "`body.stderr`",
+      "class": "none",
+      "citation": "not served: not observed, and not read",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "message",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "D1 §5 calls (`POST .../events` 200, the message)",
+      "determinedBy": "the message tail, the first on a held conversation",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "message",
+      "field": "`body`",
+      "class": "none",
+      "citation": "not served: not observed (D1's call list records the status only)",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "message",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "events",
+      "field": "`status`",
+      "class": "observation",
+      "citation": "F-04.2 §4.4",
+      "determinedBy": "a held conversation; no query",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "events",
+      "field": "`body.items`",
+      "class": "observation",
+      "citation": "F-04.2 §4.4 (`[]` on an empty log); on a non-empty log, the catalog's events (`message-event`)",
+      "determinedBy": "the conversation's recorded events",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "events",
+      "field": "`body.next_page_id`",
+      "class": "observation",
+      "citation": "F-04.2 §4.4 (`null`)",
+      "determinedBy": "no `page_id`, and the log within one page at the effective limit (`as:openhands/agent_server/event_router.py:76-79`, `as:openhands/agent_server/event_service.py:689-690`)",
+      "read": true,
+      "served": true,
+      "marks": "engineering manager's reading"
+    },
+    {
+      "answer": "events",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "message-event",
+      "field": "`kind`",
+      "class": "observation",
+      "citation": "D1 §5 (7b) (`MessageEvent` in the log of a conversation that received the dispatcher's message)",
+      "determinedBy": "the event's type",
+      "read": true,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "message-event",
+      "field": "`source`",
+      "class": "source-derived",
+      "citation": "`sdk:openhands/sdk/conversation/impl/local_conversation.py:2041-2043`; `sdk:openhands/sdk/event/llm_convertible/message.py:32`",
+      "determinedBy": "a user message sent to the conversation",
+      "read": true,
+      "served": true,
+      "marks": "source-derived"
+    },
+    {
+      "answer": "message-event",
+      "field": "`llm_message`",
+      "class": "source-derived",
+      "citation": "`sdk:openhands/sdk/event/llm_convertible/message.py:33-35`; `as:openhands/agent_server/event_router.py:226`",
+      "determinedBy": "the message",
+      "read": true,
+      "served": true,
+      "marks": "source-derived"
+    },
+    {
+      "answer": "message-event",
+      "field": "`llm_message.content`",
+      "class": "source-derived",
+      "citation": "`sdk:openhands/sdk/llm/message.py:226`; `as:openhands/agent_server/event_router.py:226`",
+      "determinedBy": "the request's `content`",
+      "read": true,
+      "served": true,
+      "marks": "source-derived"
+    },
+    {
+      "answer": "message-event",
+      "field": "`llm_message.content[].text`",
+      "class": "echo",
+      "citation": "the request's `content[].text` (`sdk:openhands/sdk/llm/message.py:179`)",
+      "determinedBy": "the request",
+      "read": true,
+      "served": true,
+      "marks": "source-derived"
+    },
+    {
+      "answer": "message-event",
+      "field": "`id`, `timestamp`, `llm_message.role`, `llm_message.content[].type`, `llm_response_id`, `activated_skills`, `extended_content`, `sender`, `critic_result`",
+      "class": "none",
+      "citation": "not served: no committed observation, and not read",
+      "determinedBy": "",
+      "read": false,
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "refusal",
+      "field": "`status`",
+      "class": "label",
+      "citation": "the fixture's refusal: `501`",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "refusal",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label, with the reason it refused",
+      "determinedBy": "",
+      "read": false,
+      "served": true,
+      "marks": ""
+    }
+  ]
+}

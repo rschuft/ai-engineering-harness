@@ -67,6 +67,7 @@ def _load(name, path):
 
 native_tests = _load('test_native_d1_stage', HERE / 'test_native_d1_stage.py')
 NF, cc, di, store_mod, NS = native_tests, native_tests.cc, native_tests.di, native_tests.store_mod, native_tests.NS
+AC = cc.AC     # the fixture catalog's cited core (E-01.4.2 slice 5c)
 AE = di._attempt_end()
 NT = di._native_module()
 TOKEN, NEW_TOKEN = native_tests.TOKEN, NS.token('E-05.8 replacement token')
@@ -142,15 +143,19 @@ def record(kind, code='STOP_OBSERVED', ref='evidence:test/1'):
 
 
 class ConversationServer(cc.FakeAgentServer):
-    """The pinned Agent Server, faked: server_info and the create as E-01.3.1's fake, and for each created
-    conversation its ConversationInfo, its events (the event search, PAGE events a page), the runtime stop and the
-    runtime status. ``fail`` maps (method, route kind) to an answer or an exception for the next calls."""
+    """The pinned Agent Server, faked on the fixture catalog's cited core (E-01.4.2 slice 5c): server_info and the
+    create as E-01.3.1's fake, and for each created conversation its ConversationInfo, its events (the event search),
+    the runtime stop and the runtime status, answered by the core wherever the conversation's state is one the catalog
+    cites. Its test knobs, answers no cited run gave, stay here: a created conversation starts ``running``; ``set``
+    gives it any status, events or runtime; the events the tests set are searched PAGE events a page; a conversation
+    the server does not hold answers 404 with a ``detail``; the runtime stop answers 204 whatever the runtime's state;
+    ``fail`` maps (method, route kind) to an answer or an exception for the next calls."""
 
     PAGE = 2
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.conversations, self.fail = {}, {}
+        self.fail = {}
 
     def conversation(self, cid=None):
         return self.conversations[cid or next(iter(self.conversations))]
@@ -165,15 +170,19 @@ class ConversationServer(cc.FakeAgentServer):
             held['runtime'] = runtime
 
     def __call__(self, method, path, body):
+        self.received(method, path, body)
+        return self.answer(method, path, body)
+
+    def answer(self, method, path, body=None, **kwargs):
         if (method, path) == cc.CREATE:
-            answer = super().__call__(method, path, body)
-            if answer.get('status') in (200, 201):
-                self.conversations.setdefault(body['conversation_id'], {
-                    'execution_status': 'running', 'events': [], 'runtime': 'available'})
+            fresh = body['conversation_id'] not in self.conversations
+            answer = super().answer(method, path, body)
+            if answer.get('status') in (200, 201) and fresh:      # knob: a created conversation starts running
+                self.conversations[body['conversation_id']] = {
+                    'execution_status': 'running', 'events': [], 'runtime': 'available'}
             return answer
         if (method, path) == cc.INFO:
-            return super().__call__(method, path, body)
-        self.calls.append((method, path, copy.deepcopy(body)))
+            return super().answer(method, path, body)
         route, _, query = path.partition('?')
         parts = route.split('/')
         assert parts[:3] == ['', 'api', 'conversations'], path
@@ -187,9 +196,14 @@ class ConversationServer(cc.FakeAgentServer):
         held = self.conversations.get(cid)
         if held is None:
             return {'status': 404, 'body': {'detail': 'Conversation not found'}}
+        cited = self.answers
         if (method, kind) == ('GET', 'info'):
+            if held['execution_status'] in cited['conversation']['execution_status']:
+                return AC.AgentServerCore.on_conversation(self, cid)
             return {'status': 200, 'body': {'id': cid, 'execution_status': held['execution_status']}}
         if (method, kind) == ('GET', 'events'):
+            if not query and not held['events']:
+                return AC.AgentServerCore.on_events(self, cid, query)
             start = 0
             if query:
                 name, _, page = query.partition('=')
@@ -199,9 +213,13 @@ class ConversationServer(cc.FakeAgentServer):
             following = held['events'][start + self.PAGE]['id'] if start + self.PAGE < len(held['events']) else None
             return {'status': 200, 'body': {'items': copy.deepcopy(items), 'next_page_id': following}}
         if (method, kind) == ('DELETE', 'runtime'):
+            if held['runtime'] == 'available':
+                return AC.AgentServerCore.on_stop_runtime(self, cid)
             held['runtime'] = 'missing'
             return {'status': 204, 'body': None}
         if (method, kind) == ('GET', 'runtime'):
+            if held['runtime'] in cited['runtime']['runtime_status']:
+                return AC.AgentServerCore.on_runtime(self, cid)
             return {'status': 200, 'body': {'runtime_status': held['runtime'], 'can_resume': True}}
         raise AssertionError(f'unexpected call {method} {path}')
 

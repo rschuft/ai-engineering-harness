@@ -51,6 +51,7 @@ def _load(name, path):
 
 
 adm = _load('test_dispatch_admission', HERE / 'test_dispatch_admission.py')
+AC = _load('agentfixture_core', HERE.parents[1] / 'agentfixture' / 'core.py')     # the fixture catalog's core
 base = adm.base
 di = base.di
 store_mod = base.store_mod
@@ -568,35 +569,39 @@ class CreateReceiptTests(unittest.TestCase):
                 self.assertIsNone(di.create_receipt(copy.deepcopy(answer), CONVERSATION))
 
 
-class FakeAgentServer:
-    """The pinned server, faked: GET /server_info and POST /api/conversations answer as recorded
-    (the create's answer carries the request's conversation id); every call is recorded."""
+class FakeAgentServer(AC.AgentServerCore):
+    """The pinned server, faked on the fixture catalog's cited core (E-01.4.2 slice 5c): GET /server_info and POST
+    /api/conversations answer as the core answers them (the create's answer carries the request's conversation id);
+    every call is recorded (the core's call log). Its test knobs, answers no cited run gave, stay here: INFO (another
+    server_info answer), INFO_ERROR and CREATE_ERROR (no answer), CREATE (another create answer), a create of a
+    conversation the core already holds answered 201 again, and the persistence_dir derived from the request's id
+    (so that the store's negative assertions have something to refuse). Any other call is unexpected."""
 
     def __init__(self, info=None, info_error=None, create=None, create_error=None):
-        self.calls = []
-        self.info = copy.deepcopy(SERVER_INFO) if info is None else info
-        self.info_error, self.create, self.create_error = info_error, create, create_error
+        super().__init__()
+        self.info, self.info_error, self.create, self.create_error = info, info_error, create, create_error
 
     def __call__(self, method, path, body):
-        self.calls.append((method, path, copy.deepcopy(body)))
+        self.received(method, path, body)
+        return self.answer(method, path, body)
+
+    def answer(self, method, path, body=None, **kwargs):
         if (method, path) == INFO:
             if self.info_error is not None:
                 raise self.info_error
-            return copy.deepcopy(self.info)
+            return copy.deepcopy(self.info) if self.info is not None else super().answer(method, path, body)
         if (method, path) == CREATE:
             if self.create_error is not None:
                 raise self.create_error
             if self.create is not None:
                 return copy.deepcopy(self.create)
-            answer = copy.deepcopy(CREATE_ANSWER)
-            answer['body']['id'] = body['conversation_id']
+            held = self.conversations.pop(body['conversation_id'], None)      # knob: a repeated create, 201 again
+            answer = super().answer(method, path, body)
+            if held is not None:
+                self.conversations[body['conversation_id']] = held
             answer['body']['persistence_dir'] = '/var/openhands/conversations/' + body['conversation_id'].replace('-', '')
             return answer
         raise AssertionError(f'unexpected call {method} {path}')
-
-    @property
-    def creates(self):
-        return [call for call in self.calls if call[:2] == CREATE]
 
 
 class DispatchTests(adm.AdmissionFixture):

@@ -1126,8 +1126,11 @@ class Turn(Scratch):
 # The run, against a fake Agent Server
 
 class RunServer(te.ConversationServer):
-    """ConversationServer with the inspection's count, the message and the command tails. SEED and RESULT run for
-    real (``real``: bash and git against a temporary workspace) or, for SEED only, answer its success line."""
+    """ConversationServer (on the fixture catalog's cited core, E-01.4.2 slice 5c) with the inspection's count, the
+    message and the command tails, each a test knob of this module: ``count`` answers whatever the test sets; the
+    message answers 200, 429 or 503 (``message_status``) and leaves the conversation ``after_message``; SEED and
+    RESULT run for real (``real``: bash and git against a temporary workspace) or, for SEED only, answer its success
+    line; ``lose_results`` and ``fail_stops`` drop answers."""
 
     def __init__(self, test, **kwargs):
         super().__init__(**kwargs)
