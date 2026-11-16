@@ -12,11 +12,12 @@ stops it. Then:
   ``SESSION_CREDENTIAL_MISSING`` without it; the preflight is the one exception and carries no data;
 - **missing, foreign, expired and revoked** are refused with their codes and change nothing (the store's canonical
   dump is equal before and after each), and every other credential shape of the inventory is foreign;
-- **no credential present**: the server process's own environment block and command line (read from outside, from
-  its process parameters), its records (run.json, server.json: the configuration snapshot) and its logs hold no
-  throwaway credential and no credential shape, while its supervisor's environment holds the planted values (so the
-  allowlist did the filtering);
-- **its live import census**, at start and at stop, is the server's four modules;
+- **no credential present**: the server's and the supervisor's environment blocks and command lines (read from
+  outside, from their process parameters), the records (run.json, server.json: the configuration snapshot) and the
+  logs hold no throwaway credential and no credential shape, although the environment that ran ``up`` held them all
+  (so the allowlist did the filtering);
+- **the live import censuses**: the server's, at start and at stop, is its four modules; the supervisor's, at start,
+  running and stop, has nothing under integrations/credentials, gitea, dispatch, inference or owner;
 - **no visible console window** (the supervisor's and the server's console has none: GetConsoleWindow) and **no
   orphan**: after down, the supervisor, the server and its launcher have exited and the port is free.
 
@@ -81,6 +82,7 @@ class Listener(unittest.TestCase):
         cls.obs = {}
         try:
             with mock.patch.dict(os.environ, planted):
+                cls.obs['planted_in_caller'] = all(os.environ.get(k) == v for k, v in planted.items())
                 cls.obs['up'] = SV.up(cls.lay, cls.adapter)
             cls.observe_running()
         finally:
@@ -205,15 +207,17 @@ class Listener(unittest.TestCase):
 
     # -------------------------------------------------------------- no credential present
 
-    def test_the_server_environment_and_command_line_hold_no_credential(self):
-        server = self.obs['server_parameters']
-        names = {name.upper() for name in server['environment']}
-        self.assertLessEqual(names - {'__PYVENV_LAUNCHER__'}, ALLOWED_NAMES, names)
-        text = json.dumps(server)
-        self.assertEqual(T.exposures(text, self.held), [])
-        self.assertNotIn('AIEH_PLANTED', text)
-        # the falsifier is live: the supervisor inherited the planted values, and the allowlist kept them out
-        self.assertIn(self.revoked, self.obs['supervisor_parameters']['environment'].values())
+    def test_the_server_and_supervisor_environments_and_command_lines_hold_no_credential(self):
+        # the falsifier is live: the environment that ran up held every planted value
+        self.assertTrue(self.obs['planted_in_caller'])
+        for process in ('server', 'supervisor'):
+            with self.subTest(process=process):
+                parameters = self.obs[f'{process}_parameters']
+                names = {name.upper() for name in parameters['environment']}
+                self.assertLessEqual(names - {'__PYVENV_LAUNCHER__'}, ALLOWED_NAMES, names)
+                text = json.dumps(parameters)
+                self.assertEqual(T.exposures(text, self.held), [])
+                self.assertNotIn('AIEH_PLANTED', text)
 
     def test_the_records_and_the_logs_hold_no_credential(self):
         texts = {**self.obs['records'], **self.obs['logs']}
@@ -233,6 +237,16 @@ class Listener(unittest.TestCase):
                     'integrations/ownerhost/session.py', 'integrations/storecore/storecore.py']
         self.assertEqual(self.obs['server_record_at_start']['harness_modules'], expected)
         self.assertEqual(self.obs['server_record_at_stop']['harness_modules'], expected)
+
+    def test_the_supervisor_s_live_import_census_has_no_credential_module(self):
+        forbidden = ('integrations/credentials/', 'integrations/gitea/', 'integrations/dispatch/',
+                     'integrations/inference/', 'integrations/owner/')
+        for when, record in (('running', self.obs['run']), ('stopped', json.loads(self.obs['records']['run.json']))):
+            with self.subTest(when=when):
+                modules = record['supervisor_modules']
+                self.assertIn('integrations/ownerhost/service.py', modules)
+                self.assertIn('integrations/platform/platform_windows.py', modules)
+                self.assertEqual([m for m in modules if m.startswith(forbidden)], [])
 
     # -------------------------------------------------------------- no window, no orphan
 

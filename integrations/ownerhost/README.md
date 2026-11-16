@@ -77,8 +77,8 @@ Decision 0025 point 2, each with its test: it opens no outbound connection (its 
 listener, bound exclusively with `SO_EXCLUSIVEADDRUSE`, and readiness reads the kernel's TCP table, never a request);
 the server process loads only `app.py`, `session.py`, the conversation store and storecore (no credential, Gitea,
 authorization-recorder, dispatch or inference module); it reads no credential and no `config.yml` (service.py gives
-it its two directories); its environment is the allowlist `ENVIRONMENT_NAMES` (Windows and the interpreter's needs,
-nothing else); it has no dispatch endpoint.
+it its two directories); its environment, and its supervisor's, is the allowlist `ENVIRONMENT_NAMES` (Windows and
+the interpreter's needs, nothing else); it has no dispatch endpoint.
 
 ## The lifecycle
 
@@ -102,9 +102,11 @@ supervisor and server processes, the job, the harness commit and tools lock dige
 `server.json` (the server's own record: process, address, port, whether its console has a window, and its live
 import census at start and at stop); `<logs>/owner-host/` holds `supervisor.log`, `console.log` and `service.log`.
 
-The supervisor is started by the platform adapter's `launch_supervisor`, which passes the caller's environment on:
-the supervisor holds whatever the starting environment holds, and loads the Windows adapter (which loads the
-credential-provider module at import, and never calls it). The server process holds neither.
+The supervisor is started by the platform adapter's `launch_supervisor` with the same environment allowlist as the
+server, so neither holds what the starting environment holds beyond those names. It loads the Windows adapter, which
+loads its credential-provider module only when a credential provider is asked for, never here: the supervisor's
+import census (`supervisor_modules` in `run.json`, at start, running and stop) has nothing under
+integrations/credentials, gitea, dispatch, inference or owner, and neither has the server's.
 
 ## Commands
 

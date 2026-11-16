@@ -262,8 +262,9 @@ class PlatformAdapter:
         return platform_record(self)
 
     # supervised start and stop, and the managed environment's liveness
-    def launch_supervisor(self, argv: list[str], log, cwd: Path):
-        """Start the managed environment's supervisor detached from the caller; returns a Popen."""
+    def launch_supervisor(self, argv: list[str], log, cwd: Path, env: dict | None = None):
+        """Start the managed environment's supervisor detached from the caller; returns a Popen. ENV, when
+        given, is its whole environment; by default it inherits the caller's."""
         raise NotImplementedError
 
     def enter_supervision(self):

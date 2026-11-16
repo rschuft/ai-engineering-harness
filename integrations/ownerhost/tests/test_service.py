@@ -59,7 +59,7 @@ class FakeAdapter:
     def user_identity(self, pid):
         return {}
 
-    def launch_supervisor(self, argv, log, cwd):
+    def launch_supervisor(self, argv, log, cwd, env=None):
         self.launched.append(argv)
         raise AssertionError('nothing may be started')
 

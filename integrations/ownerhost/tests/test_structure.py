@@ -8,7 +8,9 @@ imports no credential, Gitea, authorization-recorder or dispatch-transport modul
 - **The import census** (the pattern of the input recorder's): a fresh interpreter loads app.py and builds the
   application; the repository files it has then loaded are exactly the server's four modules, none under
   integrations/credentials, integrations/gitea, integrations/dispatch or integrations/inference, and no
-  authorization recorder. The live server's own census (its record, at start and at stop) is test_listener.py's.
+  authorization recorder. The supervisor's too: a fresh interpreter loads service.py and selects the platform
+  adapter, and loads nothing under those packages (the Windows adapter loads its credential provider only when one
+  is asked for). The live processes' own censuses (their records, at start and at stop) are test_listener.py's.
 - **One declared port**: app.PORT is the host census's port (tools/guest.py HOST_CENSUS_PORTS) and the network
   matrix's nm-owner-ui-integration address.
 """
@@ -33,6 +35,9 @@ NETWORK_MODULES = ('http', 'urllib', 'urllib3', 'requests', 'httpx', 'aiohttp', 
 DATABASE_CONNECTS = {'sqlite3.connect', 'storecore.connect'}
 SERVER_MODULES = {'integrations/ownerhost/app.py', 'integrations/ownerhost/session.py',
                   'integrations/conversation/conversation_store.py', 'integrations/storecore/storecore.py'}
+SUPERVISOR_MODULES = SERVER_MODULES | {'integrations/ownerhost/service.py', 'integrations/platform/platform_contract.py',
+                                       'integrations/platform/platform_windows.py', 'integrations/platform/no_window.py',
+                                       'integrations/paths/aieh_paths.py'}
 FORBIDDEN_PREFIXES = ('integrations/credentials/', 'integrations/gitea/', 'integrations/dispatch/',
                       'integrations/inference/', 'integrations/owner/')
 
@@ -184,6 +189,27 @@ class ImportCensus(unittest.TestCase):
         loaded = {relative(f) for f in files if f.resolve().is_relative_to(T.REPO)}
         self.assertEqual(loaded, SERVER_MODULES)
         self.assertEqual([f for f in loaded if f.startswith(FORBIDDEN_PREFIXES)], [])
+
+    def test_the_supervisor_loads_no_credential_gitea_dispatch_inference_or_owner_module(self):
+        code = ('import importlib.util, json, sys\n'
+                'spec = importlib.util.spec_from_file_location("aieh_ownerhost_service", sys.argv[1])\n'
+                'sv = importlib.util.module_from_spec(spec); sys.modules[spec.name] = sv; spec.loader.exec_module(sv)\n'
+                'adapter = sv.contract.select_adapter()\n'
+                'def files(): return sorted(getattr(m, "__file__", None) or "" for m in list(sys.modules.values()))\n'
+                'before = files()\n'
+                'windows = sys.modules["aieh_platform_windows"]\n'
+                'windows.credentials\n'
+                'print(json.dumps([before, files()]))\n')
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(T.PACKAGE / 'service.py')],
+                                capture_output=True, text=True, encoding='utf-8', timeout=T.WAIT_CEILING_S,
+                                stdin=subprocess.DEVNULL)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        before, after = ({relative(Path(f)) for f in found if f and Path(f).resolve().is_relative_to(T.REPO)}
+                         for found in json.loads(result.stdout))
+        self.assertEqual(before, SUPERVISOR_MODULES)
+        self.assertEqual([f for f in before if f.startswith(FORBIDDEN_PREFIXES)], [])
+        # the adapter still supplies the provider when asked: the module is loaded then, and only then
+        self.assertEqual(after - before, {'integrations/credentials/credential_provider.py'})
 
     def test_loading_the_enroll_command_loads_no_broker_until_its_console_check(self):
         code = IMPORT_CENSUS.replace("application = app.create_app(lambda: None)\n", '')

@@ -86,7 +86,11 @@ fingerprints only.
   `ERROR_NO_SUCH_LOGON_SESSION` is `CREDENTIAL_PROVIDER_LOCKED`. Since F-06.3 the provider lives in
   [`integrations/credentials/credential_provider.py`](../credentials/README.md), and the adapter's
   `credential_provider()` returns what that module's fail-closed factory chooses for Windows; keyring is
-  never instantiated on Windows.
+  never instantiated on Windows. The adapter loads that module on first use (`credential_provider()` or its
+  `credentials` attribute), not when the adapter is loaded, so a service that is custodian of no credential (the
+  Integration process's supervisor, U-01.3) never loads it.
+- **Environment:** `launch_supervisor(argv, log, cwd, env=None)` starts the supervisor with the caller's environment
+  by default (Gitea), or with exactly `env` when given (the Integration process gives its allowlist).
 
 ## Commands
 

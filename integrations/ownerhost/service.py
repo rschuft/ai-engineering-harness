@@ -8,8 +8,9 @@ of no credential. Linux and macOS are ``PLATFORM_UNSUPPORTED``, as the contract 
 - ``up`` refuses a running environment (``ALREADY_RUNNING``) and a held port (``PORT_IN_USE``: 127.0.0.1:13310 is
   the only port; never another), then starts the managed environment through the platform adapter: a supervisor,
   detached with no window, that joins a new kill-on-close Job Object and starts the server process (app.py serve)
-  inside it, with a minimal environment (``ENVIRONMENT_NAMES``: no credential, no proxy, no harness setting) and the
-  managed root's ``<state>/owner-host`` and ``<logs>/owner-host``. It returns once the server listens; readiness is
+  inside it. Both get the same minimal environment (``ENVIRONMENT_NAMES``: no credential, no proxy, no harness
+  setting) and the managed root's ``<state>/owner-host`` and ``<logs>/owner-host``; neither loads a credential
+  module (the Windows adapter loads its credential provider only when one is asked for). It returns once the server listens; readiness is
   the kernel's TCP table read by process, never a request (the package opens no client socket).
 - ``down`` writes the stop request the server watches for, waits on the processes themselves (bounded by a
   ceiling), and terminates the supervisor only if they have not ended; the job then ends the server.
@@ -70,7 +71,8 @@ PORT = app.PORT                              # 13310: the network matrix's nm-ow
 TOOLS_LOCK = REPO / 'composition' / 'lock' / 'python' / 'tools-requirements.txt'
 READY_CEILING_S, STOP_CEILING_S = 30.0, 15.0
 POLL_S = 0.1                                 # readiness poll interval; each wait is bounded by its ceiling
-# The server process's whole environment: what Windows and the interpreter need, and nothing else.
+# The supervisor's and the server process's whole environment: what Windows and the interpreter need, and nothing
+# else. The supervisor needs no more than the server: it is started with exactly this set too.
 ENVIRONMENT_NAMES = ('SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'PROCESSOR_ARCHITECTURE',
                      'NUMBER_OF_PROCESSORS')
 RUN_FORMAT = contract.SERVICE_RUN_FORMAT
@@ -125,7 +127,8 @@ def layout(res) -> Layout:
 
 
 def child_environment(environ) -> dict:
-    """The server process's environment: only ENVIRONMENT_NAMES of ENVIRON (names compared case-insensitively)."""
+    """The supervisor's and the server process's environment: only ENVIRONMENT_NAMES of ENVIRON (names compared
+    case-insensitively)."""
     wanted = {name.upper() for name in ENVIRONMENT_NAMES}
     return {name: value for name, value in environ.items() if name.upper() in wanted}
 
@@ -185,7 +188,7 @@ def supervise(lay: Layout, adapter) -> int:
               'state': 'starting', 'port': PORT, 'address': LOOPBACK, 'started_at': now(),
               'supervisor': {'pid': me.pid, 'created': me.created(), 'image': me.image()},
               'job': job.report(), 'harness': harness(), 'configuration': configuration(lay),
-              'console_window': _console_window()}
+              'console_window': _console_window(), 'supervisor_modules': app.harness_modules()}
     _write_json(lay.run_record, record)
     with open(lay.logs / 'console.log', 'ab') as console:
         console.write(f'--- {now()} supervisor {me.pid} starting the Integration process\n'.encode())
@@ -202,13 +205,15 @@ def supervise(lay: Layout, adapter) -> int:
                 proc = adapter.process(server['pid'])
                 record.update(state='running', server={'pid': proc.pid, 'created': proc.created(),
                                                        'image': proc.image(),
-                                                       'in_supervisor_job': job.contains(proc.handle)})
+                                                       'in_supervisor_job': job.contains(proc.handle)},
+                              supervisor_modules=app.harness_modules())
                 _write_json(lay.run_record, record)
                 break
             time.sleep(POLL_S)  # the server's record is its readiness signal; the bound is the ceiling above
         code = child.wait()
         console.write(f'--- {now()} the Integration process exited {code}; supervisor {me.pid} exiting\n'.encode())
-    record.update(state='stopped' if record['state'] == 'running' else 'failed', stopped_at=now(), server_exit=code)
+    record.update(state='stopped' if record['state'] == 'running' else 'failed', stopped_at=now(), server_exit=code,
+                  supervisor_modules=app.harness_modules())
     _write_json(lay.run_record, record)
     lay.stop_request.unlink(missing_ok=True)
     return 0
@@ -271,7 +276,7 @@ def up(lay: Layout, adapter, *, python: str = sys.executable) -> dict:
     argv = [python, '-I', '-B', str(Path(os.path.realpath(__file__))), 'supervise',
             '--state-dir', str(lay.state), '--logs-dir', str(lay.logs)]
     with open(lay.logs / 'supervisor.log', 'ab') as log:
-        supervisor = adapter.launch_supervisor(argv, log, lay.state)
+        supervisor = adapter.launch_supervisor(argv, log, lay.state, env=child_environment(os.environ))
     deadline = time.monotonic() + READY_CEILING_S
     while True:
         report = status(lay, adapter)

@@ -13,7 +13,10 @@ integrations/gitea/gitea_host.py of plan leaf F-06.1).
   while it is held), and the process is started while that handle is held.
 - Credentials: Windows Credential Manager generic credentials (CredWriteW, CredReadW, CredDeleteW): the
   provider lives in integrations/credentials/credential_provider.py (plan leaf F-06.3), and the adapter
-  supplies it through that module's factory.
+  supplies it through that module's factory. That module is loaded on first use (the module attribute
+  ``credentials`` or ``credential_provider()``), never by loading the adapter: a service that is custodian of no
+  credential, such as the Integration process's supervisor (U-01.3, decision 0025 point 2), loads the adapter
+  without it.
 
 Everything goes through the standard library's ctypes; psutil is not used. The Windows API is loaded
 only when a function is called, so the module imports on any platform.
@@ -59,8 +62,14 @@ def _load_credentials():
 
 
 contract = _load_contract()
-credentials = _load_credentials()
 LifecycleError = contract.LifecycleError
+
+
+def __getattr__(name):
+    """``credentials``: the credential-provider module, loaded on first use (PEP 562)."""
+    if name == 'credentials':
+        return _load_credentials()
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 # ---------------------------------------------------------------- processes and jobs
@@ -395,19 +404,22 @@ class WindowsAdapter(contract.PlatformAdapter):
         self.machine = machine
         self.asset_key = contract.asset_key(self.system, machine)
 
-    def launch_supervisor(self, argv, log, cwd):
+    def launch_supervisor(self, argv, log, cwd, env=None):
         """Detached, in a new process group, and broken away from the caller's job where the caller's job
         allows it (a caller whose job forbids breakaway gets a supervisor that also ends with it). Detached
         means a console of its own that no window shows (CREATE_NO_WINDOW), outside the caller's console;
         never DETACHED_PROCESS, under which a console process it starts opens a window of its own unless that
-        start hides it too."""
+        start hides it too. ENV, when given, is the supervisor's whole environment; by default it inherits the
+        caller's."""
         base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        extra = {} if env is None else {'env': env}
         try:
             return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
-                                    cwd=str(cwd), creationflags=base | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+                                    cwd=str(cwd), creationflags=base | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+                                    **extra)
         except OSError:  # the caller's job forbids breakaway: the supervisor then also ends with the caller
             return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
-                                    cwd=str(cwd), creationflags=base)
+                                    cwd=str(cwd), creationflags=base, **extra)
 
     def enter_supervision(self):
         return JobSupervision()
@@ -432,4 +444,4 @@ class WindowsAdapter(contract.PlatformAdapter):
 
     def credential_provider(self):
         """Credential Manager, through the harness's factory (integrations/credentials): keyring is not used."""
-        return credentials.select_provider(self.system)
+        return _load_credentials().select_provider(self.system)
