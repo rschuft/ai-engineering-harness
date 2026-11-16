@@ -132,6 +132,13 @@ class Check(unittest.TestCase):
         self.refused([credential], 'SESSION_CREDENTIAL_EXPIRED')
         self.refused([E.mint()], 'SESSION_CREDENTIAL_FOREIGN')
 
+    def test_a_session_issued_more_than_five_minutes_ahead_is_foreign(self):
+        credential, _ = self.scratch.enroll(at=NOW + datetime.timedelta(minutes=5, seconds=1))
+        refusal = self.refused([credential], 'SESSION_CREDENTIAL_FOREIGN')
+        self.assertIn('after now', refusal.detail)
+        within, _ = self.scratch.enroll(at=NOW + datetime.timedelta(minutes=5))
+        self.assertEqual(S.check(self.scratch.store, [within], T.stamp(NOW)).issued_at, '2026-11-16T12:05:00Z')
+
     def test_with_no_enrollment_every_credential_is_foreign(self):
         self.refused([E.mint()], 'SESSION_CREDENTIAL_FOREIGN')
 

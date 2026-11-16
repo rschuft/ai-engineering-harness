@@ -24,7 +24,8 @@ verifier is all it reads, so a restart loses nothing.
 What it never does (decision 0025 point 2): it opens no outbound connection (its one socket is the listener that
 ``bind_listener`` binds); it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it
 reads no credential and no ``config.yml``; it has no dispatch endpoint. The credential is never logged: the service
-log records each request's method, path (without its query), outcome code and the session's public id.
+log records each request's outcome code, its method (one of the common ones, else OTHER), the path of the route it
+matched (else ``unmatched``; never the client's path) and the session's public id.
 
   <tools python> -I -B integrations/ownerhost/app.py serve --state-dir DIR --logs-dir DIR
 
@@ -69,7 +70,7 @@ from starlette.applications import Starlette          # noqa: E402  (the tools s
 from starlette.middleware import Middleware            # noqa: E402
 from starlette.middleware.cors import CORSMiddleware   # noqa: E402
 from starlette.responses import JSONResponse           # noqa: E402
-from starlette.routing import Route                    # noqa: E402
+from starlette.routing import Match, Route             # noqa: E402
 
 LOOPBACK = '127.0.0.1'
 PORT = 13310                       # the Integration process's one fixed port (nm-owner-ui-integration)
@@ -122,12 +123,12 @@ class HostOriginGuard:
             return await self.app(scope, receive, send)
         hosts = _values(scope, b'host')
         if hosts != [self.host]:
-            self.log(f'refused HOST_NOT_ALLOWED {scope.get("method", "WEBSOCKET")} {scope.get("path", "")}')
+            self.log(f'refused HOST_NOT_ALLOWED {described(scope)}')
             return await _refuse_scope(scope, receive, send, refusal(
                 'HOST_NOT_ALLOWED', f'the Host header must be {self.host.decode()}', 400))
         origins = _values(scope, b'origin')
         if origins and (len(origins) != 1 or origins[0].decode('latin-1') not in SHELL_ORIGINS):
-            self.log(f'refused ORIGIN_NOT_ALLOWED {scope.get("method", "WEBSOCKET")} {scope.get("path", "")}')
+            self.log(f'refused ORIGIN_NOT_ALLOWED {described(scope)}')
             return await _refuse_scope(scope, receive, send, refusal(
                 'ORIGIN_NOT_ALLOWED', 'the request comes from an origin other than the Owner UI shell', 403))
         return await self.app(scope, receive, send)
@@ -143,11 +144,11 @@ class SessionGuard:
 
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'websocket':
-            self.log(f'refused WEBSOCKET {scope.get("path", "")}')
+            self.log(f'refused WEBSOCKET {described(scope)}')
             return await send({'type': 'websocket.close', 'code': 1008})
         if scope['type'] != 'http':
             return await self.app(scope, receive, send)
-        where = f'{scope["method"]} {scope["path"]}'
+        where = described(scope)
         try:
             owner = session.check(self.sessions(), _values(scope, session.HEADER_KEY), self.clock())
         except session.SessionRefused as exc:
@@ -176,14 +177,29 @@ async def start_session(request):
 
 
 async def _not_found(request, exc):
-    return refusal('NOT_FOUND', f'{request.url.path} is not a route', 404)
+    return refusal('NOT_FOUND', 'no route answers this path', 404)
 
 
 async def _method_not_allowed(request, exc):
-    return refusal('METHOD_NOT_ALLOWED', f'{request.method} {request.url.path}', 405)
+    return refusal('METHOD_NOT_ALLOWED', 'the route does not take this method', 405)
 
 
 ROUTES = (Route('/session', start_session, methods=['POST']),)
+LOGGED_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')
+
+
+def described(scope) -> str:
+    """How a request is logged: its method if it is a common one (else OTHER) and the path of the route it matches
+    (else ``unmatched``). Nothing the client wrote is logged verbatim, so no client can forge a log line or put a
+    credential into the log through its path."""
+    if scope['type'] == 'websocket':
+        method = 'WEBSOCKET'
+    else:
+        method = scope.get('method') if scope.get('method') in LOGGED_METHODS else 'OTHER'
+    for route in ROUTES:
+        if scope['type'] == 'http' and route.matches(scope)[0] != Match.NONE:
+            return f'{method} {route.path}'
+    return f'{method} unmatched'
 
 
 def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Callable[[], str] = now,
@@ -212,9 +228,11 @@ class ServeError(Exception):
 
 
 def bind_listener(port: int = PORT) -> socket.socket:
-    """The process's one socket: a TCP listener on 127.0.0.1:PORT, bound exclusively (on Windows
-    SO_EXCLUSIVEADDRUSE, so no other socket can share the port), never connected anywhere. PORT_IN_USE when the
-    port is held."""
+    """The process's one socket: a TCP listener on 127.0.0.1:PORT, never connected anywhere. On Windows it is bound
+    with SO_EXCLUSIVEADDRUSE: no other socket can bind 127.0.0.1:PORT while it is held, not even with SO_REUSEADDR.
+    That excludes the same address only: a socket of another address of the port (0.0.0.0, [::]) can still be bound,
+    so service.py's up refuses a port in use on any address and its readiness fails when any other socket holds the
+    port. PORT_IN_USE when 127.0.0.1:PORT cannot be bound."""
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):

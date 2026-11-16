@@ -27,8 +27,15 @@ command.
 - `owner_session`: one row per enrollment of `cred-owner-ui-session`: `seq`, `session_id` (a public UUID version 4),
   `verifier` (64 hexadecimal digits: the sha256 of the domain line and the credential; never the credential),
   `issued_at`, `expires_at` (`YYYY-MM-DDTHH:MM:SSZ`, after the issue time and at most 7 days later) and
-  `supersedes`. SQLite enforces, whatever writes the row: no update and no delete; a new row supersedes exactly the
-  current session (the last row), the first none; a verifier and a session id are used once.
+  `supersedes`. SQLite's triggers and constraints enforce, for any writer that leaves them in place: no update and
+  no delete; a new row supersedes exactly the current session (the last row), the first none; a verifier and a
+  session id are used once.
+
+They are not a boundary against a process of the Owner's account, which can drop a trigger, rewrite rows or replace
+the file (decision 0010 point 1, the accepted same-account limit). `open_store` makes the first visible: it refuses a
+store whose schema objects, triggers included, are not exactly what its migrations create
+(`SchemaAltered`, code `CONVERSATION_STORE_ALTERED`), so neither the Integration process nor `enroll` starts on it. A
+writer that keeps the schema and changes rows is not detected here.
 
 The current session is the last row; a session another row supersedes is revoked. An expired session is kept, so
 that expired and foreign stay distinguishable.
@@ -36,7 +43,8 @@ that expired and foreign stay distinguishable.
 ## Use
 
 ```python
-store = open_store(path)                    # creates or migrates; refuses another kind, the checkout, a network path
+store = open_store(path)                    # creates or migrates; refuses another kind, an altered schema, the
+                                            # checkout, a network path
 store.enroll_session(session_id=..., verifier=..., issued_at=..., expires_at=...)   # enroll only
 store.session_by_verifier(verifier)         # a Session (current or not), or None; reads only
 store.canonical_dump()                      # deterministic bytes of every canonical table

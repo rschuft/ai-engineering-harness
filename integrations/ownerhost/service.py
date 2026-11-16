@@ -12,6 +12,12 @@ of no credential. Linux and macOS are ``PLATFORM_UNSUPPORTED``, as the contract 
   setting) and the managed root's ``<state>/owner-host`` and ``<logs>/owner-host``; neither loads a credential
   module (the Windows adapter loads its credential provider only when one is asked for). It returns once the server listens; readiness is
   the kernel's TCP table read by process, never a request (the package opens no client socket).
+- One instance: the supervisor holds an exclusive OS lock on ``<state>/owner-host/instance.lock`` for its whole
+  life (released by the OS when it ends, however it ends) and takes it before it touches any shared file
+  (run.json, server.json, stop-request, console.log). A second supervisor exits ``LOCK_HELD_EXIT`` having written
+  nothing; ``up`` refuses ``ALREADY_RUNNING`` when the lock is held before it launches, and when its own supervisor
+  lost the lock. Concurrent ``up`` commands are serialized by a second lock (``launch.lock``), held from the first
+  check to the end of the wait, so their checks never race each other. ``up`` waits for the run record of its own launch (a launch id it passes), never another's.
 - ``down`` writes the stop request the server watches for, waits on the processes themselves (bounded by a
   ceiling), and terminates the supervisor only if they have not ended; the job then ends the server.
 - ``restart`` is the contract's, under a write-ahead transition record (``<state>/owner-host/transitions``).
@@ -37,6 +43,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -76,6 +83,7 @@ POLL_S = 0.1                                 # readiness poll interval; each wai
 ENVIRONMENT_NAMES = ('SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'PROCESSOR_ARCHITECTURE',
                      'NUMBER_OF_PROCESSORS')
 RUN_FORMAT = contract.SERVICE_RUN_FORMAT
+LOCK_HELD_EXIT = 3                           # a supervisor that found another holding the instance lock
 
 LifecycleError = contract.LifecycleError
 REMEDIES = {
@@ -119,6 +127,66 @@ class Layout:
     @property
     def store(self) -> Path:
         return self.state / 'conversation.sqlite'
+
+    @property
+    def instance_lock(self) -> Path:
+        return self.state / 'instance.lock'
+
+    @property
+    def launch_lock(self) -> Path:
+        return self.state / 'launch.lock'
+
+
+class InstanceLock:
+    """An exclusive, non-blocking OS lock on one file (Windows: msvcrt.locking, LockFile; elsewhere flock). The
+    operating system releases it when the holder's handle closes or its process ends, however it ends."""
+
+    def __init__(self, path: Path):
+        self.path, self.fd = Path(path), None
+
+    def acquire(self) -> bool:
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self.fd = fd
+        return True
+
+    def release(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                os.lseek(self.fd, 0, os.SEEK_SET)
+                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(self.fd)
+            self.fd = None
+
+    def acquire_within(self, seconds: float) -> bool:
+        """acquire, retried until SECONDS have passed (the holder releases it when its own bounded work ends)."""
+        deadline = time.monotonic() + seconds
+        while not self.acquire():
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(POLL_S)  # retry interval; the bound is SECONDS
+        return True
+
+    def held_elsewhere(self) -> bool:
+        """Whether another holder has it now (taken and released at once when free)."""
+        if not self.acquire():
+            return True
+        self.release()
+        return False
 
 
 def layout(res) -> Layout:
@@ -175,10 +243,16 @@ def configuration(lay: Layout) -> dict:
 # ---------------------------------------------------------------- the managed environment
 
 
-def supervise(lay: Layout, adapter) -> int:
-    """The managed environment: enter the adapter's supervision (Windows: a new kill-on-close job), start the
-    server process in it, record both, and wait for the server. When this process ends, however it ends, the
-    supervision ends the server."""
+def supervise(lay: Layout, adapter, launch_id: str | None = None) -> int:
+    """The managed environment: take the instance lock (else exit LOCK_HELD_EXIT having touched nothing), enter the
+    adapter's supervision (Windows: a new kill-on-close job), start the server process in it, record both, and wait
+    for the server. When this process ends, however it ends, the supervision ends the server and the lock is
+    released. A server that exits other than cleanly (exit 0 after it listened) is recorded as failed."""
+    lock = InstanceLock(lay.instance_lock)
+    if not lock.acquire():
+        sys.stderr.write(f'owner-host supervisor {os.getpid()}: ALREADY_RUNNING: another supervisor holds '
+                         f'{lay.instance_lock.name}; nothing was started or written\n')
+        return LOCK_HELD_EXIT
     job = adapter.enter_supervision()      # every process this one starts from now on is born inside it
     me = adapter.process(os.getpid())
     for stale in (lay.server_record, lay.stop_request):
@@ -188,7 +262,8 @@ def supervise(lay: Layout, adapter) -> int:
               'state': 'starting', 'port': PORT, 'address': LOOPBACK, 'started_at': now(),
               'supervisor': {'pid': me.pid, 'created': me.created(), 'image': me.image()},
               'job': job.report(), 'harness': harness(), 'configuration': configuration(lay),
-              'console_window': _console_window(), 'supervisor_modules': app.harness_modules()}
+              'console_window': _console_window(), 'supervisor_modules': app.harness_modules(),
+              'launch_id': launch_id}
     _write_json(lay.run_record, record)
     with open(lay.logs / 'console.log', 'ab') as console:
         console.write(f'--- {now()} supervisor {me.pid} starting the Integration process\n'.encode())
@@ -212,10 +287,11 @@ def supervise(lay: Layout, adapter) -> int:
             time.sleep(POLL_S)  # the server's record is its readiness signal; the bound is the ceiling above
         code = child.wait()
         console.write(f'--- {now()} the Integration process exited {code}; supervisor {me.pid} exiting\n'.encode())
-    record.update(state='stopped' if record['state'] == 'running' else 'failed', stopped_at=now(), server_exit=code,
-                  supervisor_modules=app.harness_modules())
+    record.update(state='stopped' if record['state'] == 'running' and code == 0 else 'failed', stopped_at=now(),
+                  server_exit=code, supervisor_modules=app.harness_modules())
     _write_json(lay.run_record, record)
     lay.stop_request.unlink(missing_ok=True)
+    lock.release()
     return 0
 
 
@@ -267,23 +343,40 @@ def status(lay: Layout, adapter) -> dict:
 
 
 def up(lay: Layout, adapter, *, python: str = sys.executable) -> dict:
+    """Start the managed environment. Concurrent ups are serialized by the launch lock, held from the first check
+    to the end of the wait, so their checks never race; the supervisor's instance lock refuses any other start."""
+    launch = InstanceLock(lay.launch_lock)
+    if not launch.acquire_within(READY_CEILING_S + STOP_CEILING_S):
+        raise refused('ALREADY_RUNNING', 'another up is starting it')
+    try:
+        return _up(lay, adapter, python)
+    finally:
+        launch.release()
+
+
+def _up(lay: Layout, adapter, python: str) -> dict:
     record = contract.read_run_record(lay.run_record)
     if live(adapter, record, 'supervisor') or live(adapter, record, 'server'):
         raise refused('ALREADY_RUNNING', f'the managed environment runs (supervisor {record["supervisor"]["pid"]})')
+    if InstanceLock(lay.instance_lock).held_elsewhere():
+        raise refused('ALREADY_RUNNING', f'another supervisor holds {lay.instance_lock.name}')
     if adapter.port_in_use(PORT, LOOPBACK):
         raise refused('PORT_IN_USE', f'{LOOPBACK}:{PORT}, or the port on another address, is in use')
-    lay.stop_request.unlink(missing_ok=True)
+    launch_id = secrets.token_hex(8)
     argv = [python, '-I', '-B', str(Path(os.path.realpath(__file__))), 'supervise',
-            '--state-dir', str(lay.state), '--logs-dir', str(lay.logs)]
+            '--state-dir', str(lay.state), '--logs-dir', str(lay.logs), '--launch-id', launch_id]
     with open(lay.logs / 'supervisor.log', 'ab') as log:
         supervisor = adapter.launch_supervisor(argv, log, lay.state, env=child_environment(os.environ))
     deadline = time.monotonic() + READY_CEILING_S
     while True:
-        report = status(lay, adapter)
-        if report['ready']:
-            report['launched'] = {'pid': supervisor.pid}
+        mine = (contract.read_run_record(lay.run_record) or {}).get('launch_id') == launch_id
+        report = status(lay, adapter) if mine else None
+        if report is not None and report['ready']:
+            report['launched'] = {'pid': supervisor.pid, 'launch_id': launch_id}
             return report
         if supervisor.poll() is not None:
+            if supervisor.returncode == LOCK_HELD_EXIT:
+                raise refused('ALREADY_RUNNING', 'another supervisor took the instance lock first')
             raise refused('START_FAILED', f'the supervisor exited {supervisor.returncode}', refusal=False)
         if time.monotonic() > deadline:
             raise refused('START_TIMEOUT', f'not ready within {READY_CEILING_S:.0f}s', refusal=False)
@@ -369,6 +462,7 @@ def main(argv=None, *, config=None) -> int:
     sup = sub.add_parser('supervise', help='internal: the managed environment process started by up')
     sup.add_argument('--state-dir', required=True, type=Path)
     sup.add_argument('--logs-dir', required=True, type=Path)
+    sup.add_argument('--launch-id')
     args = parser.parse_args(argv)
     out = sys.stdout
     if hasattr(out, 'reconfigure'):
@@ -376,7 +470,7 @@ def main(argv=None, *, config=None) -> int:
     try:
         adapter = contract.select_adapter()
         if args.command == 'supervise':
-            return supervise(Layout(args.state_dir, args.logs_dir), adapter)
+            return supervise(Layout(args.state_dir, args.logs_dir), adapter, args.launch_id)
         lay = layout(paths.resolve(config=config))
         report = {'up': up, 'down': down, 'restart': restart, 'status': status, 'inspect': inspect,
                   'verify': readiness}[args.command](lay, adapter)

@@ -1,12 +1,18 @@
 """The Owner's enrollment of the Owner UI session credential (plan leaf U-01.3; Proposed decision 0025, point 3;
 the Owner's act OA-32 (a) for I1's run).
 
-``cred-owner-ui-session`` is minted only here, by the Owner, in his own console window:
+``cred-owner-ui-session`` is minted here, for the Owner to run in his own console window:
 
 * It refuses before anything else unless standard input **and** standard output are console handles
   (``ENROLL_NOT_INTERACTIVE``): the broker's own console check, reused (on Windows a console mode, which a pipe, a
-  file, the null device or a redirection does not have; not ``isatty`` alone). A tool shell's pipes are refused, so
-  no agent session can obtain the secret by running it.
+  file, the null device or a redirection does not have; not ``isatty`` alone). It refuses plain pipes and
+  redirected handles: an ordinary tool shell that runs it by accident obtains nothing and writes nothing.
+* What the guard is not: it is no defence against a process of the Owner's account that gives the command a console
+  (a console of its own, hidden or not, or a pseudoconsole, ConPTY) and reads what it shows, or that calls
+  ``enroll()`` or writes the store directly. No console check can tell the Owner from such a process: that is
+  decision 0010 point 1's accepted same-account limit, named in decision 0025's Consequences. Each of those paths
+  is visible to the Owner: any new enrollment supersedes his session, which then answers
+  ``SESSION_CREDENTIAL_REVOKED``.
 * It generates 32 random bytes (``secrets``), the credential ``aieh-oui-`` and their lower-case base32 (52
   characters), and writes one session row to the Owner conversation store: the session's public id (a random
   UUID), the credential's **verifier** (session.py), the issue time and the expiry (``--hours``, default 12,

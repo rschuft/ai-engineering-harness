@@ -19,7 +19,12 @@ stops it. Then:
 - **the live import censuses**: the server's, at start and at stop, is its four modules; the supervisor's, at start,
   running and stop, has nothing under integrations/credentials, gitea, dispatch, inference or owner;
 - **no visible console window** (the supervisor's and the server's console has none: GetConsoleWindow) and **no
-  orphan**: after down, the supervisor, the server and its launcher have exited and the port is free.
+  orphan**: after down, the supervisor, the server and its launcher have exited and the port is free;
+- **no client path in the log**: a path with an encoded line feed forges no line, and a credential-shaped path
+  segment never reaches service.log (the log names the matched route or "unmatched");
+- **one instance** (the review's probe_double_up): rounds of two concurrent ``up``; each round leaves exactly one
+  listener, the recorded server's, or none, every other ``up`` is refused ALREADY_RUNNING, and down frees the port;
+- **a killed server is recorded as failed**, and the supervisor ends with it, releasing the instance lock.
 
 Windows only (the platform contract's only adapter). It fails, rather than skips, when 127.0.0.1:13310 is already
 held: stop the service (service.py down) before running it.
@@ -33,6 +38,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -45,6 +51,7 @@ A, S, E, CS = T.A, T.S, T.E, T.CS
 ALLOWED_NAMES = {n.upper() for n in SV.ENVIRONMENT_NAMES}
 METHODS = ('GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD')
 PATHS = ('/session', '/', '/sessions', '/api/conversations', '/dispatch', '/docs')
+ROUNDS = 3
 
 
 def request(method, path, headers=None):
@@ -87,6 +94,61 @@ class Listener(unittest.TestCase):
             cls.observe_running()
         finally:
             cls.stop()
+        cls.obs['rounds'] = [cls.double_up() for _ in range(ROUNDS)]
+        cls.obs['killed'] = cls.kill_the_server()
+
+    @classmethod
+    def ensure_down(cls):
+        """Stop whatever this test started: down, then the recorded supervisor if it still runs."""
+        try:
+            SV.down(cls.lay, cls.adapter)
+        finally:
+            supervisor = SV.live(cls.adapter, SV.contract.read_run_record(cls.lay.run_record), 'supervisor')
+            if supervisor is not None:
+                supervisor.terminate()
+                supervisor.wait(SV.STOP_CEILING_S)
+
+    @classmethod
+    def double_up(cls):
+        outcomes = [None, None]
+
+        def go(index):
+            try:
+                outcomes[index] = 'up' if SV.up(cls.lay, cls.adapter)['ready'] else 'not ready'
+            except SV.LifecycleError as exc:
+                outcomes[index] = f'{exc.code} refusal={exc.refusal}'
+        threads = [threading.Thread(target=go, args=(index,)) for index in (0, 1)]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(SV.READY_CEILING_S + 30)
+            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            held = sorted({r['pid'] for r in cls.adapter.listeners() if r['proto'] == 'tcp' and r['port'] == A.PORT})
+            observed = {'outcomes': sorted(outcomes), 'listener_pids': held,
+                        'recorded_server': (run.get('server') or {}).get('pid') if run.get('state') == 'running'
+                        else None, 'ready': SV.readiness(cls.lay, cls.adapter)['passed']}
+        finally:
+            cls.ensure_down()
+        observed['listeners_after_down'] = [r for r in cls.adapter.listeners()
+                                            if r['proto'] == 'tcp' and r['port'] == A.PORT]
+        return observed
+
+    @classmethod
+    def kill_the_server(cls):
+        try:
+            SV.up(cls.lay, cls.adapter)
+            run = json.loads(cls.lay.run_record.read_text(encoding='utf-8'))
+            server = cls.adapter.process(run['server']['pid'])
+            supervisor = cls.adapter.process(run['supervisor']['pid'])
+            server.terminate()              # this test started it
+            ended = supervisor.wait(SV.STOP_CEILING_S)
+        finally:
+            cls.ensure_down()
+        record = json.loads(cls.lay.run_record.read_text(encoding='utf-8'))
+        return {'supervisor_ended': ended, 'state': record['state'], 'server_exit': record.get('server_exit'),
+                'lock_free': not SV.InstanceLock(cls.lay.instance_lock).held_elsewhere(),
+                'port_open': cls.adapter.port_in_use(A.PORT, A.LOOPBACK)}
 
     @classmethod
     def observe_running(cls):
@@ -104,6 +166,10 @@ class Listener(unittest.TestCase):
         obs['census'] = guest.host_census()
         # every request needs the credential
         obs['walk'] = {(m, p): request(m, p) for m in METHODS for p in PATHS}
+        cls.path_credential = E.mint()
+        cls.held.append(cls.path_credential)
+        obs['injected'] = request('GET', '/x%0AFORGED%20accepted%20POST%20/session')
+        obs['credential_path'] = request('GET', f'/{cls.path_credential}', {S.HEADER: cls.path_credential})
         obs['preflight'] = request('OPTIONS', '/session', {
             'Origin': T.SHELL_ORIGIN, 'Access-Control-Request-Method': 'POST',
             'Access-Control-Request-Headers': 'x-aieh-owner-session'})
@@ -247,6 +313,37 @@ class Listener(unittest.TestCase):
                 self.assertIn('integrations/ownerhost/service.py', modules)
                 self.assertIn('integrations/platform/platform_windows.py', modules)
                 self.assertEqual([m for m in modules if m.startswith(forbidden)], [])
+
+    def test_no_client_path_reaches_the_service_log(self):
+        self.assertEqual(self.obs['injected'][0], 401)
+        log = self.obs['logs']['service.log']
+        self.assertNotIn('FORGED', log)
+        self.assertNotIn(self.path_credential, log)
+        self.assertNotIn(self.path_credential[len(S.PREFIX):], log)
+        self.assertIn('refused SESSION_CREDENTIAL_MISSING GET unmatched', log)
+        self.assertIn('refused SESSION_CREDENTIAL_FOREIGN GET unmatched', log)
+
+    # -------------------------------------------------------------- one instance; a killed server
+
+    def test_two_concurrent_ups_leave_one_tracked_server_or_a_clean_refusal(self):
+        self.assertEqual(len(self.obs['rounds']), ROUNDS)
+        for n, observed in enumerate(self.obs['rounds']):
+            with self.subTest(round=n):
+                ups = observed['outcomes'].count('up')
+                self.assertLessEqual(ups, 1, observed)
+                self.assertTrue(all(o in ('up', 'ALREADY_RUNNING refusal=True') for o in observed['outcomes']),
+                                observed)
+                self.assertEqual(observed['listener_pids'], [observed['recorded_server']] if ups else [], observed)
+                self.assertEqual(observed['ready'], bool(ups))
+                self.assertEqual(observed['listeners_after_down'], [])
+
+    def test_a_killed_server_is_recorded_as_failed(self):
+        killed = self.obs['killed']
+        self.assertTrue(killed['supervisor_ended'])
+        self.assertEqual(killed['state'], 'failed')
+        self.assertNotEqual(killed['server_exit'], 0)
+        self.assertTrue(killed['lock_free'])
+        self.assertFalse(killed['port_open'])
 
     # -------------------------------------------------------------- no window, no orphan
 

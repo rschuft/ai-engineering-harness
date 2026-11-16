@@ -75,9 +75,8 @@ own console with `task ownerhost:enroll`, and pastes it into `/sign-in`.
 - The pasted value is checked for the shape first (nothing is sent otherwise),
   then verified with `POST /session`; only a verified credential is kept, as
   one record under `aieh.owner-host.owner-ui-session` in this origin's
-  `localStorage` (the origin is scheme, host and port, so another loopback
-  listener cannot read it), with the session's public id and expiry. The field
-  is emptied after each attempt.
+  `localStorage`, with the session's public id and expiry. The field is
+  emptied after each attempt.
 - Every request to the Integration process goes through one client: to
   `http://127.0.0.1:13310` only, a path and never a URL, with the
   `X-AIEH-Owner-Session` header, `credentials: "omit"` (never a cookie),
@@ -87,8 +86,27 @@ own console with `task ownerhost:enroll`, and pastes it into `/sign-in`.
   `_EXPIRED`, `_REVOKED`) removes the copy; an unreachable process keeps it.
 - "Sign out" removes the copy. The service's expiry bounds it either way.
 
-A process of the Owner's account that reads the browser profile can read the
-copy: inside decision 0010 point 1's disclosed same-account limit.
+Who can read the copy:
+
+- A listener on another port cannot: the origin is scheme, host and port.
+- A process that holds the shell's own port (`127.0.0.1:5173` or `4173`) while
+  the shell is down **is** that origin, and a page it serves can read the copy.
+  For a process of the Owner's account this is inside decision 0010 point 1's
+  same-account limit; for another local account it is a disclosed residual.
+  Vite's `strictPort` refuses to start on a squatted port, which is a visible
+  signal: the shell does not come up.
+- A process of the Owner's account that reads the browser profile can read the
+  copy: inside the same limit.
+
+### Precondition: nothing agent-authored in the shell's origin
+
+The shell's origin holds the session's authority, so until U-01.2 moves Agent
+Canvas to its own origin (decision 0026 point 8), **no agent-authored or
+fixture-served content may be rendered in the shell's origin**. Today the
+embedded Canvas has no backend: nothing configures one (no `openhands-backends`
+entry, no session key), so it renders no conversation
+(`src/engineering/canvas-no-backend.test.tsx`). Connecting a backend to the
+embedded Canvas would break this precondition.
 
 ### Content-security policy
 

@@ -3,10 +3,15 @@
 //
 // The Owner mints `cred-owner-ui-session` himself with the enroll command at a
 // console and pastes it into the sign-in view. The shell keeps its copy in its
-// own origin's localStorage (the origin is scheme, host and port, so another
-// loopback listener cannot read it), sends it in the `X-AIEH-Owner-Session`
-// header on every request to the Integration process, never as a cookie, and
-// removes it on "Sign out". The Integration process's own expiry bounds it.
+// own origin's localStorage. The origin is scheme, host and port, so a
+// listener on another port cannot read it; a process that holds the shell's
+// own port (127.0.0.1:5173 or 4173) while the shell is down is that origin and
+// can. For a process of the Owner's account that is inside decision 0010 point
+// 1's same-account limit; for another local account it is a disclosed residual.
+// Vite's strictPort refuses to start on a squatted port, a visible signal. The
+// shell sends the copy in the `X-AIEH-Owner-Session` header on every request to
+// the Integration process, never as a cookie, and removes it on "Sign out".
+// The Integration process's own expiry bounds it.
 //
 // The client below is the only way the shell calls the Integration process:
 // it addresses http://127.0.0.1:13310 only, adds the header to every request,

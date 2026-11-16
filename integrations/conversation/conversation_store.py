@@ -64,6 +64,15 @@ TIMESTAMP = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z')
 _SESSION_COLUMNS = 'seq, session_id, verifier, issued_at, expires_at, supersedes'
 
 
+class SchemaAltered(StoreError):
+    """The file's schema objects (tables, triggers, indexes) differ from what its migrations create: a trigger was
+    dropped or replaced by a writer outside this module. Refused at open with a stable code; nothing is changed."""
+    code = 'CONVERSATION_STORE_ALTERED'
+
+    def __init__(self, detail: str):
+        super().__init__(f'{self.code}: {detail}')
+
+
 class SessionConflict(StoreError):
     """An enrollment that cannot be recorded (a verifier or session id already used); nothing was changed."""
 
@@ -156,6 +165,29 @@ KIND = storecore.StoreKind(
 # ---------------------------------------------------------------------------
 # Opening
 
+_SCHEMA_OBJECTS = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+
+
+def expected_schema(migrations_dir: Path = MIGRATIONS_DIR) -> list[tuple]:
+    """The schema objects the migrations create, from a private in-memory database."""
+    conn = sqlite3.connect(':memory:', isolation_level=None)
+    try:
+        for migration in storecore.load_migrations(migrations_dir):
+            for statement in storecore.split_statements(migration.text):
+                conn.execute(statement)
+        return conn.execute(_SCHEMA_OBJECTS).fetchall()
+    finally:
+        conn.close()
+
+
+def check_schema(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> None:
+    """SchemaAltered unless the store's schema objects are exactly the migrations' (the triggers included)."""
+    actual, expected = conn.execute(_SCHEMA_OBJECTS).fetchall(), expected_schema(migrations_dir)
+    if actual != expected:
+        missing = sorted({row[1] for row in expected} - {row[1] for row in actual})
+        changed = sorted(row[1] for row in actual if row not in expected)
+        raise SchemaAltered(f'schema objects missing {missing} or not as migrated {changed}')
+
 
 def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR,
                busy_timeout_ms: int = storecore.DEFAULT_BUSY_TIMEOUT_MS,
@@ -163,7 +195,8 @@ def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR
     """Open (creating if absent) the store at an explicit PATH, whose parent directory must exist. With
     ``apply_migrations=False`` a database with pending migrations is refused instead of migrated. A file of
     another store kind (by ``PRAGMA application_id``) is refused, as is a location inside the checkout, on a
-    network path or in memory."""
+    network path or in memory, and a store whose schema objects (its triggers included) are not exactly what its
+    migrations create (SchemaAltered, CONVERSATION_STORE_ALTERED)."""
     storecore.check_sqlite_version()
     resolved = storecore.check_local_path(Path(path))
     if not resolved.parent.is_dir():
@@ -174,6 +207,7 @@ def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR
             storecore.migrate(conn, KIND, migrations_dir)
         else:
             storecore.check_current(conn, KIND, migrations_dir)
+        check_schema(conn, migrations_dir)
         _verify_kind_invariants(conn)
     except BaseException:
         conn.close()

@@ -7,8 +7,9 @@ import { REFUSAL_TEXT } from "./owner-session";
 /**
  * The login view (plan leaf U-01.3): the Owner pastes the credential the
  * enroll command showed at his console. It is verified with the Integration
- * process before the shell keeps it; the field is emptied after each attempt,
- * so the credential does not stay in the page.
+ * process before the shell keeps it. The field is emptied after each attempt,
+ * so the credential is not left in the form; a verified credential stays in
+ * the page's memory and in localStorage while the Owner is signed in.
  */
 export function SignIn() {
   const { state, signIn, signOut } = useOwnerSession();
@@ -45,8 +46,9 @@ export function SignIn() {
         Sign in
       </h2>
       <p>
-        Paste the Owner UI session credential that the enroll command showed at your console. It is kept in this
-        browser until you sign out or the session expires.
+        Paste the Owner UI session credential that the enroll command showed at your console. Once verified, it is
+        kept in this browser until you sign out, or until the Integration process refuses it (expired or replaced by
+        a newer enrollment) when the shell next checks it.
       </p>
       <form onSubmit={submit} aria-label="Sign in">
         <label htmlFor="owner-credential">Owner UI session credential</label>

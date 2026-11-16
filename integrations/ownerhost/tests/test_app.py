@@ -89,8 +89,10 @@ class EveryRequestNeedsTheCredential(Base):
                     self.assertNotIn('set-cookie', dict(headers))
         status, _, body = self.call('GET', '/no-such-route', (S.HEADER, credential))
         self.assertEqual((status, T.code_of(body)), (404, 'NOT_FOUND'))
+        self.assertNotIn(b'no-such-route', body)
         status, _, body = self.call('GET', '/session', (S.HEADER, credential))
         self.assertEqual((status, T.code_of(body)), (405, 'METHOD_NOT_ALLOWED'))
+        self.assertNotIn(b'/session', body)
 
     def test_the_preflight_is_the_one_exception_and_carries_no_data(self):
         credential, record = self.scratch.enroll(at=NOW)
@@ -209,6 +211,24 @@ class Refusals(Base):
         self.assertEqual(self.lines, [f'accepted POST /session 200 session={record.session_id}',
                                       'refused SESSION_CREDENTIAL_FOREIGN POST /session',
                                       'refused SESSION_CREDENTIAL_MISSING POST /session'])
+        self.assertEqual(T.exposures('\n'.join(self.lines), [credential]), [])
+
+    def test_no_client_path_reaches_the_log(self):
+        """A path cannot forge a log line (an encoded line feed) or carry a credential into the log: the log names
+        the matched route, or "unmatched", and a common method, or OTHER."""
+        credential, record = self.scratch.enroll(at=NOW)
+        forged = f'/x\naccepted POST /session 200 session={record.session_id}'
+        for method, path, headers in (('GET', forged, ()), ('POST', forged, ((S.HEADER, credential),)),
+                                      ('GET', f'/{credential}', ()), ('GET', f'/{credential}', ((S.HEADER, credential),)),
+                                      ('BREW', '/session\r\nX', ()), ('POST', '/session', ())):
+            self.call(method, path, *headers)
+        self.assertEqual(self.lines, ['refused SESSION_CREDENTIAL_MISSING GET unmatched',
+                                      f'accepted POST unmatched 404 session={record.session_id}',
+                                      'refused SESSION_CREDENTIAL_MISSING GET unmatched',
+                                      f'accepted GET unmatched 404 session={record.session_id}',
+                                      'refused SESSION_CREDENTIAL_MISSING OTHER unmatched',
+                                      'refused SESSION_CREDENTIAL_MISSING POST /session'])
+        self.assertTrue(all('\n' not in line and '\r' not in line for line in self.lines))
         self.assertEqual(T.exposures('\n'.join(self.lines), [credential]), [])
 
 

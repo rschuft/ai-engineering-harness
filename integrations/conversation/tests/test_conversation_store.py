@@ -154,5 +154,44 @@ class Sessions(Base):
         self.assertIsNone(self.store.session_by_verifier('b' * 64))
 
 
+class AlteredSchema(Base):
+    """A writer outside this module that drops or replaces a trigger (the review's probe_triggers scenario: drop the
+    no-delete and no-update triggers, delete the superseding row, extend the superseded one) leaves a store that
+    open_store refuses, CONVERSATION_STORE_ALTERED, so no reader accepts the resurrected session. A writer that keeps
+    the schema is the same-account limit (decision 0010 point 1), not detected here."""
+
+    def tamper(self, script):
+        self.store.enroll_session(**session_args('a'))
+        self.store.enroll_session(**session_args('b'))
+        self.store.close()
+        conn = sqlite3.connect(self.tmp / CS.DB_NAME)
+        conn.executescript(script)
+        conn.commit()
+        conn.close()
+        with self.assertRaises(CS.SchemaAltered) as caught:
+            CS.open_store(self.tmp / CS.DB_NAME)
+        self.assertEqual(caught.exception.code, 'CONVERSATION_STORE_ALTERED')
+        self.assertTrue(str(caught.exception).startswith('CONVERSATION_STORE_ALTERED: '))
+        with self.assertRaises(CS.SchemaAltered):
+            CS.open_store(self.tmp / CS.DB_NAME, apply_migrations=False)
+
+    def test_a_fresh_and_a_reopened_store_have_exactly_the_migrated_schema(self):
+        CS.check_schema(self.store.conn)
+        self.assertEqual({row[1] for row in CS.expected_schema() if row[0] == 'trigger'},
+                         {'owner_session_supersedes_the_current', 'owner_session_no_update', 'owner_session_no_delete'})
+
+    def test_resurrecting_a_superseded_session_by_dropping_the_triggers_is_refused_at_open(self):
+        self.tamper('DROP TRIGGER owner_session_no_delete; DROP TRIGGER owner_session_no_update; '
+                    'DELETE FROM owner_session WHERE seq = 2; '
+                    "UPDATE owner_session SET expires_at = '2026-11-17T00:00:00Z' WHERE seq = 1;")
+
+    def test_a_replaced_trigger_is_refused_at_open(self):
+        self.tamper('DROP TRIGGER owner_session_no_update; CREATE TRIGGER owner_session_no_update BEFORE UPDATE ON '
+                    "owner_session WHEN 0 BEGIN SELECT RAISE(ABORT, 'x'); END;")
+
+    def test_an_added_object_is_refused_at_open(self):
+        self.tamper('CREATE TABLE extra (x INTEGER) STRICT;')
+
+
 if __name__ == '__main__':
     unittest.main()

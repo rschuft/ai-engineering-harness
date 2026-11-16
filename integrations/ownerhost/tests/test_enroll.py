@@ -4,11 +4,14 @@
 check, reused): a pipe, a file or the null device on either handle is ``ENROLL_NOT_INTERACTIVE``, before the
 managed root is resolved or the store is opened, so a tool shell's pipes obtain nothing. A console passes.
 
-The positive case needs a real console: a child process started with no window (CREATE_NO_WINDOW) gets a console of
-its own that no window shows, whose handles are its standard input and output. That child runs the guard on its
-real console handles and on a real pipe in either position, then the whole command against a throwaway managed root
-(the credential it shows goes to that hidden console, which nobody reads). Nothing here touches the managed data
-root.
+What the guard is, and what it is not: it refuses a plain pipe or a redirected handle, which is how an ordinary
+tool shell would run the command by accident. It is no defence against a process of the Owner's account that gives
+the command a console, as GuardScope below does with a hidden console of its own (a pseudoconsole, ConPTY, works the
+same way), or that calls the library or writes the store: that is decision 0010 point 1's accepted same-account
+limit. What the Owner sees is the supersession: any new enrollment supersedes his session, which then answers
+SESSION_CREDENTIAL_REVOKED. GuardScope runs the guard on its hidden console's real handles and on a real pipe in
+either position, then the whole command against a throwaway managed root (the credential it shows goes to that
+hidden console, which nobody reads). Nothing here touches the managed data root.
 """
 from __future__ import annotations
 
@@ -109,11 +112,12 @@ with open(sys.argv[2], 'w', encoding='utf-8') as handle:
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'the Windows console (GetConsoleMode)')
-class RealConsole(unittest.TestCase):
-    """Gate G8 on a real console: a child with a console of its own and no window."""
+class GuardScope(unittest.TestCase):
+    """Gate G8's scope: a redirected handle is refused; any console passes, a hidden one that a same-account process
+    made included. The guard stops an accidental piped run, not a same-account process (decision 0010 point 1)."""
     category = 'integration'
 
-    def test_a_console_passes_and_a_pipe_on_either_handle_is_refused(self):
+    def test_a_pipe_is_refused_and_any_console_passes_even_one_without_a_window(self):
         tmp = Path(tempfile.mkdtemp(prefix='aieh-ownerhost-g8-'))
         self.addCleanup(shutil.rmtree, tmp, True)
         (tmp / 'root').mkdir()

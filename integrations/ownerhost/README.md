@@ -47,10 +47,17 @@ its own origin's `localStorage` until Sign out (decision 0025 point 4, as amende
 
 Run by the Owner, in his own console window. It refuses unless standard input and standard output are both console
 handles (`ENROLL_NOT_INTERACTIVE`: the broker's GetConsoleMode check, reused), before it resolves the managed root,
-opens the store or mints anything, so a tool shell's pipes obtain nothing. It then mints the credential, writes the
-session row (validity `--hours`, default 12, 1 to 168), and shows the credential once on the console with the
-session id and expiry. Exit 0 enrolled, 2 refused. No test runs it against the managed root; OA-32 (a) is the
-Owner's own enrollment.
+opens the store or mints anything: plain pipes and redirected handles, an ordinary tool shell's accidental run,
+obtain nothing. It then mints the credential, writes the session row (validity `--hours`, default 12, 1 to 168), and
+shows the credential once on the console with the session id and expiry. Exit 0 enrolled, 2 refused. No test runs
+it against the managed root; OA-32 (a) is the Owner's own enrollment.
+
+What the guard does not do: it does not stop a process of the Owner's account that gives the command a console (one
+of its own, hidden or not, or a pseudoconsole) and reads it, or that calls `enroll()` or writes the store. No console
+check can tell the Owner from such a process; that is decision 0010 point 1's accepted same-account limit (decision
+0025, Consequences). Each of those paths is visible to the Owner: any new enrollment supersedes his session, which
+then answers `SESSION_CREDENTIAL_REVOKED` (`tests/test_enroll.py` `GuardScope` shows a hidden console passing the
+guard).
 
 ## Every request
 
@@ -64,17 +71,22 @@ Outermost first; a refusal changes nothing, and the credential is never echoed o
 | The session header: present, of the shape, matching a current, unexpired session | `SESSION_CREDENTIAL_MISSING`, `_FOREIGN`, `_REVOKED`, `_EXPIRED` (401) |
 
 A superseded session is `_REVOKED` whether or not it has also expired; an expired current session is `_EXPIRED`; a
-value that is not of the shape, or matches no enrolled verifier, or is sent twice, is `_FOREIGN`. A path that is no
-route is refused by the credential check first, then answers `NOT_FOUND` (404) or `METHOD_NOT_ALLOWED` (405). A
-websocket is closed (1008): there is no websocket route, and uvicorn runs with `ws='none'`.
+value that is not of the shape, or matches no enrolled verifier, or is sent twice, or whose session was issued more
+than 5 minutes after now (no enrollment on this host writes one), is `_FOREIGN`. A path that is no route is refused
+by the credential check first, then answers `NOT_FOUND` (404) or `METHOD_NOT_ALLOWED` (405), whose details do not
+echo the path. A websocket is closed (1008): there is no websocket route, and uvicorn runs with `ws='none'`.
 
-The service log (`<logs>/owner-host/service.log`) records each decided request as `accepted METHOD PATH STATUS
-session=<public id>` or `refused CODE METHOD PATH`, the path without its query; uvicorn's access log is off.
+The service log (`<logs>/owner-host/service.log`) records each decided request as `accepted METHOD ROUTE STATUS
+session=<public id>` or `refused CODE METHOD ROUTE`, where ROUTE is the path of the route the request matched or
+`unmatched`, and METHOD a common method or `OTHER`: nothing the client wrote is logged verbatim, so no path can forge
+a log line or carry a credential into the log. uvicorn's access log is off.
 
 ## What it never does
 
 Decision 0025 point 2, each with its test: it opens no outbound connection (its one socket is `bind_listener`'s
-listener, bound exclusively with `SO_EXCLUSIVEADDRUSE`, and readiness reads the kernel's TCP table, never a request);
+listener, bound with `SO_EXCLUSIVEADDRUSE`, so no other socket binds `127.0.0.1:13310` while it is held, even with
+`SO_REUSEADDR`; a socket on another address of the port is not excluded, which `up` and `verify` cover by refusing or
+failing on any other holder of the port; readiness reads the kernel's TCP table, never a request);
 the server process loads only `app.py`, `session.py`, the conversation store and storecore (no credential, Gitea,
 authorization-recorder, dispatch or inference module); it reads no credential and no `config.yml` (service.py gives
 it its two directories); its environment, and its supervisor's, is the allowlist `ENVIRONMENT_NAMES` (Windows and
@@ -88,7 +100,7 @@ the interpreter's needs, nothing else); it has no dispatch endpoint.
 
 | Verb | What |
 |---|---|
-| `up` | Refuses `ALREADY_RUNNING` and `PORT_IN_USE` (never another port), then starts the managed environment through the platform adapter: a supervisor with no window that joins a new kill-on-close Job Object and starts the server process inside it (`app.py serve`), and waits until the server listens (the TCP table), at most 30 s |
+| `up` | Refuses `ALREADY_RUNNING` and `PORT_IN_USE` (never another port), then starts the managed environment through the platform adapter: a supervisor with no window that joins a new kill-on-close Job Object and starts the server process inside it (`app.py serve`), and waits until the server of its own launch listens (the TCP table), at most 30 s. Concurrent `up` commands are serialized by `launch.lock`; one instance is enforced by the supervisor's `instance.lock` (below) |
 | `down` | Writes the stop request the server watches for (`<state>/owner-host/stop-request`), waits on both processes (at most 15 s), and terminates the supervisor only if they have not ended; the job then ends the server |
 | `restart` | The contract's, under a write-ahead transition record (`<state>/owner-host/transitions/`) |
 | `status`, `inspect` | Report; change nothing |
@@ -96,6 +108,11 @@ the interpreter's needs, nothing else); it has no dispatch endpoint.
 
 No `install`, `upgrade`, `uninstall` or credential verb: it runs from the checkout and is custodian of no credential.
 Linux and macOS: `PLATFORM_UNSUPPORTED`.
+
+One instance: the supervisor takes an exclusive OS lock on `<state>/owner-host/instance.lock` before it touches any
+shared file and holds it for its whole life (the OS releases it when the supervisor ends, however it ends). A second
+supervisor exits having started and written nothing, and its `up` is refused `ALREADY_RUNNING`. A server that exits
+other than cleanly, killed included, is recorded as `failed` in `run.json`.
 
 Data (decision 0009): `<state>/owner-host/` holds `conversation.sqlite`, `run.json` (`aieh-service-run/1`: the
 supervisor and server processes, the job, the harness commit and tools lock digest, the configuration snapshot) and

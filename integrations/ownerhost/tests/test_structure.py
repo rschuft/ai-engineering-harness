@@ -156,6 +156,29 @@ class NoClientSocket(unittest.TestCase):
             self.assertNotIn('request.cookies', text)
 
 
+class ExclusiveListener(unittest.TestCase):
+    """While the server's listener holds 127.0.0.1:<port>, no other socket can bind that address and port, not even
+    with SO_REUSEADDR. Measured on Windows 11 (2026-11-16): a listener bound without any option refuses that second
+    bind too (WSAEACCES), so removing SO_EXCLUSIVEADDRUSE alone (the review's mutant M18) is equivalent on this host;
+    a listener that shares its address (SO_REUSEADDR, as uvicorn's own bind sets) lets the second bind through, and
+    this test fails for it. Another address of the port (0.0.0.0) is not excluded either way; up and the readiness
+    record cover that (test_service)."""
+    category = 'integration'
+
+    @unittest.skipUnless(sys.platform == 'win32', 'SO_EXCLUSIVEADDRUSE is Windows\' (elsewhere the default refuses)')
+    def test_a_reuse_bind_of_the_held_address_and_port_is_refused(self):
+        import socket
+        listener = T.A.bind_listener(0)
+        self.addCleanup(listener.close)
+        address, port = listener.getsockname()
+        self.assertEqual(address, '127.0.0.1')
+        other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(other.close)
+        other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with self.assertRaises(OSError):
+            other.bind(('127.0.0.1', port))
+
+
 class OnePort(unittest.TestCase):
     def test_the_port_is_the_census_s_and_the_matrix_s(self):
         guest = tree(T.REPO / 'tools' / 'guest.py')

@@ -157,7 +157,7 @@
       ],
       "enforcement": [
         {
-          "mechanism": "one exclusive listener on 127.0.0.1:13310 (integrations/ownerhost/app.py bind_listener, SO_EXCLUSIVEADDRUSE); a busy port is PORT_IN_USE, never another port",
+          "mechanism": "one listener on 127.0.0.1:13310 (integrations/ownerhost/app.py bind_listener) bound with SO_EXCLUSIVEADDRUSE: no other socket binds 127.0.0.1:13310 while it is held, even with SO_REUSEADDR; another address of the port is not excluded, so up refuses a port in use on any address (PORT_IN_USE, never another port) and the readiness record fails when any other socket holds it",
           "kind": "prevention",
           "where": "host"
         },

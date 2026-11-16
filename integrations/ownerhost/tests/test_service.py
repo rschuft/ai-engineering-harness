@@ -154,6 +154,48 @@ class _Platform:
     supervision, credentials = {'mechanism': 'job-object'}, {}
 
 
+class Instance(Base):
+    """One instance: the supervisor's lock on <state>/owner-host/instance.lock."""
+
+    def test_a_second_holder_is_refused_until_the_first_releases(self):
+        first, second = SV.InstanceLock(self.lay.instance_lock), SV.InstanceLock(self.lay.instance_lock)
+        self.assertTrue(first.acquire())
+        self.assertFalse(second.acquire())
+        self.assertTrue(second.held_elsewhere())
+        first.release()
+        self.assertFalse(second.held_elsewhere())
+        self.assertTrue(second.acquire())
+        second.release()
+
+    def test_a_supervisor_that_finds_the_lock_held_touches_nothing(self):
+        holder = SV.InstanceLock(self.lay.instance_lock)
+        self.assertTrue(holder.acquire())
+        self.addCleanup(holder.release)
+        for name, text in (('run.json', '{"other": true}'), ('server.json', '{"other": true}'), ('stop-request', 'x')):
+            (self.lay.state / name).write_text(text, encoding='utf-8')
+        def files():     # the lock file itself is locked for reading while held
+            return {p.name: p.read_bytes() for p in self.lay.state.iterdir() if p.name != 'instance.lock'}
+        before = files()
+
+        class Untouchable:
+            def __getattr__(self, name):
+                raise AssertionError(f'the adapter was used: {name}')
+        self.assertEqual(SV.supervise(self.lay, Untouchable(), 'launch'), SV.LOCK_HELD_EXIT)
+        self.assertEqual(files(), before)
+        self.assertEqual(sorted(before), ['run.json', 'server.json', 'stop-request'])
+        self.assertEqual(list(self.lay.logs.iterdir()), [])
+
+    def test_up_refuses_while_another_holds_the_lock_and_starts_nothing(self):
+        holder = SV.InstanceLock(self.lay.instance_lock)
+        self.assertTrue(holder.acquire())
+        self.addCleanup(holder.release)
+        adapter = FakeAdapter()
+        with self.assertRaises(SV.LifecycleError) as caught:
+            SV.up(self.lay, adapter)
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('ALREADY_RUNNING', True))
+        self.assertEqual(adapter.launched, [])
+
+
 class Verbs(Base):
     def test_up_refuses_a_running_environment_and_starts_nothing(self):
         adapter = self.running([row('127.0.0.1', 13310, 20)])

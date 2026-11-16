@@ -16,8 +16,9 @@ passes through memory only: it is never stored, logged, echoed or put in a refus
 Refusals (each changes nothing; HTTP 401):
 
 - ``SESSION_CREDENTIAL_MISSING``: no header;
-- ``SESSION_CREDENTIAL_FOREIGN``: more than one header, a value not of this shape, or one matching no enrolled
-  verifier;
+- ``SESSION_CREDENTIAL_FOREIGN``: more than one header, a value not of this shape, one matching no enrolled
+  verifier, or one whose session was issued more than ``FUTURE_SKEW_S`` (5 minutes) after now (no enrollment on
+  this host issues one: such a row was written otherwise);
 - ``SESSION_CREDENTIAL_REVOKED``: a session superseded by a later enrollment (checked before the expiry: a
   superseded session is refused as revoked whether or not it has also expired);
 - ``SESSION_CREDENTIAL_EXPIRED``: the current session, past its expiry.
@@ -26,6 +27,7 @@ Standard library only.
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import re
 
@@ -38,6 +40,7 @@ HEADER = 'X-AIEH-Owner-Session'
 HEADER_KEY = HEADER.lower().encode('ascii')
 DEFAULT_HOURS = 12
 MAX_HOURS = 7 * 24
+FUTURE_SKEW_S = 5 * 60
 
 REMEDIES = {
     'SESSION_CREDENTIAL_MISSING': f'sign in to the Owner UI with the credential the enroll command showed; every '
@@ -76,6 +79,11 @@ def verifier(credential: str) -> str:
     return hashlib.sha256(DOMAIN + credential.encode('ascii')).hexdigest()
 
 
+def _seconds(stamp: str) -> float:
+    return datetime.datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(
+        tzinfo=datetime.timezone.utc).timestamp()
+
+
 def check(store, presented: list, now: str):
     """The session that PRESENTED (the request's header values, as bytes or str) authenticates at NOW
     (YYYY-MM-DDTHH:MM:SSZ), or SessionRefused. STORE answers ``session_by_verifier``."""
@@ -94,6 +102,9 @@ def check(store, presented: list, now: str):
     session = store.session_by_verifier(verifier(value))
     if session is None:
         raise SessionRefused('SESSION_CREDENTIAL_FOREIGN', 'the credential matches no enrolled session')
+    if _seconds(session.issued_at) - _seconds(now) > FUTURE_SKEW_S:
+        raise SessionRefused('SESSION_CREDENTIAL_FOREIGN', f'session {session.session_id} is issued at '
+                                                           f'{session.issued_at}, after now')
     if not session.current:
         raise SessionRefused('SESSION_CREDENTIAL_REVOKED', f'session {session.session_id} was superseded by '
                                                            f'session {session.superseded_by}')

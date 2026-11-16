@@ -816,8 +816,10 @@ WINDOW_ALLOWLIST = {
 UNCONDITIONAL = {
     ('tools/guest.py', 'launch'): 'QEMU, in its own process group; it outlives its caller',
     ('tools/guest.py', 'forward_spawn'): 'the inference forward holder, in its own process group',
-    ('integrations/platform/platform_windows.py', 'WindowsAdapter.launch_supervisor'): 'the Gitea supervisor, '
-                                                                                         'broken away from the caller',
+    ('integrations/platform/platform_windows.py', 'WindowsAdapter.launch_supervisor'): 'the supervisors of the host '
+                                                                                         'services (Gitea, the '
+                                                                                         'Integration process), broken '
+                                                                                         'away from the caller',
     ('integrations/gitea/gitea_host.py', 'supervise'): 'Gitea itself, for as long as its supervisor runs',
 }
 WINDOW_OPENERS = ('DETACHED_PROCESS', 'CREATE_NEW_CONSOLE')

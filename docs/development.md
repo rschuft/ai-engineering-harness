@@ -1776,8 +1776,10 @@ Proposed): a Starlette application on uvicorn under the tools interpreter, bound
 stopped by `ownerhost:up` and `ownerhost:down` through the platform contract. Every request
 needs the Owner UI session credential (`cred-owner-ui-session`) in the `X-AIEH-Owner-Session`
 header, never a cookie; the CORS preflight is the one exception and carries no data. The
-Owner mints the credential himself with `ownerhost:enroll` at a console (it refuses pipes and
-redirections); the Owner conversation store
+Owner mints the credential himself with `ownerhost:enroll` at a console (it refuses plain pipes
+and redirections, an accidental piped run; a process of the Owner's account that drives a console
+or writes the store is the accepted same-account limit, which the Owner sees as his session
+superseded); the Owner conversation store
 ([`integrations/conversation/`](../integrations/conversation/README.md),
 `<state>/owner-host/conversation.sqlite`) keeps only its verifier. The shell's sign-in view
 (`/sign-in`) verifies the pasted credential with `POST /session`, keeps it in its own
