@@ -157,17 +157,17 @@
       ],
       "enforcement": [
         {
-          "mechanism": "every harness host listener binds 127.0.0.1 only",
+          "mechanism": "one exclusive listener on 127.0.0.1:13310 (integrations/ownerhost/app.py bind_listener, SO_EXCLUSIVEADDRUSE); a busy port is PORT_IN_USE, never another port",
           "kind": "prevention",
           "where": "host"
         },
         {
-          "mechanism": "the Owner UI session credential (cred-owner-ui-session), never shaped like an Agent Server key",
+          "mechanism": "the Owner UI session credential (cred-owner-ui-session: aieh-oui- and 52 lower-case base32 characters), never shaped like an Agent Server key; refused as SESSION_CREDENTIAL_MISSING, _FOREIGN, _EXPIRED or _REVOKED, each changing nothing (integrations/ownerhost/session.py)",
           "kind": "prevention",
           "where": "host"
         },
         {
-          "mechanism": "the credential in a request header (X-AIEH-Owner-Session) on every request, never a cookie; Host must be the literal 127.0.0.1:13310 and Origin, when present, one of the shell's two origins (http://127.0.0.1:4173, http://127.0.0.1:5173)",
+          "mechanism": "the credential in a request header (X-AIEH-Owner-Session) on every request, never a cookie; Host must be the literal 127.0.0.1:13310 and Origin, when present, one of the shell's two origins (http://127.0.0.1:4173, http://127.0.0.1:5173) (HOST_NOT_ALLOWED, ORIGIN_NOT_ALLOWED); the CORS preflight is the one request answered without the credential and carries no data (integrations/ownerhost/app.py)",
           "kind": "prevention",
           "where": "host"
         }
@@ -185,9 +185,9 @@
         "fd-owner-ui-session-plan-silence"
       ],
       "inspection": [
-        "planned: U-01.3 (guest.py host-census by port 13310: bound to 127.0.0.1 only; every route refuses a request without cred-owner-ui-session)"
+        "planned: U-01.3, built (guest.py host-census by port 13310: bound to 127.0.0.1 only; task ownerhost:verify: the server's listeners from the TCP table by process; integrations/ownerhost/tests/test_listener.py and test_app.py: every route refuses a request without cred-owner-ui-session); observed at the leaf's verdict"
       ],
-      "notes": "Decision 0013, point 5. U-01.3 builds the Integration process and its Owner login (commitment I1, 2026-11-16; Proposed decision 0025), corrected from U-01.2: S-01.4 ruling R8's open question is answered by the I1 commitment. Not built yet. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (Proposed decision 0025, point 7)."
+      "notes": "Decision 0013, point 5. U-01.3 builds the Integration process and its Owner login (commitment I1, 2026-11-16; Proposed decision 0025), corrected from U-01.2: S-01.4 ruling R8's open question is answered by the I1 commitment. Built in U-01.3's second slice (integrations/ownerhost; the shell's sign-in in apps/owner-host); not yet observed: the observation is the leaf's verdict. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (Proposed decision 0025, point 7)."
     },
     {
       "id": "nm-owner-management-same-account",
