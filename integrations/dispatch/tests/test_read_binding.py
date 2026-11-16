@@ -178,6 +178,7 @@ class Judge(unittest.TestCase):
     def test_an_unlisted_or_absent_read_is_a_violation_and_a_container_is_not(self):
         self.assertEqual(len(self.judged(('runtime', 'body.nothing', False))[0]), 1)
         self.assertEqual(len(self.judged(('conversation-absent', 'body', False))[0]), 1)
+        self.assertEqual(len(self.judged(('conversation', 'body.id', False))[0]), 1, 'a read row the core did not serve')
         self.assertEqual(self.judged(('server-info', 'body', True), ('message-event', 'llm_message.content', True))[0],
                          [])
 
