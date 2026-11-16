@@ -61,7 +61,7 @@ The project is in its bootstrap phase. It is building the foundation the harness
 
 This README does not track progress. The authoritative records are:
 
-- **Verdict history:** the [bootstrap log](evidence/bootstrap-log.md) records each verdict during bootstrap, with its revision and evidence. Once Backlog.md is adopted as the Work system, Backlog.md replaces it as the record of progress.
+- **Verdict history and Work:** the [bootstrap log](evidence/bootstrap-log.md) records each verdict during bootstrap, with its revision and evidence. Its Leaves table was closed on 2026-11-16 (plan leaf P-05.1): a leaf with a row keeps its status there, and every other leaf's Work and status are a Backlog.md task in [`backlog/`](backlog/), linked to its plan contract. `task plan:commitment -- <leaf>` reports a commitment's status from both ([details](docs/development.md#repository-work-in-backlogmd)).
 - **Decisions:** accepted and proposed decision records are in [`decisions/`](decisions/).
 - **Evidence and qualification:** the detailed evidence behind each verdict, including its limits, is in [`evidence/`](evidence/) and in the `QUALIFICATION.md` of each qualified execution profile under [`profiles/`](profiles/).
 
@@ -103,6 +103,7 @@ Three different workflows touch this repository:
 | How to contribute | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Developer setup and commands | [`docs/development.md`](docs/development.md), [`Taskfile.yml`](Taskfile.yml) |
 | Implementation evidence | [`evidence/`](evidence/) |
+| The repository's Work: tasks, dependencies and status (Backlog.md) | [`backlog/`](backlog/); see [Repository Work in Backlog.md](docs/development.md#repository-work-in-backlogmd) |
 | Decisions | [`decisions/`](decisions/) |
 | Component selection, locks and licence inventory | [`composition/`](composition/) |
 | Trust domains, principals, protected assets and credential requirements | [`security/`](security/) |

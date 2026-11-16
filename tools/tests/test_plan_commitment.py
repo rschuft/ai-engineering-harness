@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CATEGORY = 'unit'
 
@@ -47,7 +48,8 @@ LOG = """# Log
 | Id | Status |
 |---|---|
 | OA-1 | **PASS** |
-| OA-7 | Open |
+| OA-7 | Open; needed by W-01.3's run |
+| OA-8 | Open; needed by W-01.2 |
 
 ## Leaves
 
@@ -69,7 +71,17 @@ Intro text.
 
 - <a id="commitment-w-2026-11-16"></a>**2026-11-16: Commitment: W.** Terminal leaf W-01.3.
 - <a id="owner-act-oa-7-2026-11-20"></a>**2026-11-20: the Owner's act OA-7**, verbatim.
+- <a id="owner-decision-oa-1-2026-11-10"></a>**2026-11-10: the Owner's decision OA-1**, verbatim.
+- An example, not an anchor: `<a id="owner-span-oa-7"></a>`.
+<!-- <a id="owner-comment-oa-7"></a> -->
+
+```
+<a id="owner-fenced-oa-7"></a>
+```
 """
+
+# The fixture's Leaves table as closed: what LEAVES_CLOSED pins for the committed log.
+FIXTURE_CLOSED = {'date': '2026-11-16', 'ids': ('A-01.1', 'A-01.2', 'B-01.1', 'B-01', 'D-01.1')}
 
 CONFIG = '''project_name: "fixture"
 default_status: "To Do"
@@ -104,10 +116,10 @@ def yaml_list(key, items):
     return out
 
 
-def task_text(ident, title, status='To Do', milestone='m-0', deps=(), refs=(), criteria=()):
+def task_text(ident, title, status='To Do', milestone='m-0', deps=(), refs=(), criteria=(), labels=()):
     quoted = "'" + title.replace("'", "''") + "'"
     text = (f'---\nid: {ident}\ntitle: {quoted}\nstatus: {status}\nassignee: []\n'
-            f"created_date: '2026-11-16T03:39:00Z'\nlabels: []\n")
+            f"created_date: '2026-11-16T03:39:00Z'\n" + yaml_list('labels', list(labels)))
     if milestone:
         text += f'milestone: {milestone}\n'
     text += yaml_list('dependencies', list(deps)) + (yaml_list('references', list(refs)) if refs else '')
@@ -131,6 +143,7 @@ def leaf_task(ident, tid, deps=(), **kw):
 
 def act_task(act, tid, **kw):
     kw.setdefault('refs', [ACT_REF])
+    kw.setdefault('labels', ['gates:W-01.3'])
     kw.setdefault('criteria', [f"Done only by reference to the Owner's recorded act {act}."])
     return tid, dict(title=f'{act}: an Owner act', **kw)
 
@@ -146,6 +159,9 @@ def tasks():
 
 class Fixture(unittest.TestCase):
     def setUp(self):
+        patcher = mock.patch.object(pc, 'LEAVES_CLOSED', FIXTURE_CLOSED)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
@@ -206,6 +222,7 @@ class StatusParsingTests(unittest.TestCase):
             with self.subTest(cell=cell):
                 self.assertEqual(pc.status_of(cell), expected)
 
+    @mock.patch.object(pc, 'LEAVES_CLOSED', FIXTURE_CLOSED)
     def test_leaves_table_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'log.md'
@@ -303,17 +320,44 @@ class BacklogStatusTests(Fixture):
         self.assertEqual((rows['W-01.3']['ready'], rows['W-01.3']['waits_on']), (True, []))
 
     def test_owner_act_done_only_by_reference_to_a_recorded_act(self):
+        log = 'evidence/bootstrap-log.md#'
         cases = {
             'no log reference': [],
             'a Decisions anchor that is not an Owner record': [ACT_REF],
-            'an owner- anchor that the Decisions do not hold': ['evidence/bootstrap-log.md#owner-act-oa-7-1999-01-01'],
+            'an owner- anchor that the Decisions do not hold': [log + 'owner-act-oa-7-1999-01-01'],
             'another file': ['other.md#owner-act-oa-7-2026-11-20'],
+            'another act\'s record': [log + 'owner-decision-oa-1-2026-11-10'],
+            'an anchor in a code span': [log + 'owner-span-oa-7'],
+            'an anchor in an HTML comment': [log + 'owner-comment-oa-7'],
+            'an anchor in a fenced block': [log + 'owner-fenced-oa-7'],
+            'a relative path': ['./' + RECORDED],
         }
         for name, refs in cases.items():
             with self.subTest(name):
                 self.set_status('TASK-3', 'Done', refs=refs)
                 err = self.assert_refused('OWNER_ACT_UNRECORDED')
                 self.assertIn('TASK-3 (OA-7)', err)
+
+    def test_the_recorded_act_names_the_act_as_a_token(self):
+        self.assertTrue(pc.re.search(r'(^|-)oa-7(-|$)', 'owner-act-oa-7-2026-11-20'))
+        for anchor in ('owner-act-oa-70-2026-11-20', 'owner-act-xoa-7', 'owner-act-oa-7x'):
+            with self.subTest(anchor):
+                log = LOG.replace('</a>**2026-11-10', f'</a><a id="{anchor}"></a>**2026-11-10')
+                self.set_status('TASK-3', 'Done', refs=[f'evidence/bootstrap-log.md#{anchor}'])
+                self.assert_refused('OWNER_ACT_UNRECORDED', log=self.write('anchors.md', log))
+
+    def test_a_done_leaf_needs_its_dependencies_passed(self):
+        self.set_status('TASK-2', 'Done')  # W-01.1 is To Do
+        self.assertIn('TASK-2 for W-01.2 is Done while W-01.1 has not passed', self.assert_refused('TASK_DONE_EARLY'))
+        self.tasks['TASK-1']['status'] = 'Done'
+        self.tasks['TASK-2']['status'] = 'Done'
+        self.set_status('TASK-4', 'Done')  # its act OA-7 is open
+        self.assertIn('while OA-7 has not passed', self.assert_refused('TASK_DONE_EARLY'))
+        self.set_status('TASK-3', 'Done', refs=[ACT_REF, RECORDED])
+        self.assertTrue(self.rows('W-01.3')['W-01.3']['passed'])
+        log = LOG.replace('| A-01.2 Second | PASS (2026-11-06); pushed |', '| A-01.2 Second | **IN PROGRESS** |')
+        self.assertIn('while A-01.2 has not passed',  # a Leaves-table dependency that has not passed
+                      self.assert_refused('TASK_DONE_EARLY', log=self.write('open.md', log)))
 
     def test_crlf_files_read_the_same(self):
         expected = self.report('W-01.3')
@@ -424,9 +468,42 @@ class BacklogCheckTests(Fixture):
             with self.subTest(name):
                 self.rewrite('TASK-2', deps=deps)
                 self.assert_refused('TASK_DEPENDENCIES_MISMATCH')
-        self.rewrite('TASK-2', deps=['TASK-1', 'TASK-3'])  # an Owner-act task may be added
-        self.assertEqual(self.run_main('W-01.3')[0], 0)
-        self.assertEqual(self.rows('W-01.3')['W-01.2']['waits_on'], ['OA-7'])
+        self.rewrite('TASK-3', labels=['gates:W-01.3', 'gates:W-01.2'])
+        self.rewrite('TASK-2', deps=['TASK-1', 'TASK-3'])  # an Owner-act task that gates it may be added
+        self.assertEqual(self.run_main('W-01.3', log=self.write('two.md', LOG.replace(
+            "W-01.3's run", "W-01.3's run and W-01.2")))[0], 0)
+
+    def test_owner_act_gates(self):
+        cases = {
+            'OWNER_ACT_GATES_NOTHING': dict(labels=[]),
+            'OWNER_ACT_GATE_UNLISTED': dict(labels=['gates:W-01.1']),  # OA-7's row names W-01.3 only
+        }
+        for code, changes in cases.items():
+            with self.subTest(code):
+                self.tasks = tasks()
+                self.rewrite('TASK-3', **changes)
+                self.assert_refused(code)
+        self.tasks = tasks()
+        self.rewrite('TASK-3', labels=['gates:Z-09.9'])
+        self.assert_refused('OWNER_ACT_GATE_UNLISTED')
+
+    def test_a_gated_leaf_keeps_its_act_dependency(self):
+        self.rewrite('TASK-4', deps=['TASK-2'])  # the act dependency dropped
+        self.assertIn('OA-7 gates W-01.3, but its task TASK-4 does not depend on TASK-3',
+                      self.assert_refused('OWNER_ACT_GATE_DROPPED'))
+        del self.tasks['TASK-4']  # the gated leaf's task deleted
+        self.write_backlog()
+        self.assertIn('OA-7 gates W-01.3, which has no task', self.assert_refused('OWNER_ACT_GATE_UNTASKED'))
+
+    def test_a_leaf_depends_only_on_acts_that_gate_it(self):
+        self.rewrite('TASK-2', deps=['TASK-1', 'TASK-3'])  # OA-7 does not declare W-01.2
+        self.assertIn('does not declare gates:W-01.2', self.assert_refused('OWNER_ACT_GATE_UNDECLARED'))
+        self.rewrite('TASK-3', labels=['gates:W-01.3', 'gates:W-01.2'])  # OA-7's row does not name W-01.2
+        self.assert_refused('OWNER_ACT_GATE_UNLISTED')
+        self.tasks.update([act_task('OA-8', 'TASK-9', labels=['gates:W-01.2'])])
+        self.rewrite('TASK-3', labels=['gates:W-01.3'])
+        self.rewrite('TASK-2', deps=['TASK-1', 'TASK-9'])
+        self.assertEqual(self.rows('W-01.3')['W-01.2']['waits_on'], ['OA-8'])
 
     def test_a_plan_dependency_without_row_or_task(self):
         del self.tasks['TASK-1']
@@ -447,10 +524,37 @@ class LeavesClosureTests(Fixture):
 
     def test_table_gains_no_rows(self):
         row = '| D-01.1 Other | **BLOCKED on one clause (review)** | x | e | g |\n'
-        log = LOG.replace(row, row + '| W-01.1 A new row | **PASS (2026-11-20)** | x | e | g |\n')
+        new = '| W-01.1 A new row | **PASS (2026-11-20)** | x | e | g |\n'
+        log = LOG.replace(row, row + new)
         err = self.assert_refused('LEAVES_TABLE_REOPENED', log=self.write('grown.md', log))
-        self.assertIn('the Leaves table has 6 rows; it was closed on 2026-11-16 at 5 rows', err)
+        self.assertIn('the Leaves table has 6 rows and row 6 is W-01.1; it was closed on 2026-11-16 at 5 rows', err)
         self.assert_refused('LEAVES_TABLE_REOPENED', log=self.write('shrunk.md', LOG.replace(row, '')))
+        log = LOG.replace(row, row + new).replace('at 5 rows**', 'at 6 rows**')  # the record edited too
+        err = self.assert_refused('LEAVES_TABLE_REOPENED', log=self.write('recount.md', log))
+        self.assertIn('the closure record reads closed on 2026-11-16 at 6 rows', err)
+
+    def test_the_rows_ids_are_pinned(self):
+        row = '| D-01.1 Other | **BLOCKED on one clause (review)** | x | e | g |\n'
+        cases = {
+            'a row replaced': LOG.replace(row, '| W-01.1 Swapped in | **PASS (2026-11-20)** | x | e | g |\n'),
+            'a first cell relabelled': LOG.replace('| B-01.1 Third |', '| W-01.2 Third |'),
+            'rows reordered': LOG.replace('| A-01.1 First', '| A-01.X').replace('| A-01.2 Second', '| A-01.1 First')
+                                 .replace('| A-01.X', '| A-01.2 Second'),
+        }
+        for name, log in cases.items():
+            with self.subTest(name):
+                self.assert_refused('LEAVES_TABLE_REOPENED', log=self.write('swapped.md', log))
+
+    def test_no_rows_after_the_closed_table(self):
+        row = '| D-01.1 Other | **BLOCKED on one clause (review)** | x | e | g |\n'
+        cases = {
+            'a second table': LOG.replace(row, row + '\n| Task | Verdict |\n|---|---|\n| W-01.1 x | **PASS** |\n'),
+            'a table split by a blank line': LOG.replace('| B-01.1 Third', '\n| B-01.1 Third'),
+            'an indented row': LOG.replace(row, row + '\nText.\n\n  | W-01.1 x | **PASS** |\n'),
+        }
+        for name, log in cases.items():
+            with self.subTest(name):
+                self.assert_refused('LEAVES_TABLE_REOPENED', log=self.write('after.md', log))
 
     def test_a_verdict_edited_in_place_is_accepted(self):
         log = LOG.replace('**IN PROGRESS (2026-11-11)**: slice 1', '**PASS (2026-11-20)**')
@@ -572,12 +676,29 @@ I1_WAVE = {'U-01.3', 'E-01.4.1', 'E-01.7', 'U-02.1', 'U-01.2', 'E-01.4.2', 'U-02
 
 
 def committed_copy(test):
-    """A throwaway copy of the committed backlog/ for a test to change."""
+    """A throwaway copy of the committed backlog/ with every task's status reset to To Do, so that a
+    test of a status change stays true whatever the committed statuses are as I1 progresses."""
     tmp = tempfile.TemporaryDirectory()
     test.addCleanup(tmp.cleanup)
     copy = Path(tmp.name) / 'backlog'
     shutil.copytree(ROOT / pc.BACKLOG, copy)
+    for path in (copy / 'tasks').glob('*.md'):
+        lines = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
+        end = lines.index('---', 1)
+        lines[:end] = ['status: To Do' if line.startswith('status: ') else line for line in lines[:end]]
+        path.write_text('\n'.join(lines), encoding='utf-8', newline='\n')
     return copy
+
+
+def committed_log(test, extra=''):
+    """A throwaway copy of the committed log, with ``extra`` added at the start of its Decisions."""
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    text = (ROOT / pc.LOG).read_text(encoding='utf-8').replace('\r\n', '\n')
+    assert text.count('\n## Decisions\n') == 1
+    path = Path(tmp.name) / 'log.md'
+    path.write_text(text.replace('\n## Decisions\n', '\n## Decisions\n\n' + extra), encoding='utf-8', newline='\n')
+    return path
 
 
 def committed_task(backlog, title_head):
@@ -617,13 +738,16 @@ class CommittedPlanTests(unittest.TestCase):
             pc.closure(leaves, ident)
 
     def test_next_wave_is_in_backlog(self):
+        """Status-independent: true whatever the tasks' statuses are."""
         rows = {r['id']: r for r in pc.report('U-06.1')['leaves']}
-        open_rows = {i: r for i, r in rows.items() if not r['passed']}
-        self.assertEqual(set(open_rows), I1_WAVE)
         for ident, row in rows.items():
             with self.subTest(ident):
                 self.assertEqual(row['source'], 'backlog' if ident in I1_WAVE else 'leaves-table')
-        self.assertEqual(rows['U-06.1']['waits_on'], ['OA-32', 'OA-33'])
+        backlog = pc.Backlog(ROOT / pc.BACKLOG)
+        by_head = {t['title'].split(': ', 1)[0]: t for t in backlog.tasks.values()}
+        for act in ('OA-32', 'OA-33'):
+            self.assertEqual(by_head[act]['labels'], ['gates:U-06.1'])
+            self.assertIn(by_head[act]['id'], by_head['U-06.1']['dependencies'])
         for path in (ROOT / pc.BACKLOG).rglob('*'):
             self.assertLessEqual(len(path.relative_to(ROOT).as_posix()), pc.MAX_PATH, path.name)
         backlog = pc.Backlog(ROOT / pc.BACKLOG)
@@ -644,6 +768,7 @@ class CommittedPlanTests(unittest.TestCase):
         copy = committed_copy(self)
         before = {r['id']: r for r in pc.report('U-06.1', backlog_dir=copy)['leaves']}
         self.assertEqual((before['E-01.4.1']['ready'], before['E-01.4.2']['ready']), (True, False))
+        self.assertEqual(before['U-06.1']['waits_on'], ['OA-32', 'OA-33'])
         task, text = committed_task(copy, 'E-01.4.1')
         self.assertEqual(text.count('\nstatus: To Do\n'), 1)
         rewrite(task, text.replace('\nstatus: To Do\n', '\nstatus: Done\n'))
@@ -668,11 +793,46 @@ class CommittedPlanTests(unittest.TestCase):
         with self.assertRaises(pc.Refusal) as ctx:
             pc.report('U-06.1', backlog_dir=copy)
         self.assertEqual(ctx.exception.code, 'OWNER_ACT_UNRECORDED')
-        # An Owner record of the log's Decisions (here the I1 direction, standing in for OA-32's record).
-        recorded = done.replace('references:\n', 'references:\n  - evidence/bootstrap-log.md#owner-direction-i1-2026-11-16\n')
-        rewrite(task, recorded)
-        rows = {r['id']: r for r in pc.report('U-06.1', backlog_dir=copy)['leaves']}
+        anchor = 'owner-act-oa-32-2099-01-01'  # a stand-in for OA-32's record, in a copy of the log
+        rewrite(task, done.replace('references:\n', f'references:\n  - evidence/bootstrap-log.md#{anchor}\n'))
+        for name, ref in {'another Owner record': 'owner-direction-i1-2026-11-16',
+                          'another act\'s record': 'owner-decision-oa-31-2026-11-14'}.items():
+            with self.subTest(name):
+                other = done.replace('references:\n', f'references:\n  - evidence/bootstrap-log.md#{ref}\n')
+                rewrite(task, other)
+                with self.assertRaises(pc.Refusal) as ctx:
+                    pc.report('U-06.1', backlog_dir=copy, log_path=committed_log(self))
+                self.assertEqual(ctx.exception.code, 'OWNER_ACT_UNRECORDED')
+        rewrite(task, done.replace('references:\n', f'references:\n  - evidence/bootstrap-log.md#{anchor}\n'))
+        log = committed_log(self, f'- <a id="{anchor}"></a>**A test record.**\n')
+        rows = {r['id']: r for r in pc.report('U-06.1', backlog_dir=copy, log_path=log)['leaves']}
         self.assertEqual(rows['U-06.1']['waits_on'], ['OA-33'])
+
+    def test_the_act_gate_cannot_be_dropped(self):
+        copy = committed_copy(self)
+        task, text = committed_task(copy, 'U-06.1')
+        acts = [committed_task(copy, act)[0]['id'] for act in ('OA-32', 'OA-33')]
+        dropped = text
+        for act in acts:
+            dropped = dropped.replace(f'  - {act}\n', '', 1)
+        self.assertNotEqual(dropped, text)
+        rewrite(task, dropped)
+        with self.assertRaises(pc.Refusal) as ctx:
+            pc.report('U-06.1', backlog_dir=copy)
+        self.assertEqual(ctx.exception.code, 'OWNER_ACT_GATE_DROPPED')
+        task['path'].unlink()
+        with self.assertRaises(pc.Refusal) as ctx:
+            pc.report('U-06.1', backlog_dir=copy)
+        self.assertEqual(ctx.exception.code, 'OWNER_ACT_GATE_UNTASKED')
+
+    def test_the_terminal_leaf_is_not_done_before_its_acts(self):
+        copy = committed_copy(self)
+        task, text = committed_task(copy, 'U-06.1')
+        rewrite(task, text.replace('\nstatus: To Do\n', '\nstatus: Done\n'))
+        with self.assertRaises(pc.Refusal) as ctx:
+            pc.report('U-06.1', backlog_dir=copy)
+        self.assertEqual(ctx.exception.code, 'TASK_DONE_EARLY')
+        self.assertIn('OA-32, OA-33', ctx.exception.detail)
 
 
 BACKLOG_CLI = os.environ.get('AIEH_BACKLOG')
@@ -697,7 +857,7 @@ class PinnedBacklogTests(unittest.TestCase):
         project = copy.parent
         self.assertEqual(self.backlog(project, '--version').strip(), '1.55.3')
         ours = pc.Backlog(copy)
-        listed = json.loads(self.backlog(project, 'task', 'list', '--json'))['tasks']
+        listed = json.loads(self.backlog(project, 'task', 'list', '--json'))['tasks']  # statuses reset
         self.assertEqual(sorted(t['id'] for t in listed), sorted(ours.tasks))
         for entry in listed:
             view = json.loads(self.backlog(project, 'task', 'view', entry['id'], '--json'))['task']

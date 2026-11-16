@@ -4,7 +4,9 @@ title: 'OA-33: The dispatch-input manifest for U-06.1''s fixture dispatch'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-labels: []
+updated_date: '2026-11-16T04:08:00Z'
+labels:
+  - gates:U-06.1
 milestone: m-0
 dependencies: []
 references:

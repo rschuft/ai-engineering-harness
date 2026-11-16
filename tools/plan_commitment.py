@@ -18,7 +18,10 @@ Status of a leaf, from exactly one source:
 3. else "not started".
 
 A leaf with both a row and a task is refused (``STATUS_TWO_SOURCES``). The Leaves table is closed
-(P-05.1): the log records the row count at closure, and a table with another count is refused.
+(P-05.1): the log records the closure, and this tool pins the closed table (``LEAVES_CLOSED``: the
+date and each row's first token, in order). Another count, another id in any row, a closure record
+that differs from the pin, or a table row after the closed table refuses the report; a verdict edited
+in place is read.
 
 A leaf is *passed* or *open*. An open leaf is *ready* when every plan dependency is passed and its
 task depends on no open Owner-act task; otherwise it is *blocked*, and the Owner acts it waits on
@@ -26,18 +29,25 @@ are named. Its own status (for example BLOCKED or In Progress) is reported besid
 
 The repository's Backlog.md tasks are checked on every run, and any mismatch refuses the report:
 
-- a leaf task's title is ``<leaf id>: `` and a non-empty prefix of its plan title ending at a word
-  boundary (shortened only so that its file's path stays within the limit below), and it references
-  ``<plan file>#<leaf id>``, the authoritative link;
-  an Owner-act task's title is ``OA-<n>: <what>``, for an act in the log's Owner actions; one task
-  per leaf and per act;
+- a leaf task references ``<plan file>#<leaf id>``, the authoritative link, and its title is
+  ``<leaf id>: `` and any non-empty prefix of its plan title that ends at a word boundary (the
+  creator keeps as much of the title as fits within the path limit below; the check accepts any such
+  prefix); an Owner-act task's title is ``OA-<n>: <what>``, for an act in the log's Owner actions;
+  one task per leaf and per act;
+- no file under ``backlog/`` has a repository-relative path longer than 100 characters;
 - a leaf task's milestone is the plan milestone of the leaf's phase;
 - a leaf task's acceptance criteria, joined by one space, equal the leaf's plan proof after
   whitespace normalization;
-- a leaf task's dependencies are exactly the tasks of its plan dependencies, plus any Owner-act
-  tasks; a plan dependency with no Leaves-table row has a task;
+- a leaf task's dependencies are exactly the tasks of its plan dependencies, plus the Owner-act
+  tasks that gate it; a plan dependency with no Leaves-table row has a task;
+- an Owner-act task names each leaf it gates with a ``gates:<leaf id>`` label; each such leaf is
+  named in the act's row of the log's Owner actions and has a task that depends on the act task, and
+  no other leaf task depends on it;
 - an Owner-act task is Done only when it references ``evidence/bootstrap-log.md#owner-...``, an
-  anchor in the log's Decisions (the Owner's recorded act).
+  anchor of the log's Decisions (an ``<a id>`` outside code spans, fenced blocks and HTML comments)
+  that names the act as a hyphen-delimited token (``oa-32`` for OA-32): the Owner's recorded act;
+- a leaf task is Done only when every plan dependency has passed and every act task it depends on
+  is Done.
 
 The Backlog.md files are read by a strict reader of the subset Backlog.md 1.55.3 writes (YAML front
 matter of plain, quoted and folded scalars and lists; the acceptance-criteria block). Anything
@@ -52,7 +62,8 @@ Exit codes: 0 reported; 2 refused, with a stable code:
 - DEPENDENCY_CYCLE: the closure has a cycle;
 - UNREADABLE_FILE: a file is missing or cannot be parsed, or the log has no Leaves table;
 - LEAVES_CLOSURE_MISSING: the Leaves section has no single closure record;
-- LEAVES_TABLE_REOPENED: the Leaves table's row count differs from the count at closure;
+- LEAVES_TABLE_REOPENED: the Leaves table differs from the pinned closed table (count or row ids),
+  the closure record differs from the pin, or a table row follows the closed table;
 - BACKLOG_UNREADABLE: a Backlog.md file outside the reader's subset, an unsupported file, a
   duplicate task id, an unknown status or milestone;
 - BACKLOG_CONFIG_REFUSED: the Backlog.md configuration enables auto-commit, remote operations or
@@ -70,8 +81,15 @@ Exit codes: 0 reported; 2 refused, with a stable code:
 - TASK_MISSING: a leaf task's plan dependency has neither a Leaves-table row nor a task;
 - STATUS_TWO_SOURCES: a leaf has both a Leaves-table row and a task;
 - OWNER_ACT_UNKNOWN: an Owner-act task names an act that the log's Owner actions do not list;
-- OWNER_ACT_UNRECORDED: an Owner-act task is Done without a reference to an Owner's recorded act
-  in the log's Decisions.
+- OWNER_ACT_UNRECORDED: an Owner-act task is Done without a reference to the Owner's recorded act
+  in the log's Decisions;
+- OWNER_ACT_GATES_NOTHING: an Owner-act task has no ``gates:<leaf id>`` label;
+- OWNER_ACT_GATE_UNLISTED: a gated leaf is not a plan leaf named in the act's Owner-actions row;
+- OWNER_ACT_GATE_UNTASKED: a gated leaf has no task;
+- OWNER_ACT_GATE_DROPPED: a gated leaf's task does not depend on the act task;
+- OWNER_ACT_GATE_UNDECLARED: a leaf task depends on an act task that does not gate that leaf;
+- TASK_DONE_EARLY: a leaf task is Done while a plan dependency or an act it depends on has not
+  passed.
 """
 
 import argparse
@@ -99,8 +117,23 @@ BOLD = re.compile(r'\*\*(.+?)\*\*')
 UPPER_WORD = re.compile(r"[A-Z][A-Z'-]+")
 CLOSURE = re.compile(r'\*\*Closed on (\d{4}-\d{2}-\d{2}) at (\d+) rows\b')
 ANCHOR = re.compile(r'<a id="([^"]+)"></a>')
+GATES_LABEL = 'gates:'
+
+# The Leaves table as closed by plan leaf P-05.1: the date of its closure record in the log, and the
+# first token of each row, in order. Pinned here, not in the log: a changed id, a changed count or a
+# row after the table refuses the report (LEAVES_TABLE_REOPENED); a verdict edited in place does not.
+LEAVES_CLOSED = {'date': '2026-11-16', 'ids': (
+    'F-03.2.1', 'F-03.2.2', 'F-03.3.1', 'F-03.3.2', 'F-03.4', 'P-01.1', 'P-01.2', 'F-05.1', 'F-05.2',
+    'F-04.1', 'F-04.2', 'S-01.1', 'S-01.2.1', 'P-02.1', 'P-02.2', 'P-03.1', 'P-03.2', 'U-01.1', 'F-07.1',
+    'F-06.1', 'S-01.2.2', 'S-01.3.1', 'S-01.3.2', 'S-01.4', 'S-02.1', 'S-02.2', 'E-01.1.1', 'E-01.1.2',
+    'E-01.2.1', 'E-01.2.2', 'E-01.3.1', 'E-01.3.3', 'E-01.3.2', 'S-03.1', 'S-03.2', 'S-03.3', 'S-03.5',
+    'S-03.6', 'Q-02.1', 'Q-02.2.1', 'G-01.1', 'E-01.4.3', 'F-09.1', 'F-09.2', 'F-09.3', 'F-09.4', 'F-09.5',
+    'F-10.1', 'F-10.2', 'F-10.3', 'F-10.4', 'F-10.6', 'F-10.5', 'F-06.2', 'F-06.3', 'P-04.1', 'P-04.2',
+    'P-04.3', 'E-05.12', 'E-05.1', 'E-05.2', 'E-05.3', 'E-05.4', 'E-05.7', 'E-05.6', 'E-05.5', 'E-05.8',
+    'E-05.9', 'E-05.10', 'E-05.11', 'P-05.1', 'F-09', 'F-09', 'F-09', 'F-09', 'F-09', 'F-03.1', 'F-02',
+    'F-01.2', 'F-01.1')}
 ACT_ID = re.compile(r'OA-\d+')
-ACT_ROW = re.compile(r'\| (OA-\d+) \|')
+ACT_ROW = re.compile(r'\| (OA-\d+) \|.*')
 TITLE = re.compile(r'(\S+?): (\S.*)')
 
 
@@ -174,54 +207,93 @@ def section(lines, heading):
     return out
 
 
+def markup_free(lines):
+    """The text of ``lines`` without fenced code blocks, HTML comments and code spans: what remains
+    is where a real anchor can be."""
+    kept = []
+    fence = None
+    for line in lines:
+        marker = re.match(r' {0,3}(`{3,}|~{3,})', line)
+        if fence:
+            if marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence):
+                fence = None
+            continue
+        if marker:
+            fence = marker.group(1)
+            continue
+        kept.append(line)
+    text = re.sub(r'<!--.*?(-->|\Z)', '', '\n'.join(kept), flags=re.DOTALL)
+    return re.sub(r'(`+)(?:(?!\1).)+?\1', '', text)
+
+
 class Log:
-    """What the tool reads from the log: Leaves-table statuses, the closure check, the Owner-act
-    ids of the Owner-actions queue and the anchors of the Decisions."""
+    """What the tool reads from the log: Leaves-table statuses, the closure check, the Owner-actions
+    rows and the anchors of the Decisions."""
 
     def __init__(self, path):
+        closed = LEAVES_CLOSED
         lines = read_text(path, 'log').replace('\r\n', '\n').split('\n')
         leaves = section(lines, '## Leaves')
         if leaves is None:
             raise Refusal('UNREADABLE_FILE', f'no "## Leaves" section in {path}')
-        self.statuses, rows = self._table(leaves, path)
+        self.statuses, ids, after = self._table(leaves, path)
         closures = CLOSURE.findall('\n'.join(leaves))
         if len(closures) != 1:
             raise Refusal('LEAVES_CLOSURE_MISSING',
                           f'the Leaves section of {path} has {len(closures)} closure records '
                           '("**Closed on <date> at <n> rows"), not exactly one')
         (date, count), = closures
-        if rows != int(count):
+        pinned = list(closed['ids'])
+        if (date, int(count)) != (closed['date'], len(pinned)):
             raise Refusal('LEAVES_TABLE_REOPENED',
-                          f'the Leaves table has {rows} rows; it was closed on {date} at {count} rows')
-        self.closed = {'date': date, 'rows': int(count)}
-        self.acts = set(ACT_ROW.findall('\n'.join(section(lines, '## Owner actions') or [])))
-        self.decision_anchors = set(ANCHOR.findall('\n'.join(section(lines, '## Decisions') or [])))
+                          f'the closure record reads closed on {date} at {count} rows; the table was closed '
+                          f'on {closed["date"]} at {len(pinned)} rows')
+        if ids != pinned:
+            n = next((i for i, (a, b) in enumerate(zip(ids, pinned)) if a != b), min(len(ids), len(pinned)))
+            found = ids[n] if n < len(ids) else 'no row'
+            closed_as = pinned[n] if n < len(pinned) else 'no row'
+            raise Refusal('LEAVES_TABLE_REOPENED',
+                          f'the Leaves table has {len(ids)} rows and row {n + 1} is {found}; it was closed on '
+                          f'{closed["date"]} at {len(pinned)} rows, row {n + 1} {closed_as}')
+        stray = [line for line in after if line.lstrip().startswith('|')]
+        if stray:
+            raise Refusal('LEAVES_TABLE_REOPENED',
+                          f'a table row after the closed Leaves table: {stray[0][:80]!r}')
+        self.closed = {'date': date, 'rows': len(pinned)}
+        self.act_rows = {}
+        for line in section(lines, '## Owner actions') or []:
+            match = ACT_ROW.fullmatch(line)
+            if match:
+                self.act_rows[match.group(1)] = self.act_rows.get(match.group(1), '') + line
+        self.acts = set(self.act_rows)
+        self.decision_anchors = set(ANCHOR.findall(markup_free(section(lines, '## Decisions') or [])))
 
     @staticmethod
     def _table(lines, path):
-        """{leaf id: status} and the row count of the first table under the heading."""
+        """{leaf id: status}, the rows' first tokens in order, and the section's lines after the
+        first table."""
         statuses = {}
-        rows = 0
+        ids = []
         in_table = False
-        for line in lines:
+        for n, line in enumerate(lines):
             if not line.startswith('|'):
                 if in_table:
-                    break
+                    return statuses, ids, lines[n:]
                 continue
             if not in_table:
                 in_table = True  # the header row
                 continue
             if line.startswith('|---'):
                 continue
-            rows += 1
             cells = line.strip().strip('|').split(' | ')
+            task = cells[0].strip().split(' ', 1)[0]
+            ids.append(task)
             if len(cells) < 2:
                 continue
-            task = cells[0].strip().split(' ', 1)[0]
             statuses.setdefault(task, status_of(cells[1]))
         if not in_table:
             raise Refusal('UNREADABLE_FILE', f'no Leaves table in {path}')
-        return statuses, rows
+        return statuses, ids, []
 
 
 def load_statuses(path):
@@ -418,7 +490,8 @@ class Backlog:
                 raise _unreadable(path, f'milestone {milestone!r} has no milestone file')
             self.tasks[ident] = {
                 'id': ident, 'path': path, 'title': _text(meta, 'title', path), 'status': status,
-                'milestone': self.milestones.get(milestone), 'dependencies': _list(meta, 'dependencies', path),
+                'milestone': self.milestones.get(milestone), 'labels': _list(meta, 'labels', path),
+                'dependencies': _list(meta, 'dependencies', path),
                 'references': _list(meta, 'references', path), 'criteria': criteria(body, path)}
 
 
@@ -456,7 +529,7 @@ class Work:
                 target = self.leaf_task
             else:
                 raise Refusal('TASK_UNMAPPED', f'{task["id"]} ({task["title"]!r}) names neither a plan leaf '
-                                               'nor an Owner act: its title must be "<leaf id>: <plan title>" '
+                                               'nor an Owner act: its title must be "<leaf id>: <plan title or a word-boundary prefix of it>" '
                                                'or "OA-<n>: <what>"')
             if head in target:
                 raise Refusal('TASK_DUPLICATE', f'{head} has two tasks: {target[head]["id"]} and {task["id"]}')
@@ -470,6 +543,8 @@ class Work:
             self._check_act(act, task, log)
         for ident, task in self.leaf_task.items():
             self._check_leaf(ident, task, leaves, milestones, log, tasks)
+        self._check_gates(leaves, log)
+        self._check_done(leaves, log)
 
     @staticmethod
     def _check_act(act, task, log):
@@ -477,11 +552,63 @@ class Work:
             return
         prefix = LOG + '#'
         recorded = [ref[len(prefix):] for ref in task['references'] if ref.startswith(prefix)]
-        if not any(anchor.startswith(OWNER_ANCHOR_PREFIX) and anchor in log.decision_anchors
-                   for anchor in recorded):
+        token = re.compile(rf'(^|-){act.lower()}(-|$)')
+        if not any(anchor.startswith(OWNER_ANCHOR_PREFIX) and token.search(anchor)
+                   and anchor in log.decision_anchors for anchor in recorded):
             raise Refusal('OWNER_ACT_UNRECORDED',
                           f'{task["id"]} ({act}) is {DONE} without a reference {prefix}{OWNER_ANCHOR_PREFIX}... '
-                          'to an anchor in the log\'s Decisions (the Owner\'s recorded act)')
+                          f'naming {act.lower()} to an anchor in the log\'s Decisions (the Owner\'s recorded act)')
+
+    def _check_gates(self, leaves, log):
+        """Each act task names the leaves it gates (``gates:<leaf id>`` labels), each named in the act's
+        Owner-actions row; each gated leaf has a task that depends on the act task, and no other leaf
+        task depends on it."""
+        self.gates = {}
+        for act, task in self.act_task.items():
+            gated = [label[len(GATES_LABEL):] for label in task['labels'] if label.startswith(GATES_LABEL)]
+            if not gated:
+                raise Refusal('OWNER_ACT_GATES_NOTHING',
+                              f'{task["id"]} ({act}) has no {GATES_LABEL}<leaf id> label naming a leaf it gates')
+            for ident in gated:
+                row = log.act_rows.get(act, '')
+                if ident not in leaves or not re.search(rf'(?<![A-Za-z0-9.-]){re.escape(ident)}(?![0-9]|\.[0-9])', row):
+                    raise Refusal('OWNER_ACT_GATE_UNLISTED',
+                                  f'{task["id"]} ({act}) gates {ident}, which is not a plan leaf named in '
+                                  f'{act}\'s row of the log\'s Owner actions')
+                gated_task = self.leaf_task.get(ident)
+                if gated_task is None:
+                    raise Refusal('OWNER_ACT_GATE_UNTASKED', f'{act} gates {ident}, which has no task')
+                if task['id'] not in gated_task['dependencies']:
+                    raise Refusal('OWNER_ACT_GATE_DROPPED',
+                                  f'{act} gates {ident}, but its task {gated_task["id"]} does not depend on '
+                                  f'{task["id"]}')
+            self.gates[act] = set(gated)
+        for ident, task in self.leaf_task.items():
+            for dep in task['dependencies']:
+                act = self.act_of.get(dep)
+                if act and ident not in self.gates[act]:
+                    raise Refusal('OWNER_ACT_GATE_UNDECLARED',
+                                  f'{task["id"]} for {ident} depends on {dep} ({act}), which does not declare '
+                                  f'{GATES_LABEL}{ident}')
+
+    def _check_done(self, leaves, log):
+        """A leaf task is Done only when every plan dependency has passed and every act it depends on
+        is Done."""
+        def passed(ident):
+            if ident in log.statuses:
+                return log.statuses[ident] == PASS
+            task = self.leaf_task.get(ident)
+            return task is not None and task['status'] == DONE
+
+        for ident, task in self.leaf_task.items():
+            if task['status'] != DONE:
+                continue
+            open_deps = [d for d in leaves[ident]['deps'] if not passed(d)]
+            open_deps += [self.act_of[d] for d in task['dependencies']
+                          if d in self.act_of and self.act_task[self.act_of[d]]['status'] != DONE]
+            if open_deps:
+                raise Refusal('TASK_DONE_EARLY', f'{task["id"]} for {ident} is {DONE} while {", ".join(open_deps)} '
+                                                 'has not passed')
 
     def _check_leaf(self, ident, task, leaves, milestones, log, tasks):
         leaf = leaves[ident]
