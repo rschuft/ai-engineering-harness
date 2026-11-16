@@ -384,6 +384,32 @@ class BacklogCheckTests(Fixture):
         self.rewrite('TASK-1', refs=[])
         self.assert_refused('TASK_LINK_MISMATCH')
 
+    def test_title_is_a_word_boundary_prefix_of_the_plan_title(self):
+        self.rewrite('TASK-1', title='W-01.1: Leaf')  # the plan title is "Leaf W-01.1"
+        self.assertEqual(self.run_main('W-01.3')[0], 0)
+        for name, title in {'a cut inside a word': 'W-01.1: Lea', 'a cut inside the last word': 'W-01.1: Leaf W-01',
+                            'not a prefix': 'W-01.1: W-01.1', 'a trailing space': 'W-01.1: Leaf ',
+                            'another leaf id': 'W-01.2: Leaf'}.items():
+            with self.subTest(name):
+                self.rewrite('TASK-1', title=title)
+                code = 'TASK_DUPLICATE' if title.startswith('W-01.2') else 'TASK_LINK_MISMATCH'
+                self.assert_refused(code)
+
+    def test_path_length(self):
+        name = 'tasks/task-1 - ' + 'x' * (100 - len('backlog/tasks/task-1 - .md')) + '.md'
+        source = Path(self.backlog) / 'tasks' / 'task-1 - W-01.1.md'
+        text = source.read_text(encoding='utf-8')
+        source.unlink()
+        self.write(f'backlog/{name}', text)
+        self.assertEqual(len(f'backlog/{name}'), 100)
+        self.assertEqual(self.run_main('W-01.3')[0], 0)  # 100 characters is within the limit
+        (Path(self.backlog) / name).rename(Path(self.backlog) / name.replace('.md', 'y.md'))
+        err = self.assert_refused('BACKLOG_PATH_TOO_LONG')
+        self.assertIn('is 101 characters long', err)
+        self.write_backlog()
+        self.write('backlog/milestones/' + 'm' * 90 + '.md', '---\nid: m-5\ntitle: "I5"\n---\n')
+        self.assert_refused('BACKLOG_PATH_TOO_LONG')
+
     def test_milestone(self):
         self.rewrite('TASK-1', milestone='m-1')
         self.assertIn("milestone 'I2', the plan milestone is 'I1'", self.assert_refused('TASK_MILESTONE_MISMATCH'))
@@ -598,6 +624,8 @@ class CommittedPlanTests(unittest.TestCase):
             with self.subTest(ident):
                 self.assertEqual(row['source'], 'backlog' if ident in I1_WAVE else 'leaves-table')
         self.assertEqual(rows['U-06.1']['waits_on'], ['OA-32', 'OA-33'])
+        for path in (ROOT / pc.BACKLOG).rglob('*'):
+            self.assertLessEqual(len(path.relative_to(ROOT).as_posix()), pc.MAX_PATH, path.name)
         backlog = pc.Backlog(ROOT / pc.BACKLOG)
         leaves = pc.load_plan(ROOT / pc.PLAN)[0]
         heads = sorted(t['title'].split(': ', 1)[0] for t in backlog.tasks.values())

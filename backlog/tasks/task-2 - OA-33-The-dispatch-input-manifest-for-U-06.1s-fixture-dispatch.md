@@ -3,7 +3,7 @@ id: TASK-2
 title: 'OA-33: The dispatch-input manifest for U-06.1''s fixture dispatch'
 status: To Do
 assignee: []
-created_date: '2026-11-16T03:43:00Z'
+created_date: '2026-11-16T03:53:00Z'
 labels: []
 milestone: m-0
 dependencies: []

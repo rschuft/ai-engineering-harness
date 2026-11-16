@@ -13,6 +13,8 @@
 
 # Local, optional configuration (example_config.yml is the tracked template)
 config.yml
+# Backlog.md's project configuration for this repository's own Work (plan leaf P-05.1) is tracked.
+!/backlog/config.yml
 
 # Generated state and Python caches
 .venv/

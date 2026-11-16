@@ -12,8 +12,11 @@ readiness read (P-02.2) reports Backlog.md's own readiness and dependency states
 task, together with those pointers. It is Python standard library only, plus the shared
 repository-access module (Dulwich, from the Python tools set): it starts no git.
 
-It does not adopt Backlog.md or OpenSpec for this repository. Both run only in a
-managed project's repository (in the tests, a throwaway one).
+It does not create this repository's own Work: since plan leaf P-05.1 that is
+Backlog.md tasks in [`backlog/`](../../backlog/), made with the pinned Backlog.md command
+line and checked by `tools/plan_commitment.py` ([Repository Work in
+Backlog.md](../../docs/development.md#repository-work-in-backlogmd)). The adapter runs
+in a managed project's repository (in the tests, a throwaway one).
 
 ## What it does and does not do
 

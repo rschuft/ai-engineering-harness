@@ -26,7 +26,9 @@ are named. Its own status (for example BLOCKED or In Progress) is reported besid
 
 The repository's Backlog.md tasks are checked on every run, and any mismatch refuses the report:
 
-- a leaf task's title is ``<leaf id>: <plan title>`` and it references ``<plan file>#<leaf id>``;
+- a leaf task's title is ``<leaf id>: `` and a non-empty prefix of its plan title ending at a word
+  boundary (shortened only so that its file's path stays within the limit below), and it references
+  ``<plan file>#<leaf id>``, the authoritative link;
   an Owner-act task's title is ``OA-<n>: <what>``, for an act in the log's Owner actions; one task
   per leaf and per act;
 - a leaf task's milestone is the plan milestone of the leaf's phase;
@@ -57,7 +59,10 @@ Exit codes: 0 reported; 2 refused, with a stable code:
   cross-branch checks;
 - TASK_UNMAPPED: a task's title names neither a plan leaf nor an Owner act of the log;
 - TASK_DUPLICATE: two tasks for one leaf or one Owner act;
-- TASK_LINK_MISMATCH: a leaf task's title or plan reference differs from its plan contract;
+- BACKLOG_PATH_TOO_LONG: a file under ``backlog/`` whose repository-relative path is longer than 100
+  characters;
+- TASK_LINK_MISMATCH: a leaf task's title is not its id and a word-boundary prefix of its plan title,
+  or its plan reference is missing;
 - TASK_MILESTONE_MISMATCH: a leaf task's milestone is not its leaf's plan milestone;
 - TASK_CRITERIA_MISMATCH: a leaf task's acceptance criteria differ from its leaf's proof;
 - TASK_DEPENDENCIES_MISMATCH: a leaf task's dependencies differ from its plan dependencies' tasks,
@@ -83,6 +88,9 @@ SCHEMA = 'ai-engineering-harness/plan-commitment/v2'
 NOT_STARTED = 'not started'
 PASS = 'PASS'
 DONE = 'Done'
+# The longest repository-relative path of a file under backlog/: a deep clone root stays under the
+# Windows path limit without core.longpaths.
+MAX_PATH = 100
 OWNER_ANCHOR_PREFIX = 'owner-'
 # Backlog.md settings that would let it commit, reach a remote or read other branches.
 CONFIG_OFF = ('auto_commit', 'remote_operations', 'check_active_branches')
@@ -374,6 +382,9 @@ class Backlog:
             raise Refusal('UNREADABLE_FILE', f'no Backlog.md directory {directory}')
         for path in sorted(p for p in directory.rglob('*') if not p.is_dir()):
             rel = path.relative_to(directory).as_posix()
+            if len(f'{BACKLOG}/{rel}') > MAX_PATH:
+                raise Refusal('BACKLOG_PATH_TOO_LONG', f'{BACKLOG}/{rel} is {len(f"{BACKLOG}/{rel}")} characters long; '
+                                                       f'a path under {BACKLOG}/ has at most {MAX_PATH}')
             if not (rel == 'config.yml' or re.fullmatch(r'(tasks|milestones)/[^/]+\.md', rel)):
                 raise _unreadable(path, 'unsupported file (the reader reads config.yml, tasks/*.md and '
                                         'milestones/*.md only)')
@@ -413,6 +424,17 @@ class Backlog:
 
 def normalize(text):
     return ' '.join(text.split())
+
+
+def title_prefix_ok(title, ident, plan_title):
+    """True when ``title`` is ``<ident>: `` and a non-empty prefix of the plan title that ends at a word
+    boundary: the whole plan title, or a part of it that the plan title continues with a space."""
+    head = f'{ident}: '
+    if not title.startswith(head):
+        return False
+    prefix = title[len(head):]
+    return bool(prefix) and prefix == prefix.strip() and (plan_title == prefix
+                                                          or plan_title.startswith(prefix + ' '))
 
 
 class Work:
@@ -464,9 +486,11 @@ class Work:
     def _check_leaf(self, ident, task, leaves, milestones, log, tasks):
         leaf = leaves[ident]
         tid = task['id']
-        if task['title'] != f'{ident}: {leaf.get("title", "")}' or f'{PLAN}#{ident}' not in task['references']:
-            raise Refusal('TASK_LINK_MISMATCH', f'{tid} for {ident}: its title must be "{ident}: <plan title>" '
-                                                f'and it must reference {PLAN}#{ident}')
+        if not title_prefix_ok(task['title'], ident, leaf.get('title', '')) \
+                or f'{PLAN}#{ident}' not in task['references']:
+            raise Refusal('TASK_LINK_MISMATCH', f'{tid} for {ident}: its title must be "{ident}: " and a non-empty, '
+                                                f'word-boundary prefix of the plan title, and it must reference '
+                                                f'{PLAN}#{ident}')
         expected_milestone = milestones.get(leaf.get('phase'))
         if not task['milestone'] or task['milestone'] != expected_milestone:
             raise Refusal('TASK_MILESTONE_MISMATCH', f'{tid} for {ident}: milestone {task["milestone"]!r}, '
