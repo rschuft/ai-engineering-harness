@@ -76,6 +76,7 @@ nothing here launches git on the host.
 """
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import importlib.util
@@ -717,43 +718,49 @@ def send_message(integration_store, operation_key: str, client, base: Base, text
     ``dispatched`` immediately before the one POST, ``confirmed`` with the answer's status. A journal already past
     ``reserved`` is TURN_ALREADY_SENT with zero calls: the message is never sent twice. A lost answer (no answer or a
     5xx) is ``unknown`` and is settled only by reading the conversation's events (``reconcile_turn``). A 429 (the
-    message saved, the run not started) is ``failed`` and TURN_RUN_NOT_STARTED: never settled as sent (review S4)."""
-    body = message_body(text)
-    di.TAIL_GRAMMARS[di.MESSAGE_TAIL](body)                 # the client's own grammar, before anything is recorded
-    intent = turn_intent(operation_key, base, text)
-    key = TURN_KEY.format(attempt_id=intent['attemptId'])
-    try:
-        held = integration_store.reserve(key, intent, actor=actor).reservation
-    except store.ConflictingReservation:
-        raise _refused('TURN_CONFLICT', f'the turn journal of {intent["attemptId"]} holds another base, seed, frame '
-                       'or message') from None
-    if held.state != 'reserved':
-        raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the message is never sent again',
-                       state=held.state)
-    di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'send-message', None)
-    params = {'conversation_id': intent['conversationId'], 'tail': di.MESSAGE_TAIL}
-    try:
-        answer = client.call('POST', PROXY, params=params, body=body)
-    except DispatchRefused as refusal:          # refused before the transport: nothing was sent
-        di._mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code, {'code': refusal.code})
-        raise
-    except Exception as exc:  # noqa: BLE001 - no answer: it may have been received
-        di._mark(integration_store, key, 'dispatched', 'unknown', actor, 'no-answer', {'error': type(exc).__name__})
-        return reconcile_turn(integration_store, operation_key, client, actor=actor)
-    status = answer.get('status') if isinstance(answer, Mapping) else None
-    if type(status) is int and 200 <= status < 300:
-        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'sent', {'status': status})
-    elif status == RUN_NOT_STARTED:
-        di._mark(integration_store, key, 'dispatched', 'failed', actor, 'run-not-started', {'status': status})
-        raise _refused('TURN_RUN_NOT_STARTED', 'the Agent Server answered 429: the message is saved and the run did '
-                       'not start; it is not settled as sent', status=status)
-    elif type(status) is int and 400 <= status < 500:
-        di._mark(integration_store, key, 'dispatched', 'failed', actor, 'refused', {'status': status})
-        raise _refused('TURN_REFUSED', f'the message was answered {status}', status=status)
-    else:
-        di._mark(integration_store, key, 'dispatched', 'unknown', actor, 'unsettled', {'status': status})
-        return reconcile_turn(integration_store, operation_key, client, actor=actor)
-    return turn_record(integration_store, operation_key)
+    message saved, the run not started) is ``failed`` and TURN_RUN_NOT_STARTED: never settled as sent (review S4).
+
+    The dispatcher lock (E-01.4.2 slice 5a, R17) is held from before the journal is reserved until its outcome is
+    recorded, re-entrantly (``run_attempt`` already holds it): DISPATCHER_BUSY, with no journal reserved, when another
+    act holds it."""
+    with di.dispatcher_lock(integration_store):
+        body = message_body(text)
+        di.TAIL_GRAMMARS[di.MESSAGE_TAIL](body)                 # the client's own grammar, before anything is recorded
+        intent = turn_intent(operation_key, base, text)
+        key = TURN_KEY.format(attempt_id=intent['attemptId'])
+        try:
+            held = integration_store.reserve(key, intent, actor=actor).reservation
+        except store.ConflictingReservation:
+            raise _refused('TURN_CONFLICT', f'the turn journal of {intent["attemptId"]} holds another base, seed, '
+                           'frame or message') from None
+        if held.state != 'reserved':
+            raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the message is never sent again',
+                           state=held.state)
+        di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'send-message', None)
+        params = {'conversation_id': intent['conversationId'], 'tail': di.MESSAGE_TAIL}
+        try:
+            answer = client.call('POST', PROXY, params=params, body=body)
+        except DispatchRefused as refusal:          # refused before the transport: nothing was sent
+            di._mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code, {'code': refusal.code})
+            raise
+        except Exception as exc:  # noqa: BLE001 - no answer: it may have been received
+            di._mark(integration_store, key, 'dispatched', 'unknown', actor, 'no-answer',
+                     {'error': type(exc).__name__})
+            return reconcile_turn(integration_store, operation_key, client, actor=actor)
+        status = answer.get('status') if isinstance(answer, Mapping) else None
+        if type(status) is int and 200 <= status < 300:
+            di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'sent', {'status': status})
+        elif status == RUN_NOT_STARTED:
+            di._mark(integration_store, key, 'dispatched', 'failed', actor, 'run-not-started', {'status': status})
+            raise _refused('TURN_RUN_NOT_STARTED', 'the Agent Server answered 429: the message is saved and the run '
+                           'did not start; it is not settled as sent', status=status)
+        elif type(status) is int and 400 <= status < 500:
+            di._mark(integration_store, key, 'dispatched', 'failed', actor, 'refused', {'status': status})
+            raise _refused('TURN_REFUSED', f'the message was answered {status}', status=status)
+        else:
+            di._mark(integration_store, key, 'dispatched', 'unknown', actor, 'unsettled', {'status': status})
+            return reconcile_turn(integration_store, operation_key, client, actor=actor)
+        return turn_record(integration_store, operation_key)
 
 
 def reconcile_turn(integration_store, operation_key: str, client, *, actor: str) -> dict:
@@ -1347,54 +1354,66 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     inspection failure, a run that did not start, or an observer's record ends the attempt. With
     DEFER_INTERRUPTION_END a run that did not start is returned unended, its interruption record in ``pending``: the
     caller (the D1 run driver, review of B and C S1) ends the attempt after its own teardown observations, with a
-    security stop's record instead when one is observed there."""
-    resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
-                                                           read_artifact)
-    held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
-    if held is not None:
-        raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the run is not repeated; a result step '
-                       'is resumed with resume_result', state=held.state)
-    prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key))   # S2: first
-    observe = observe or (lambda phase, **facts: ())
+    security stop's record instead when one is observed there.
 
-    def stopped(records, outcome='stopped', problems=(), status=None):
-        end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
-        return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems), end=end)
+    The dispatcher lock (E-01.4.2 slice 5a, R17) is held from before the first call until the message's outcome is
+    recorded (``send_message`` takes it again, re-entrantly), and released before the turn is waited for: when
+    another act holds it, DISPATCHER_BUSY before any call."""
+    region = contextlib.ExitStack()
+    region.enter_context(di.dispatcher_lock(integration_store))
+    try:
+        resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
+                                                               read_artifact)
+        held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
+        if held is not None:
+            raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the run is not repeated; a result '
+                           'step is resumed with resume_result', state=held.state)
+        prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key))   # S2: first
+        observe = observe or (lambda phase, **facts: ())
 
-    not_started = [{'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED', 'ref': f'attempt:{attempt_id}#turn'}]
-    # 1. inspect before any work
-    try:
-        problems = inspect_conversation(client, conversation_id)
-    except DispatchRefused as refusal:
-        problems = [f'{refusal.code}: {refusal.detail}']
-    try:
-        problems += [str(p) for p in inspect(conversation_id) or ()]
-    except Exception as exc:  # noqa: BLE001 - a hook that cannot answer is a failed inspection
-        problems.append(f'the container inspection did not answer ({type(exc).__name__})')
-    if problems:
-        return stopped([{'kind': 'containment-stop', 'code': 'INSPECTION_FAILED',
-                         'ref': f'attempt:{attempt_id}#inspection'}], 'inspection-failed', problems)
-    # 2. SEED
-    answer = _command(client, conversation_id, prepared.seed, 'SEED_FAILED')
-    body = answer.get('body') if isinstance(answer.get('body'), Mapping) else {}
-    stdout = body.get('stdout')
-    want = f'AIEH-SEED ok {base.seed_sha256} {len(base.files)}'
-    if answer.get('status') != 200 or body.get('exit_code') != 0 or not isinstance(stdout, str) \
-            or want not in [line.strip() for line in stdout.splitlines()]:
-        raise _refused('SEED_FAILED', f'the seed answered {answer.get("status")} without its success line; nothing '
-                       'was sent to the agent', exit_code=di._json_value(body.get('exit_code')))
-    records = AE.check_records(list(observe('before-message') or ()))
-    if records:
-        return stopped(records)
-    # 3. the message, 4. the turn
-    try:
-        send_message(integration_store, operation_key, client, base, prepared.text, actor=actor)
-    except DispatchRefused as refusal:
-        if refusal.code != 'TURN_RUN_NOT_STARTED':
-            raise
-        if defer_interruption_end:
-            return RunOutcome('run-not-started', attempt_id, conversation_id, pending=tuple(not_started))
-        return stopped(not_started, 'run-not-started')
+        def stopped(records, outcome='stopped', problems=(), status=None):
+            end = _stop(integration_store, operation_key, transport, actor, records, read_artifact)
+            return RunOutcome(outcome, attempt_id, conversation_id, turn_status=status, problems=tuple(problems),
+                              end=end)
+
+        not_started = [{'kind': 'run-not-started', 'code': 'TURN_RUN_NOT_STARTED',
+                        'ref': f'attempt:{attempt_id}#turn'}]
+        # 1. inspect before any work
+        try:
+            problems = inspect_conversation(client, conversation_id)
+        except DispatchRefused as refusal:
+            problems = [f'{refusal.code}: {refusal.detail}']
+        try:
+            problems += [str(p) for p in inspect(conversation_id) or ()]
+        except Exception as exc:  # noqa: BLE001 - a hook that cannot answer is a failed inspection
+            problems.append(f'the container inspection did not answer ({type(exc).__name__})')
+        if problems:
+            return stopped([{'kind': 'containment-stop', 'code': 'INSPECTION_FAILED',
+                             'ref': f'attempt:{attempt_id}#inspection'}], 'inspection-failed', problems)
+        # 2. SEED
+        answer = _command(client, conversation_id, prepared.seed, 'SEED_FAILED')
+        body = answer.get('body') if isinstance(answer.get('body'), Mapping) else {}
+        stdout = body.get('stdout')
+        want = f'AIEH-SEED ok {base.seed_sha256} {len(base.files)}'
+        if answer.get('status') != 200 or body.get('exit_code') != 0 or not isinstance(stdout, str) \
+                or want not in [line.strip() for line in stdout.splitlines()]:
+            raise _refused('SEED_FAILED', f'the seed answered {answer.get("status")} without its success line; '
+                           'nothing was sent to the agent', exit_code=di._json_value(body.get('exit_code')))
+        records = AE.check_records(list(observe('before-message') or ()))
+        if records:
+            return stopped(records)
+        # 3. the message
+        try:
+            send_message(integration_store, operation_key, client, base, prepared.text, actor=actor)
+        except DispatchRefused as refusal:
+            if refusal.code != 'TURN_RUN_NOT_STARTED':
+                raise
+            if defer_interruption_end:
+                return RunOutcome('run-not-started', attempt_id, conversation_id, pending=tuple(not_started))
+            return stopped(not_started, 'run-not-started')
+    finally:
+        region.close()   # the message's outcome is recorded: the lock is never held while the turn is waited for
+    # 4. the turn
     records = AE.check_records(list(observe('after-message') or ()))     # D1 slice C: the observations of the turn
     if records:
         return stopped(records)

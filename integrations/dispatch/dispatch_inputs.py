@@ -80,6 +80,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import argparse
+import contextlib
 import dataclasses
 import hashlib
 import importlib.util
@@ -448,6 +449,11 @@ REFUSALS = {
                               'conversation and has no end record: its result is the result path\'s (E-05.4), and '
                               'no new attempt is admitted on it here',
     'END_CAUSE_CONFLICT': 'the end-cause or escalation receipt of the attempt holds another intent',
+    # E-01.4.2 slice 5a (R17, draft decision 0027): the dispatcher lock, before anything is reserved or sent
+    'DISPATCHER_BUSY': 'another dispatcher act holds the integration store\'s dispatcher lock: nothing was reserved '
+                       'or sent',
+    'DISPATCHER_LOCK_UNAVAILABLE': 'the integration store\'s dispatcher lock file cannot be opened, created or locked: '
+                                   'nothing was reserved or sent',
 }
 
 
@@ -2995,6 +3001,28 @@ def _mark(integration_store, key: str, from_state: str, to_state: str, actor: st
     integration_store.transition(key, to_state, actor=actor, reason=reason, detail=detail, expected_from=from_state)
 
 
+def _dispatcher_lock_module():
+    return _load('dispatcher_lock', HERE / 'dispatcher_lock.py')
+
+
+@contextlib.contextmanager
+def dispatcher_lock(integration_store):
+    """The integration store's dispatcher lock (``dispatcher_lock.py``; E-01.4.2 slice 5a, R17) held for the block:
+    DISPATCHER_BUSY when another thread, handle or process holds it, DISPATCHER_LOCK_UNAVAILABLE when its file beside
+    the store cannot be opened, created or locked; either before the block runs, so before anything is reserved or
+    sent. Re-entrant in the holding thread."""
+    lock = _dispatcher_lock_module()
+    path = getattr(integration_store, 'path', None)
+    try:
+        lock.acquire(path)
+    except lock.LockError as exc:
+        raise DispatchRefused(exc.code, exc.detail, lock=str(exc.path)) from None
+    try:
+        yield
+    finally:
+        lock.release(path)
+
+
 def _code_of(exc) -> str:
     """A stable code of a failed broker call (the control listener's own code), never its message."""
     code = getattr(exc, 'code', None)
@@ -3324,7 +3352,23 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
     an interruption and its runtime observed stopped now; after an authentication refusal the engineering manager's
     cause record, and where the provider refused the token, a newer native-token entry receipt holding another token,
     which is then the token read. Otherwise a stable refusal, and nothing is reserved.
+
+    The dispatcher lock (E-01.4.2 slice 5a, R17: ``dispatcher_lock``) is held from before the request is resolved
+    until the create's outcome is recorded or the call is left by an exception, whatever is raised: when another act
+    holds it, DISPATCHER_BUSY before anything is resolved, reserved or sent (DISPATCHER_LOCK_UNAVAILABLE when its file
+    cannot be used). So the reservation, the ``dispatched`` transition and the create's outcome are recorded by one
+    holder, and a holder that later finds this attempt ``reserved`` or ``dispatched`` knows this act has ended.
     """
+    with dispatcher_lock(integration_store):
+        return _dispatch(request, manifest=manifest, work_sources=work_sources, integration_store=integration_store,
+                         workspaces=workspaces, transport=transport, actor=actor, read_profile=read_profile,
+                         read_artifact=read_artifact, inference=inference, native_credentials=native_credentials,
+                         catalog_sources=catalog_sources)
+
+
+def _dispatch(request, *, manifest, work_sources, integration_store, workspaces, transport, actor, read_profile,
+              read_artifact, inference, native_credentials, catalog_sources) -> DispatchResult:
+    """``dispatch``'s order, run with the dispatcher lock held (``dispatch`` holds it; never called otherwise)."""
     resolved = resolve(request, manifest=manifest, work_sources=work_sources,
                        next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile,
                        catalog_sources=catalog_sources)
