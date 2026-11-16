@@ -1473,10 +1473,14 @@ probe channel, evidence and stop conditions only; E-05.11's step (11d) is not ru
 | (12) | `publish_result`: the push, the draft pull request, the read-back, the receipt, the Owner report with the `observations` slot filled; its own search covers the bundle, every text and the run record's draft | the dispatcher |
 
 **Stops.** Any of E-05.11's stop conditions after the dispatch is recorded durably as it is observed
-(`D1Dispatcher.record_stop`: `dispatch/attempt/<attempt id>/stop/<kind>/<code>`, the attempt, kind and code, no text;
-the review of B and C, B1) and ends the attempt through E-05.8's mechanism (trigger `attempt-stopped`) on every path, a
+(`attempt_end.record_stop`: `dispatch/attempt/<attempt id>/stop/<kind>/<code>`, the work item, attempt, kind and
+code, no text; the review of B and C, B1, moved into the library by its delta check, S-b; `stops_of` reads them) and ends the attempt through E-05.8's mechanism (trigger `attempt-stopped`) on every path, a
 dispatcher refusal's included, with the record `D1_STOP_RECORDS` maps it to; a recorded stop refuses every later
-resume, recorded result and result path (`ATTEMPT_STOP_RECORDED`). The kinds: a credential found (echoed, persisted, in the record,
+resume, recorded result and result path (`ATTEMPT_STOP_RECORDED`), and a new attempt of the work item
+(`admit_new_attempt`: `PRIOR_ATTEMPT_STOP_UNRESOLVED` while the stopped attempt's end is not a security stop). The
+result path's `OUTBOUND_TOKEN_FOUND` at (12) is such a stop (`credential-stop`; its search runs before the result
+journal is dispatched), and (11) already searches the texts the result path searches, decoded as it decodes them (a
+token split by a control character is whole once the character is removed). The kinds: a credential found (echoed, persisted, in the record,
 an Owner or another credential) `credential-stop`; a connection elsewhere, a direct attempt, a refused guest packet, a
 tunnel target other than the origin, the tunnel's census after the turn or its refusal of the CLI's ClientHello
 `egress-stop`; a model outside the record `model-stop` and the provider check after the turn `provider-stop` (R2); a
@@ -1486,8 +1490,9 @@ Owner-credential names run. A turn that ends `error`, `stuck` or `paused`, and a
 `defer_interruption_end`: the end left to the driver, its record in `RunOutcome.pending`), is ended after the
 whole-run log and the guard window are read and before the conversation's delete (S1): with a stop's record when one
 was observed (a security stop), else as its interruption (trigger `conversation-ended`, classified from its events; or
-the `run-not-started` record). The whole-run log is read again after the delete; a stop seen only then is recorded
-and the record asks for the end's escalation (`end_escalation_needed`). An UNKNOWN inspection sends no message and ends
+the `run-not-started` record); an end that cannot be written deletes nothing. The whole-run log is read again after
+the delete, its own step (10c), judged when present; a stop seen only then is recorded and the record asks for the
+end's escalation (`end_escalation_needed`). An UNKNOWN inspection sends no message and ends
 nothing: the attempt is held for the engineering manager (NIT 10).
 
 **Run rules.** Nothing in the driver destroys the guest. A dispatcher refusal after the turn that is not a stop
@@ -1498,8 +1503,8 @@ once the result path confirmed, the attempt has an end record, or nothing was di
 
 **A resumed run** (S2, NIT 2, NIT 6) refuses an attempt with an end record or a recorded stop before anything is read;
 it then reads the native entry once more, in its own process, only to search with it (its fingerprint must be the
-attempt's, `OUTBOUND_TOKEN_MISMATCH`), seals every one of its guest calls with a fresh nonce (the token is never sent
-into the guest), and only after its last call holds the token and searches every answer of the run for it in memory
+attempt's, `OUTBOUND_TOKEN_MISMATCH`), seals every one of its guest calls with a fresh nonce, its end's and teardown's
+included (`native_observer(..., seal_with_token=False)`: the token is never sent into the guest), and only after its last call holds the token and searches every answer of the run for it in memory
 (a hit is a stop). A result journal already confirmed with no report gets the report regenerated from the receipt and
 the verified objects, searched before it is written. A resumed run's evidence is its record with the first run's.
 
@@ -1658,6 +1663,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `CONVERSATION_STILL_RUNNING`, `ATTEMPT_NOT_INTERRUPTED`, `ATTEMPT_END_CONFLICT` | the conversation runs and the trigger is `conversation-ended`; it finished with no security stop (the result path's); an end resumed with another trigger or records |
 | `CONVERSATION_NOT_FOUND`, `RUNTIME_NOT_STOPPED`, `CONVERSATION_UNOBSERVED` | the server does not know the conversation (the end then records it absent and unclassified); the runtime was not stopped or not observed `missing`; the status or events could not be read whole |
 | `PRIOR_ATTEMPT_NOT_ENDED`, `PRIOR_ATTEMPT_FINISHED`, `PRIOR_CONVERSATION_RUNNING`, `PRIOR_CONVERSATION_UNOBSERVED` | a new attempt: an earlier native conversation has no end record (or finished: the result path's), or its runtime is not observed stopped now |
+| `PRIOR_ATTEMPT_STOP_UNRESOLVED` | an earlier attempt of the work item has a recorded security stop of the dispatcher's (`attempt_end.record_stop`, D1 slice C's delta check) and its end is not a security stop (none yet, or an interruption's written before the stop was seen): no new attempt until the engineering manager escalates it (`record-end-cause security-stop`) |
 | `PRIOR_END_SECURITY_STOP`, `PRIOR_END_UNCLASSIFIED` | an attempt of the work item (any design revision or stage) ended non-retryable or was escalated to a security stop (the leaf's security stop); or an earlier one ended unclassified and the engineering manager has not classified it |
 | `PRIOR_AUTH_CAUSE_UNRECORDED`, `PRIOR_AUTH_TOKEN_NOT_REPLACED`, `NATIVE_TOKEN_NOT_REPLACED` | after an authentication refusal: no cause record; the provider refused the token and no newer entry receipt holds another; the token read is a refused one or not the receipt's |
 | `AUTH_CAUSE_INVALID`, `AUTH_CAUSE_NOT_APPLICABLE`, `AUTH_CAUSE_CONFLICT` | the cause record: an unknown cause; no end record of an authentication refusal; another cause recorded |
@@ -1964,7 +1970,7 @@ clause:
 | `CleanEnd` | the read, the stop, the observed `missing` and the full re-read (paged), all bodyless; the end record's fields; durable (read through a new connection), one; the reservation receipt, the work source and the design repository unchanged; no result, workspace or file route; an attempt stopped while running; each classification recorded |
 | `EndRefusals` | running, finished, not confirmed, unknown key, brokered, a bad trigger or record; a stop answered 502 or not at all and a runtime still `available` or `error` leave the journal `dispatched` and no record; a conversation the server no longer knows, before or after the stop, is ended `absent` and `unclassified` (a security stop still non-retryable), repeat-safe, and `record-end-cause` then decides it (S4, P4) |
 | `RepeatSafety` | three repeats return the one record with no call; a crash after the journal began, after the runtime stopped and after the record was written each converge on one record (the stop repeated only before the record); a failed stop resumed; a resumed end with another trigger or records refused |
-| `NewAttempt` | after an interruption's end: the next ordinal on the same work item, design revision and stage, a new conversation, the token only in its create, the ended conversation never sent a body; refused with nothing reserved and no token read while unended, while the runtime is `available` or `starting` again or unobserved, after each security stop and after an unclassified end; an attempt refused before its create needs no end |
+| `NewAttempt` | after an interruption's end: the next ordinal on the same work item, design revision and stage, a new conversation, the token only in its create, the ended conversation never sent a body; refused with nothing reserved and no token read while unended, while the runtime is `available` or `starting` again or unobserved, after each security stop and after an unclassified end; an attempt refused before its create needs no end; D1 slice C (delta check, S-b): a stop recorded after an interruption's end refuses a new attempt (`PRIOR_ATTEMPT_STOP_UNRESOLVED`) until the end is escalated, then `PRIOR_END_SECURITY_STOP`; a stop receipt is of a security-stop kind only |
 | `AuthenticationRefusal` | no new attempt until the cause is recorded; `account-not-permitted` admits the same token; `token-refused` refuses until the Owner's entry command (run in process) records a receipt of another token, refuses the same token re-entered, fails the attempt that reads a stale entry, and the admitted create carries the new token; the cause record's rules; the receipt constants are the entry command's |
 | `CauseCommand` | the command's exit codes and record; repeat, conflict, an unknown cause, a missing store |
 | `ReviewFindings` | the independent review's findings, each with its probe: the token as an error event's id, source, SDK kind, code or error kind never reaches the end record or the store (B1, P6); a decoy error kind in the CLI's message fails closed, a kind named only inline is none (S1, P1); the last error decides unless an agent or user message or action follows (S3); `security-stop` escalates an interruption and an authentication refusal, never downgrades, never applies to a non-retryable end (S2); a finished earlier attempt is `PRIOR_ATTEMPT_FINISHED` (S5, P3); a security stop refuses another stage of the work item (S6); a concurrent second end is `ATTEMPT_END_CONFLICT` and the repeat returns the one record (N2, P5); a ref holding a token shape is refused (N6); the delta review: a detail of 500 characters or more (the reviewer's padded decoy) classifies nothing (D1, Q2); an escalation supersedes an earlier `interruption` end-cause, is repeat-safe, leaves the end record and the end-cause unchanged and is never downgraded (D2, Q3); a `hook` message after the error is not the conversation going on |
