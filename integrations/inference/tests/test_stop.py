@@ -263,6 +263,20 @@ sys.path.insert(0, sys.argv[1])
 import broker_support as S
 IB = S.IB
 rounds, progress = int(sys.argv[2]), [0, time.monotonic()]
+default = signal.getsignal(signal.SIGINT)
+
+def raiser():
+    # SIGINT only once this round's wait has installed its stop handler (its readiness, polled within a ceiling):
+    # raised before that, the default handler's KeyboardInterrupt hit the main thread inside Thread.start under load
+    # (dispatch 11's flake), which tests nothing here. Then the probe's pattern: the main thread inside the wait.
+    deadline = time.monotonic() + 10
+    while signal.getsignal(signal.SIGINT) is default:
+        if time.monotonic() > deadline:
+            print(f'the stop handler was not installed in round {progress[0] + 1}', flush=True)
+            os._exit(8)
+        time.sleep(0.0001)
+    time.sleep(0.0005)
+    signal.raise_signal(signal.SIGINT)
 
 def watchdog():
     while True:
@@ -276,7 +290,7 @@ for i in range(rounds):
     broker._lock, broker.stop_event, broker.stop_finished = threading.RLock(), threading.Event(), threading.Event()
     broker._stopping = broker._stop_done = False
     broker.stop_by, broker._after_stop = None, []
-    threading.Thread(target=lambda: (time.sleep(0.0005), signal.raise_signal(signal.SIGINT)), daemon=True).start()
+    threading.Thread(target=raiser, daemon=True).start()
     IB._wait_for_interrupt(broker, poll_s=0)
     assert broker.stop_by == 'SIGINT', broker.stop_by
     for call in broker._after_stop:
