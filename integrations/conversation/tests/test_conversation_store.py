@@ -54,13 +54,15 @@ class Identity(Base):
     def test_the_store_kind_and_its_migration(self):
         summary = self.store.summary()
         self.assertEqual((summary['store_kind'], summary['application_id'], summary['schema_version']),
-                         ('conversation', 0x41494356, 1))
-        self.assertEqual([m['name'] for m in summary['migrations']], ['0001_store_identity_and_sessions.sql'])
+                         ('conversation', 0x41494356, 2))
+        self.assertEqual([m['name'] for m in summary['migrations']], ['0001_store_identity_and_sessions.sql',
+                                                                      '0002_threads_and_messages.sql'])
         self.assertEqual(summary['pragmas'], {'journal_mode': 'wal', 'synchronous': 2, 'foreign_keys': 1,
                                               'busy_timeout': storecore.DEFAULT_BUSY_TIMEOUT_MS})
         tables = [r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table' "
                                                         'ORDER BY name')]
-        self.assertEqual(tables, ['owner_session', 'schema_migration'])
+        self.assertEqual(tables, ['message', 'message_revision', 'owner_session', 'schema_migration', 'thread',
+                                  'thread_event'])            # migration 0002 (U-02.1) added the last four
         self.assertEqual({0x41494356, IS.APPLICATION_ID, 0x41454658}.__len__(), 3)   # unlike the other two kinds
         self.assertEqual(CS.store_path(Path('C:/managed/state')), Path('C:/managed/state/owner-host/conversation.sqlite'))
 
@@ -178,7 +180,12 @@ class AlteredSchema(Base):
     def test_a_fresh_and_a_reopened_store_have_exactly_the_migrated_schema(self):
         CS.check_schema(self.store.conn)
         self.assertEqual({row[1] for row in CS.expected_schema() if row[0] == 'trigger'},
-                         {'owner_session_supersedes_the_current', 'owner_session_no_update', 'owner_session_no_delete'})
+                         {'owner_session_supersedes_the_current', 'owner_session_no_update', 'owner_session_no_delete',
+                          # migration 0002 (U-02.1)
+                          'thread_seq_is_next', 'thread_event_seq_is_next', 'message_seq_is_next',
+                          'message_revision_is_next', 'message_revision_user_is_immutable', 'thread_no_update',
+                          'thread_no_delete', 'thread_event_no_update', 'thread_event_no_delete', 'message_no_update',
+                          'message_no_delete', 'message_revision_no_update', 'message_revision_no_delete'})
 
     def test_resurrecting_a_superseded_session_by_dropping_the_triggers_is_refused_at_open(self):
         self.tamper('DROP TRIGGER owner_session_no_delete; DROP TRIGGER owner_session_no_update; '
