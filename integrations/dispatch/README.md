@@ -2075,7 +2075,9 @@ same proof on the checked-in `strong-windows-qemu-whpx` declaration, copied byte
 
 [`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same
 fixture, with a fake Agent Server that replays the recorded answers of
-[`tests/fixtures/agent-server-1.60.1-exchange.json`](tests/fixtures/agent-server-1.60.1-exchange.json).
+[`tests/fixtures/agent-server-1.60.1-exchange.json`](tests/fixtures/agent-server-1.60.1-exchange.json)
+(since E-01.4.2 slice 5c, `FakeAgentServer` is built on the fixture catalog's cited core, whose `/server_info`
+and create answers are the same records; its knobs stay in the module, [below](#the-restart-matrix-tests-e-0142-slice-5c)).
 Every refusal asserts that the create was never sent, and that the transport was called zero
 times wherever nothing may be called. The positive control asserts exactly one `GET
 /server_info` and one create with the exact body.
@@ -2118,7 +2120,7 @@ native fixture with the attempt run's `RunServer`; a holder in another process i
 | `DynamicCensus` | condition 4 by a recording wrapper around the store, under the dispatch suite's modules that reach the sites (`test_conversation_create`, `test_reconcile`, `test_attempt_run`'s `Turn` and `Run`, `test_d1_stage_secrets`, `test_restart_recovery`): every production `reserve_attempt` and move of a typed attempt or a turn journal into `dispatched` found the lock held by the calling thread; negative control: with the lock taken out of `dispatch`, the recorder sees both unheld |
 
 [`tests/test_restart_recovery.py`](tests/test_restart_recovery.py) (E-01.4.2 slice 5b), on the same
-fakes, unchanged; a dispatcher's death is a BaseException at the point the test chooses (a simulated
+fakes (built on the fixture core since slice 5c, with their knobs; no assertion changed); a dispatcher's death is a BaseException at the point the test chooses (a simulated
 death: the act's continuation and its lock dropped):
 
 | Class | What it shows |
@@ -2147,6 +2149,42 @@ recorded digest holds the resume), and, where there is nothing to read it agains
 before the pull), the resume refused `RESULT_DELIVERY_UNSETTLED` with no pull and no RESULT: held,
 never verified. `recorded_result` never reads such a delivery as none, and a resumed step's fresh pull
 is cross-checked against a confirmed delivery (`RESULT_NOT_VERIFIED` on another digest).
+
+### The restart matrix tests (E-01.4.2, slice 5c)
+
+The three fakes are built on the fixture catalog's cited core
+([`integrations/agentfixture/`](../agentfixture/README.md), `AgentServerCore`), each keeping the behaviour outside
+the catalog as a test knob in its own module: `test_conversation_create.FakeAgentServer` (`info`, `info_error`,
+`create`, `create_error`, a repeated create answered 201, the derived `persistence_dir`),
+`test_attempt_end.ConversationServer` (a created conversation `running`, `set`, the events pages, the 404's
+`detail`, the runtime stop whatever the state, `fail`; the core answers wherever the state is one the catalog cites)
+and `test_attempt_run.RunServer` (`count`, the message's answers, SEED and RESULT run for real or canned, the lost
+answers). The three modules keep their 161 test ids, with no assertion changed.
+
+[`tests/test_agentfixture_core.py`](tests/test_agentfixture_core.py):
+
+| Class | What it shows |
+|---|---|
+| `TableBinding` (unit) | the catalog's provenance rows are the README's provenance table, cell for cell; every answer has rows and values |
+| `Rules` (unit) | every field of one of E-01.7's four classes or not served (and then neither read nor served); nothing read is clock-valued or not served; the one source-derived entry, cited to the locked wheels (whose sha256 the lock holds) by in-wheel path and line; the pinned rule is the production path's SEED script; every observation cites F-04.2, F-04.1c or the D1 run record |
+| `Citations` (unit) | `/server_info` is F-04.1c section 3's JSON block exactly; the create's values are F-04.2 section 4.2's block and its observed request the profile's fixture; each state value (`idle`, `finished`, `available`, `missing`, the counts, 204, the empty page, `MessageEvent`) is found in the section it cites |
+| `ByState` (unit) | the core's answers by route and state: labelled, only listed fields served; a create serves the id and the clock-valued time, and the other fields only for F-04.2's request (`persistence_dir` only for its own id); a held id, a second message, a second stop, a count of 2, a query, an unknown route or conversation, a delivery are refused with the label; the call log holds what the core received and nothing a dropped request would have sent |
+| `Seed` | SEED's answer by running the harness's own `SEED_SCRIPT` over the request's payload: its success line and exit code, the files written in the core's scratch; a second SEED refused; another script refused without running |
+| `Recording` (unit) | the read record notes each key read by catalog answer and path, present or not, through a deep copy; with no recorder the answers are plain dicts |
+
+[`tests/test_restart_matrix.py`](tests/test_restart_matrix.py): the restart matrix
+([above](#the-restart-matrix-e-0142-slice-5c)), each row a test of `Rows` on the native D1 fixture with `Wire`
+(the listed transport events only) around the core, and its expected values those of the table committed before it
+first ran (`RuleBinding`, unit, binds the counts to the table and every row to a test).
+
+[`tests/test_read_binding.py`](tests/test_read_binding.py): the read-binding test. `ReadBinding` runs every dispatch
+test module but itself and `test_agentfixture_core.py` (whose tests read the core's answers themselves) under the
+core's read record, each in a process of its own through
+[`tests/read_binding_runner.py`](tests/read_binding_runner.py) (no visible window; four at a time), requires each
+module's tests to pass there, and shows the keys read of the core's answers to be exactly the provenance table's rows
+marked read (containers included), none clock-valued or not served; reads of the core's refusals are listed, not
+judged. The core answers in 16 of the 29 modules run. `Judge` (unit) is the falsifier set of the judgement: a read
+of an unmarked, clock-valued, not served, unlisted or absent field is a violation, and a container is not.
 
 [`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
 
