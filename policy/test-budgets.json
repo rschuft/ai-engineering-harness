@@ -108,6 +108,18 @@
    "launches": 0,
    "mkdtemp": 40,
    "wall_s": 3.3
+  },
+  "conversation": {
+   "tests": 11,
+   "launches": 0,
+   "mkdtemp": 11,
+   "wall_s": 0.4
+  },
+  "ownerhost": {
+   "tests": 74,
+   "launches": 6,
+   "mkdtemp": 43,
+   "wall_s": 8.2
   }
  },
  "categories": {
@@ -141,5 +153,19 @@
    "mkdtemp": 1,
    "wall_s": 0.8
   }
- }
+ },
+ "suites_added": [
+  {
+   "suites": [
+    "conversation",
+    "ownerhost"
+   ],
+   "revision": "66886ccea4571c536d2c2fb7eb61f28a87dd3062",
+   "dirty": false,
+   "measured": "2026-11-16",
+   "runs": 3,
+   "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  }
+ ]
 }

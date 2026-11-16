@@ -397,6 +397,62 @@
     "median": 3.439,
     "discovery_median": 0.195
    }
+  },
+  {
+   "name": "conversation",
+   "start_dir": "integrations/conversation/tests",
+   "tests": 11,
+   "outcomes": {
+    "ok": 11
+   },
+   "successful": true,
+   "launches": 0,
+   "mkdtemp": 11,
+   "sockets": 0,
+   "chdir": 0,
+   "unattributed": {
+    "launches": 0,
+    "mkdtemp": 0,
+    "sockets": 0,
+    "chdir": 0
+   },
+   "wall": {
+    "runs": [
+     0.443,
+     0.311,
+     0.3
+    ],
+    "median": 0.311,
+    "discovery_median": 0.056
+   }
+  },
+  {
+   "name": "ownerhost",
+   "start_dir": "integrations/ownerhost/tests",
+   "tests": 74,
+   "outcomes": {
+    "ok": 74
+   },
+   "successful": true,
+   "launches": 6,
+   "mkdtemp": 43,
+   "sockets": 350,
+   "chdir": 0,
+   "unattributed": {
+    "launches": 0,
+    "mkdtemp": 0,
+    "sockets": 0,
+    "chdir": 0
+   },
+   "wall": {
+    "runs": [
+     8.187,
+     8.059,
+     8.417
+    ],
+    "median": 8.187,
+    "discovery_median": 0.113
+   }
   }
  ],
  "categories": {
@@ -6921,6 +6977,227 @@
    "sockets": 0,
    "chdir": 0,
    "wall": 0.137
+  },
+  {
+   "id": "test_conversation_store.Identity",
+   "suite": "conversation",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.094
+  },
+  {
+   "id": "test_conversation_store.Sessions",
+   "suite": "conversation",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.058
+  },
+  {
+   "id": "test_app.EveryRequestNeedsTheCredential",
+   "suite": "ownerhost",
+   "category": "contract",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 170,
+   "chdir": 0,
+   "wall": 0.111
+  },
+  {
+   "id": "test_app.HostAndOrigin",
+   "suite": "ownerhost",
+   "category": "contract",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 38,
+   "chdir": 0,
+   "wall": 0.04
+  },
+  {
+   "id": "test_app.Refusals",
+   "suite": "ownerhost",
+   "category": "contract",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 72,
+   "chdir": 0,
+   "wall": 0.064
+  },
+  {
+   "id": "test_enroll.Guard",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.041
+  },
+  {
+   "id": "test_enroll.RealConsole",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 1,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.208
+  },
+  {
+   "id": "test_listener.Listener",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 13,
+   "discovered": 13,
+   "launches": 2,
+   "mkdtemp": 1,
+   "sockets": 70,
+   "chdir": 0,
+   "wall": 5.325
+  },
+  {
+   "id": "test_service.Environment",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_service.Readiness",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.008
+  },
+  {
+   "id": "test_service.Verbs",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.01
+  },
+  {
+   "id": "test_session.Check",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 0,
+   "mkdtemp": 10,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.129
+  },
+  {
+   "id": "test_session.Enrollment",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.061
+  },
+  {
+   "id": "test_session.Shape",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_structure.ImportCensus",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 3,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.571
+  },
+  {
+   "id": "test_structure.NoClientSocket",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.135
+  },
+  {
+   "id": "test_structure.OnePort",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.117
   }
  ],
  "modules": [
@@ -7053,6 +7330,26 @@
    "sockets": 0,
    "chdir": 0,
    "wall": 0.0
+  }
+ ],
+ "suites_added": [
+  {
+   "suites": [
+    "conversation",
+    "ownerhost"
+   ],
+   "revision": "66886ccea4571c536d2c2fb7eb61f28a87dd3062",
+   "dirty": false,
+   "measured": "2026-11-16",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording."
   }
  ]
 }
