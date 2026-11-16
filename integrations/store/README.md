@@ -278,9 +278,9 @@ this contract:
 |---|---|---|
 | `reserved` | the dispatcher, through `reserve_attempt`, before any external call | dispatching with the reserved `conversation_id`; after a restart, dispatching it again (the ID is deterministic, decision 0001); no other ordinal on the triple |
 | `dispatched` | the dispatcher, immediately before it sends the create (E-01.3.x) | waiting for and recording the outcome; a create retry only with the same `conversation_id` and only when the pinned server advertises `idempotent_conversation_create_v1` (decision 0001); no other ordinal |
-| `unknown` | the dispatcher on a lost acknowledgement or an interrupted create, or `reconcile` while a restore epoch is open | reconciliation only: query the reserved `conversation_id` (E-01.4.x); "a lost HTTP reply is not permission to start a new conversation"; no other ordinal |
+| `unknown` | the dispatcher on a lost acknowledgement or an interrupted create (an interruption established under the dispatcher lock: `recover`, E-01.4.2), or `reconcile` while a restore epoch is open | reconciliation only: query the reserved `conversation_id` (E-01.4.x); "a lost HTTP reply is not permission to start a new conversation"; no other ordinal |
 | `confirmed` | the dispatcher on an observed successful create, or the reconciler when the conversation is found | terminal; the next ordinal on the triple (rework, a fresh review) if policy calls for one |
-| `failed` | the dispatcher on a refusal before any external call or an observed failed create, or the reconciler when the conversation is not found | terminal; the next ordinal (a retry) if policy calls for one |
+| `failed` | the dispatcher on a refusal before any external call or an observed failed create, or a reservation the dispatcher abandoned, when the Agent Server does not know its reserved conversation (`recover`, E-01.4.2), or the reconciler when the conversation is not found | terminal; the next ordinal (a retry) if policy calls for one |
 
 `confirmed` is about the conversation create, not about the Work: whether the
 Work is done stays with Backlog.md and the evidence.
