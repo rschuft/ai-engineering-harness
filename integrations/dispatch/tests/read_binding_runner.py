@@ -5,7 +5,8 @@
 Before any test module is loaded, the fixture catalog's core is loaded under the name the test modules share
 (``agentfixture_core``) and a ``Reads`` recorder installed, so that every answer the core makes in this process records
 each key read of it, by catalog answer and field path; the core also counts its answers here. The named modules are
-then run with unittest, and OUT receives their results, the answers made and the reads. Not a test module itself.
+then run with unittest, and OUT receives their results, the answers made, the reads (each opaque read included) and
+the readers of each read (``readers``). Not a test module itself.
 """
 from pathlib import Path
 import importlib.util
@@ -40,7 +41,7 @@ def main(argv):
         'modules': modules, 'tests': result.testsRun, 'skipped': len(result.skipped),
         'failures': [test.id() for test, _ in result.failures + result.errors]
         + [test.id() for test in result.unexpectedSuccesses],
-        'answers': answers, 'reads': reads.to_json()}, indent=1), encoding='utf-8')
+        'answers': answers, 'reads': reads.to_json(), 'readers': reads.readers_json()}, indent=1), encoding='utf-8')
     return 0 if result.wasSuccessful() else 1
 
 

@@ -11,20 +11,40 @@ event that records the dispatcher's own initial message, is answered here, in pr
 What the core holds, per conversation (``conversations``): ``execution_status`` (``idle`` after its create,
 ``finished`` once its message is received), ``runtime`` (``available`` after the create, ``missing`` after the
 runtime stop), ``events`` (the message's event once received) and ``seeded``. Its scenarios advance by the requests it
-receives; it has no clock, no listener and no route that reaches a guest, a model or a credential.
+receives (by call count), never by a clock; it has no listener and no route that reaches a guest, a model or a
+credential. Two of its transitions are the fixture's own scenario, marked so in the provenance table: on the message
+it records the message's event and goes ``finished`` at once, and **no turn runs** (the cited values, ``finished`` and
+the event, stay observations; that this request is what leads to them is the fixture's).
 
 **The call log** (``calls``): each request the core received, ``(method, path, body)``, in order. A request a transport
 event drops never reaches the core and leaves no entry. Transport events (a request that never arrives, a response
 withheld, a death) and test knobs (answers no cited run gave) are wrappers or subclasses outside this module.
 
-**The read record** (``recording``): while a ``Reads`` recorder is installed, every answer is returned as mappings that
-record each key the caller reads (``get``, ``[]``, ``in``, iteration), by catalog answer and field path. The
-read-binding test uses it to bind the provenance table's Read column to what the dispatch path reads. With no recorder
-installed the answers are plain dicts.
+**The read record** (``recording``): while a ``Reads`` recorder is installed, every answer is returned as mappings
+(``_Recorded``) that record, by catalog answer and field path, each key the caller reads, present or not, through
+exactly these operations: ``m[k]``, ``m.get(k)``, ``k in m``, and the whole-key reads ``iter(m)``, ``reversed(m)``,
+``m.keys()``, ``m.items()`` and ``m.values()`` (each key noted; ``dict(m)``, ``{**m}`` and ``json.dumps(m)`` go through
+them). ``copy.copy`` and ``copy.deepcopy`` give mappings that go on recording. ``m[k] = v`` and ``del m[k]`` (a test
+knob's own edit of an answer) are writes, not reads, and are not recorded. It records **fail closed**: each operation
+that reads the whole answer at once or changes it, ``==``, ``!=``, ``repr``, ``str``, ``format`` (an f-string), ``|``
+(either side), ``|=``, ``pop``, ``popitem``, ``setdefault``, ``update``, ``clear`` and ``copy()``, is noted as an
+**opaque read** of the mapping's path (``<path>*``, how ``opaque:<operation>``) and raises ``OpaqueRead``; the
+read-binding test's judgement rejects every opaque read by name. ``dict``'s own storage holds no answer value (each key
+is a ``_Key`` and each value a ``_Sealed``), so an unbound ``dict`` method on a key the mapping holds (``dict.get(m,
+k)``, ``dict.__getitem__``, ``dict.__contains__``, ``dict.pop``) is noted as an opaque read of that key and raises,
+and one that reaches a stored key or value by other means (``dict.keys(m)``, ``dict.items(m)``, ``dict.values(m)``)
+gets a ``_Key`` or ``_Sealed`` that raises on use; **not seen**: an unbound ``dict`` method on a key the mapping does
+not hold (it answers as for an absent key), and ``len(m)`` or ``bool(m)``. Each read also notes its reader: the
+innermost calling function outside this module and the standard library, ``<module>.<function>`` when it is in a
+production module of ``integrations/dispatch/``, else ``outside:<module>.<function>`` (a test, or a test knob that
+reads the core's answer before returning it). The read-binding test uses the record to bind the provenance table's
+Read column, and its "where", to what the dispatch path reads. With no recorder installed the answers are plain dicts.
 
 SEED's answer is derived by running the harness's own ``integrations/dispatch/attempt_run.py`` ``SEED_SCRIPT`` (the
 script the production path sends, compared with it exactly) over the request's payload in a scratch directory, with no
-visible window (the shared no-window helper); its output's line ends are the guest's (``\\n``). Standard library only.
+visible window (the shared no-window helper); its output's line ends are the guest's (``\\n``). Its 200 is served only
+for the script's exit 0: no record observes a 200 with another exit, so any other exit is refused with the label.
+Standard library only.
 """
 from __future__ import annotations
 
@@ -32,10 +52,12 @@ import contextlib
 import copy
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -90,20 +112,123 @@ def _attempt_run():
 # ---------------------------------------------------------------------------
 # The read record
 
+OPAQUE = 'opaque:'
+DISPATCH = os.path.normcase(str(REPO / 'integrations' / 'dispatch')) + os.sep
+HERE_FILE = os.path.normcase(str(Path(__file__).resolve()))
+
+
+class OpaqueRead(Exception):
+    """An operation that reads a recorded answer whole, or changes it, outside the reads the record names (the
+    module docstring): noted as an opaque read, then raised."""
+
+
 class Reads:
-    """What callers read of the answers: {(answer, path): {'present': bool, 'how': [...]}}."""
+    """What callers read of the answers: {(answer, path): {'present': bool, 'how': [...]}}, and who read each:
+    {(answer, path): {reader, ...}} (``readers``)."""
 
     def __init__(self):
         self.reads: dict[tuple[str, str], dict] = {}
+        self.readers: dict[tuple[str, str], set[str]] = {}
 
-    def note(self, answer: str, path: str, present: bool, how: str) -> None:
+    def note(self, answer: str, path: str, present: bool, how: str, by: str | None = None) -> None:
         held = self.reads.setdefault((answer, path), {'present': present, 'how': []})
         held['present'] = held['present'] or present
         if how not in held['how']:
             held['how'].append(how)
+        if by is not None:
+            self.readers.setdefault((answer, path), set()).add(by)
 
     def to_json(self) -> list[dict]:
         return [{'answer': a, 'path': p, **v} for (a, p), v in sorted(self.reads.items())]
+
+    def readers_json(self) -> list[dict]:
+        return [{'answer': a, 'path': p, 'by': sorted(v)} for (a, p), v in sorted(self.readers.items())]
+
+
+_FILES: dict[str, tuple[str, str]] = {}
+_STDLIB = tuple(os.path.normcase(os.path.abspath(sysconfig.get_path(name))) + os.sep
+                for name in ('stdlib', 'platstdlib'))
+
+
+def _kind(filename: str) -> tuple[str, str]:
+    """('dispatch', stem) for a production module of integrations/dispatch (not its tests), ('skip', stem) for this
+    module, the standard library or code with no file, else ('outside', stem)."""
+    if filename not in _FILES:
+        name = os.path.normcase(os.path.abspath(filename))
+        kind = 'skip' if name == HERE_FILE or name.startswith(_STDLIB) or filename.startswith('<') else \
+            'dispatch' if name.startswith(DISPATCH) and os.sep not in name[len(DISPATCH):] else 'outside'
+        _FILES[filename] = (kind, Path(name).stem)
+    return _FILES[filename]
+
+
+def reader() -> str:
+    """Who reads: the innermost calling function outside this module and the standard library, as
+    ``<module>.<function>`` when it is in a production module of integrations/dispatch, else as
+    ``outside:<module>.<function>`` (a test, or a test knob reading the core's answer before it returns it)."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        code = frame.f_code
+        kind, stem = _kind(code.co_filename)
+        if kind != 'skip':
+            function = code.co_qualname.split('.<locals>')[0]
+            return f'{stem}.{function}' if kind == 'dispatch' else f'outside:{stem}.{function}'
+        frame = frame.f_back
+    return 'outside:unknown'
+
+
+def _opaque(where, path_tail: str, operation: str):
+    """Note an opaque read of WHERE's mapping (PATH_TAIL ``*`` for the whole) and raise OpaqueRead."""
+    recorder, answer, prefix = where
+    path = prefix + path_tail
+    recorder.note(answer, path, True, OPAQUE + operation, reader())
+    raise OpaqueRead(f'{answer} {path}: {operation} reads the recorded answer outside the recorded reads')
+
+
+class _Key:
+    """A key as dict's own storage holds it in a recorded mapping: hashed as the key, equal to another ``_Key`` of the
+    same key; compared with anything else (an unbound ``dict`` method's lookup) or shown, it is an opaque read."""
+    __slots__ = ('key', 'where')
+
+    def __init__(self, key, where):
+        self.key, self.where = key, where
+
+    def __hash__(self):
+        return hash(self.key)
+
+    def __eq__(self, other):
+        if type(other) is _Key:
+            return self.key == other.key
+        _opaque(self.where, str(self.key), 'dict-unbound')
+
+    def __ne__(self, other):
+        if type(other) is _Key:
+            return self.key != other.key
+        _opaque(self.where, str(self.key), 'dict-unbound')
+
+    def __repr__(self):
+        _opaque(self.where, str(self.key), 'dict-unbound')
+
+    __str__ = __repr__
+
+    def __format__(self, spec):
+        _opaque(self.where, str(self.key), 'dict-unbound')
+
+
+class _Sealed:
+    """A value as dict's own storage holds it in a recorded mapping: every use is an opaque read."""
+    __slots__ = ('_at',)
+
+    def __init__(self, where, key):
+        object.__setattr__(self, '_at', (where, str(key)))
+
+    def _use(self, *args, **kwargs):
+        _opaque(*object.__getattribute__(self, '_at'), 'dict-unbound')
+
+    def __getattr__(self, name):
+        _opaque(*object.__getattribute__(self, '_at'), 'dict-unbound')
+
+    __eq__ = __ne__ = __bool__ = __len__ = __iter__ = __getitem__ = __contains__ = __repr__ = __str__ = __format__ \
+        = __int__ = __float__ = __index__ = __hash__ = __call__ = _use
 
 
 RECORDER: Reads | None = None
@@ -121,63 +246,131 @@ def recording(recorder: Reads):
 
 
 class _Recorded(dict):
-    """A mapping of an answer that notes each key read (present or not) with its catalog answer and path."""
+    """A mapping of an answer that notes each key read (present or not) with its catalog answer, path and reader, and
+    fails closed on every other read of it (the module docstring names exactly which). Its values are held apart
+    (``_data``); dict's own storage holds only ``_Key`` -> ``_Sealed``, so that ``isinstance(m, dict)``, ``len`` and
+    ``bool`` answer as for the answer while no ``dict`` method reaches a value unrecorded."""
+    __slots__ = ('_data', '_where')
+
+    @classmethod
+    def made(cls, data: dict, where) -> '_Recorded':
+        made = cls()
+        object.__setattr__(made, '_where', where)
+        object.__setattr__(made, '_data', {})
+        for key, value in data.items():
+            made[key] = value
+        return made
 
     def _note(self, key, how):
-        recorder, answer, prefix = self.__dict__['_where']
-        recorder.note(answer, prefix + str(key), dict.__contains__(self, key), how)
+        recorder, answer, prefix = self._where
+        recorder.note(answer, prefix + str(key), key in self._data, how, reader())
 
+    def _whole(self, how):
+        for key in list(self._data):
+            self._note(key, how)
+
+    # -- the recorded reads ---------------------------------------------------------------------------------------
     def __getitem__(self, key):
         self._note(key, 'item')
-        return dict.__getitem__(self, key)
+        return self._data[key]
 
     def get(self, key, default=None):
         self._note(key, 'get')
-        return dict.get(self, key, default)
+        return self._data.get(key, default)
 
     def __contains__(self, key):
         self._note(key, 'in')
-        return dict.__contains__(self, key)
-
-    def _whole(self, how):
-        for key in dict.keys(self):
-            self._note(key, how)
+        return key in self._data
 
     def __iter__(self):
         self._whole('iter')
-        return dict.__iter__(self)
+        return iter(self._data)
+
+    def __reversed__(self):
+        self._whole('iter')
+        return reversed(self._data)
 
     def keys(self):
         self._whole('keys')
-        return dict.keys(self)
+        return self._data.keys()
 
     def items(self):
         self._whole('items')
-        return dict.items(self)
+        return self._data.items()
 
     def values(self):
         self._whole('values')
-        return dict.values(self)
+        return self._data.values()
 
     def __copy__(self):
-        made = _Recorded(dict.items(self))
-        made.__dict__['_where'] = self.__dict__['_where']
-        return made
-
-    def copy(self):
-        return self.__copy__()
+        return _Recorded.made(dict(self._data), self._where)
 
     def __deepcopy__(self, memo):
-        made = _Recorded((k, copy.deepcopy(v, memo)) for k, v in dict.items(self))
-        made.__dict__['_where'] = self.__dict__['_where']
-        return made
+        return _Recorded.made({k: copy.deepcopy(v, memo) for k, v in self._data.items()}, self._where)
+
+    # -- writes (a test knob's edit), not reads -------------------------------------------------------------------
+    def __setitem__(self, key, value):
+        self._data[key] = value
+        dict.__setitem__(self, _Key(key, self._where), _Sealed(self._where, key))
+
+    def __delitem__(self, key):
+        del self._data[key]
+        dict.__delitem__(self, _Key(key, self._where))
+
+    # -- fail closed: a read of the whole answer, or a change of it, outside the recorded reads ---------------------
+    def _opaque(self, operation):
+        _opaque(self._where, '*', operation)
+
+    def __eq__(self, other):
+        self._opaque('==')
+
+    def __ne__(self, other):
+        self._opaque('!=')
+
+    def __repr__(self):
+        self._opaque('repr')
+
+    def __str__(self):
+        self._opaque('str')
+
+    def __format__(self, spec):
+        self._opaque('format')
+
+    def __or__(self, other):
+        self._opaque('|')
+
+    def __ror__(self, other):
+        self._opaque('|')
+
+    def __ior__(self, other):
+        self._opaque('|=')
+
+    def pop(self, *args):
+        self._opaque('pop')
+
+    def popitem(self):
+        self._opaque('popitem')
+
+    def setdefault(self, *args):
+        self._opaque('setdefault')
+
+    def update(self, *args, **kwargs):
+        self._opaque('update')
+
+    def clear(self):
+        self._opaque('clear')
+
+    def copy(self):
+        self._opaque('copy')
+
+    __hash__ = None
 
 
 def _wrap(value, recorder: Reads, answer: str, prefix: str):
     """VALUE with every mapping inside it recording its reads. A list's elements share the path ``<key>[]``; the
     events page's items are ``message-event`` entries of their own."""
     if isinstance(value, dict):
-        made = _Recorded()
+        data = {}
         for key, child in value.items():
             if isinstance(child, dict):
                 child = _wrap(child, recorder, answer, f'{prefix}{key}.')
@@ -185,9 +378,8 @@ def _wrap(value, recorder: Reads, answer: str, prefix: str):
                 inner = ('message-event', '') if (answer, prefix + key) == ('events', 'body.items') \
                     else (answer, f'{prefix}{key}[].')
                 child = [_wrap(item, recorder, *inner) for item in child]
-            dict.__setitem__(made, key, child)
-        made.__dict__['_where'] = (recorder, answer, prefix)
-        return made
+            data[key] = child
+        return _Recorded.made(data, (recorder, answer, prefix))
     return value
 
 
@@ -388,5 +580,7 @@ class AgentServerCore:
         done = subprocess.run([PYTHON, '-I', '-c', match.group(2), str(where / repository), digest],
                               input=payload.encode('ascii'), capture_output=True, timeout=body['timeout'],
                               cwd=where, creationflags=_no_window().no_window_flags())
+        if done.returncode != self.answers['seed']['exit_code']:
+            return self.refuse(f'a SEED whose exit is {done.returncode}: no record observes its answer')
         stdout = done.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
         return self.made('seed', self.answers['seed']['status'], {'stdout': stdout, 'exit_code': done.returncode})

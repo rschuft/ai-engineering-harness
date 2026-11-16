@@ -13,9 +13,10 @@ Shown here:
   record), and each observed value found in the section it cites (``Rules``, ``Citations``);
 * the core answers by route and state from the catalog only, labels every answer, refuses everything else with its
   label, and records in its call log what it received (``ByState``);
-* SEED is answered by running the harness's own ``SEED_SCRIPT`` over the request's payload, once per conversation
-  (``Seed``);
-* the read record notes each key read, by catalog answer and path (``Recording``).
+* SEED is answered by running the harness's own ``SEED_SCRIPT`` over the request's payload, once per conversation,
+  and served only for the script's exit 0 (``Seed``);
+* the read record notes each key read, by catalog answer and path, with its reader, and fails closed: every other
+  read of a whole answer, or change of it, is an opaque read and raises (``Recording``).
 """
 from pathlib import Path
 import copy
@@ -53,6 +54,15 @@ CLASSES = {'observation', 'echo', 'pinned-rule', 'label', 'source-derived', 'non
 CID = '055b27f3-903e-5eb9-8758-197c1029ade7'          # D1's conversation id (D1 run record section 2)
 F042_CID = '929f0d8a-f3d8-4da3-8ac3-9d0017709d71'
 MESSAGE = {'role': 'user', 'content': [{'type': 'text', 'text': 'Implement the change as designed.'}], 'run': True}
+SCENARIO = "scenario: the core's transition (by call count)"
+RANGE = '90816fa..9684d9c'
+QUOTES = "'" * 3
+UPSTREAM = r'`(sdk|as):openhands/[a-z_/]+\.py:\d+(-\d+)?`'
+
+
+def row(answer, field):
+    (found,) = [r for r in ROWS if (r['answer'], r['field']) == (answer, field)]
+    return found
 
 
 def table_rows(text):
@@ -62,8 +72,11 @@ def table_rows(text):
     for line in text[start:end].splitlines():
         if line.startswith('| `'):
             answer, field, klass, citation, determined, read, served, marks = [c.strip() for c in line[1:-1].split('|')]
+            read, _, by = read.partition(': ')
             rows.append({'answer': answer.strip('`'), 'field': field, 'class': klass, 'citation': citation,
-                         'determinedBy': determined, 'read': read == 'yes', 'served': served == 'yes', 'marks': marks})
+                         'determinedBy': determined, 'read': read == 'yes',
+                         'readBy': [b.strip().strip('`') for b in by.split(',')] if by else [],
+                         'served': served == 'yes', 'marks': marks})
     return rows
 
 
@@ -139,6 +152,78 @@ class Rules(unittest.TestCase):
                 with self.subTest(answer=row['answer'], field=row['field']):
                     self.assertRegex(row['citation'], r'(F-04\.2 §4\.\d|F-04\.1c §3|D1 §5)')
 
+    def test_every_row_read_names_the_dispatch_functions_that_read_it(self):
+        """Dispatch 14, N4: the Read column's "where" (bound to the recorded readers by test_read_binding)."""
+        for r in ROWS:
+            with self.subTest(answer=r['answer'], field=r['field']):
+                self.assertEqual(bool(r['readBy']), r['read'])
+                for by in r['readBy']:
+                    module, _, function = by.partition('.')
+                    self.assertTrue((REPO / 'integrations' / 'dispatch' / f'{module}.py').is_file(), by)
+                    self.assertRegex(function, r'^[A-Za-z_][A-Za-z0-9_.]*$')
+
+    def test_the_runtime_stops_body_is_the_production_paths_rule_for_no_content(self):
+        """Dispatch 14, S1: built on the observed 204, cited to the probe's and the transport's own code by line."""
+        stop = row('runtime-stop', '`body`')
+        self.assertEqual((stop['class'], stop['marks'], stop['read'], stop['served']), ('pinned-rule', '', True, True))
+        self.assertIn('the observed `204`', stop['citation'])
+        self.assertIsNone(CATALOG['answers']['runtime-stop']['body'])
+        cited = {'tools/guest.py': (9128, 'json.loads(text) if text else None'),
+                 'integrations/dispatch/guest_transport.py': (192, "response.get('body')")}
+        for path, (line, code) in cited.items():
+            with self.subTest(path=path):
+                self.assertIn(f'`{path}:{line}`', stop['citation'])
+                self.assertIn(f'`{code}`', stop['citation'])
+                lines = (REPO / path).read_text(encoding='utf-8').splitlines()
+                self.assertIn(code, lines[line - 1])
+        lines = (REPO / 'tools' / 'guest.py').read_text(encoding='utf-8').splitlines()
+        start = lines.index('API_PROBE = r' + QUOTES + 'import base64, errno, hashlib, http.client, json, os, re, sys, '
+                            'time')
+        end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith(QUOTES))
+        self.assertLess(start, 9128 - 1)
+        self.assertLess(9128 - 1, end, 'the cited line is API_PROBE\'s')
+        self.assertNotIn('see the note', README.read_text(encoding='utf-8'))
+
+    def test_the_creates_status_is_determined_by_what_the_core_checks(self):
+        """Dispatch 14, S3: the determining inputs are those the core checks; the inputs in which the matrix's create
+        differs from D1's are shown, by the pinned source, not to determine the status."""
+        status = row('create-new', '`status`')
+        self.assertEqual(status['determinedBy'], 'a `conversation_id` that is a UUID the server does not hold')
+        self.assertIn('the `acp_model` value and the secret values', status['citation'])
+        self.assertGreaterEqual(len(re.findall(UPSTREAM, status['citation'])), 4)
+        self.assertIn('slice 9', README.read_text(encoding='utf-8').split('**What determines the create')[1][:3000])
+
+    def test_the_cores_own_transitions_are_marked_as_its_scenario(self):
+        """Dispatch 14, S4: finished and the non-empty events page are the fixture's transition, no turn run."""
+        marked = {(r['answer'], r['field']) for r in ROWS if SCENARIO in r['marks']}
+        self.assertEqual(marked, {('conversation', '`body.execution_status`'), ('events', '`body.items`')})
+        for answer, field in marked:
+            with self.subTest(answer=answer):
+                r = row(answer, field)
+                self.assertEqual(r['class'], 'observation', 'the cited value stays the observation')
+                self.assertIn("the fixture's transition on the message", r['determinedBy'])
+                self.assertIn('no turn runs', r['determinedBy'])
+
+    def test_each_inferred_input_cites_the_source_that_shows_it(self):
+        """Dispatch 14, N2: an observation served for inputs other than its observed run's cites why they agree."""
+        cases = {('conversation-absent', '`status`'): 'a conversation never created answers alike',
+                 ('events', '`body.items`'): "an ACP agent's log is as empty before its message, SEED included",
+                 ('server-info', '`body.usable_tools`'): RANGE}
+        for (answer, field), text in cases.items():
+            with self.subTest(answer=answer, field=field):
+                r = row(answer, field)
+                self.assertIn(text, r['citation'] + ' ' + r['determinedBy'])
+                self.assertGreaterEqual(len(re.findall(UPSTREAM + '|`:\\d+(-\\d+)?`', r['citation'] + ' '
+                                                       + r['determinedBy'])), 2)
+        config = [r for r in ROWS if r['answer'] == 'server-info' and r['field'] in (
+            '`body.conversation_runtime`', '`body.available_conversation_runtimes`', '`body.app_backend_ingress_url`',
+            '`body.capabilities`', '`body.usable_tools`')]
+        self.assertEqual(len(config), 5)
+        for r in config:
+            with self.subTest(field=r['field']):
+                self.assertIn(RANGE, r['determinedBy'])
+        self.assertIn('the browser', row('server-info', '`body.usable_tools`')['determinedBy'])
+
 
 class Citations(unittest.TestCase):
     """Each observed value is found in the committed section it cites."""
@@ -155,6 +240,22 @@ class Citations(unittest.TestCase):
         fixture = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'agent-server' /
                               'conversation-create.json').read_text(encoding='utf-8'))
         self.assertEqual(entry['observedRequest'], fixture)
+
+    def test_the_server_configuration_over_the_range_differs_only_by_the_browser(self):
+        """Dispatch 14, N2: F-04.1c's configuration as written and the profile's now differ only by enable_browser
+        false, and F-04.1c's image had no browser (a tag not the stock repository's, its browser flag unset)."""
+        then = json_block(section('evidence/F-04.1c-agent-server.md', '### Configuration as written'))
+        profile = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'profile.json').read_text(
+            encoding='utf-8'))
+        now = profile['provisioning']['agent_server']['config']['content']
+        self.assertEqual({k for k in set(then) | set(now) if then.get(k) != now.get(k)}, {'enable_browser'})
+        self.assertIs(now['enable_browser'], False)
+        self.assertNotIn('conversation_image_has_browser', then)
+        self.assertFalse(then['conversation_image'].startswith('ghcr.io/openhands/agent-server'))
+        self.assertEqual((then['conversation_runtime'], then['conversation_runtime_selectable']), ('docker', False))
+        self.assertNotIn('app_backend_public_url', then)
+        self.assertIn('## 3. Run 1 (`f041c-a`, commit `90816fa`)', (REPO / 'evidence' / 'F-04.1c-agent-server.md')
+                      .read_text(encoding='utf-8'))
 
     def test_each_state_value_is_in_its_cited_section(self):
         f042 = 'evidence/F-04.2-conversation-lifecycle.md'
@@ -267,6 +368,35 @@ class ByState(unittest.TestCase):
                                       {'command': 'x', 'cwd': '/workspace', 'timeout': 5}, deliver={'part': 'bundle',
                                                                                                    'name': 'x'}))
 
+    def test_a_create_is_answered_by_its_id_alone(self):
+        """Dispatch 14, S3 (the review's probe_core): any body whose conversation_id is a UUID the core does not hold is
+        answered 201, the D1 template with another model and other secret values included; the rest is unchecked."""
+        template = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'agent-server' / 'd1-create.json')
+                              .read_text(encoding='utf-8'))
+        ids = iter(f'11111111-2222-4333-8444-55555555555{n}' for n in range(6))
+        secrets = {'CLAUDE_CODE_OAUTH_TOKEN': {'kind': 'StaticSecret', 'value': 'synthetic-a'}}
+        for body in ({}, {'conversation_runtime': 'local', 'junk': [1]},
+                     dict(template, secrets=secrets, secrets_encrypted=False),
+                     dict(template, agent_settings=dict(template['agent_settings'], acp_model='syn-model-a'),
+                          secrets={'CLAUDE_CODE_OAUTH_TOKEN': {'kind': 'StaticSecret', 'value': 'synthetic-b'}},
+                          secrets_encrypted=False)):
+            with self.subTest(keys=sorted(body)):
+                cid = next(ids)
+                answer = self.core('POST', '/api/conversations', dict(body, conversation_id=cid))
+                self.assertEqual((answer['status'], answer['body']['id']), (201, cid))
+        self.refused(self.core('POST', '/api/conversations', {'conversation_id': 'not-a-uuid'}))
+        self.refused(self.core('POST', '/api/conversations', {'conversation_id': cid}))
+
+    def test_the_message_finishes_the_conversation_at_that_call_with_no_turn(self):
+        """Dispatch 14, S4: the fixture's transition happens on the message call itself (by call count)."""
+        self.core('POST', '/api/conversations', self.body())
+        before = len(self.core.calls)
+        self.core('POST', f'/api/conversations/{CID}/events', copy.deepcopy(MESSAGE))
+        self.assertEqual(len(self.core.calls), before + 1)
+        held = self.core.conversations[CID]
+        self.assertEqual((held['execution_status'], [e['kind'] for e in held['events']]), ('finished',
+                                                                                          ['MessageEvent']))
+
     def test_the_call_log_records_what_the_core_received_and_only_that(self):
         self.core('GET', '/server_info')
         self.core.answer('POST', '/api/conversations', self.body())      # a dropped request: never received
@@ -313,6 +443,19 @@ class Seed(unittest.TestCase):
         self.assertEqual(self.core('POST', self.path, command)['fixture']['answer'], 'refusal')
         self.assertFalse((self.core.scratch() / CID).exists())
 
+    def test_a_seed_whose_script_exits_other_than_0_is_refused(self):
+        """Dispatch 14, N1 (the review's probe_seed): the script ran (exit 3, its digest refused), and no record
+        observes a 200 with that exit, so the label refuses it."""
+        command, digest = seed_command({'a.txt': b'a'})
+        command['command'] = command['command'].replace(digest, '0' * 64)
+        answer = self.core('POST', self.path, command)
+        self.assertEqual((answer['status'], answer['fixture']['answer']), (501, 'refusal'))
+        self.assertIn('exit is 3', answer['fixture']['refused'])
+        self.assertNotIn('body', answer)
+        self.assertTrue(self.core.conversations[CID]['seeded'])
+        self.assertEqual(CATALOG['answers']['seed']['exit_code'], 0)
+        self.assertIn('its exit `0`', row('seed', '`status`')['determinedBy'])
+
 
 class Recording(unittest.TestCase):
     category = 'unit'
@@ -342,6 +485,79 @@ class Recording(unittest.TestCase):
             {'answer': 'server-info', 'path': 'body', 'present': True, 'how': ['item']},
             {'answer': 'server-info', 'path': 'body.version', 'present': True, 'how': ['get']},
             {'answer': 'server-info', 'path': 'nothing', 'present': False, 'how': ['get']}])
+
+    def recorded(self):
+        core = AC.AgentServerCore()
+        self.addCleanup(core.close)
+        reads = AC.Reads()
+        with AC.recording(reads):
+            answer = core('GET', '/server_info')
+        return answer, reads
+
+    def test_the_recorded_reads_and_writes_keep_the_answer(self):
+        answer, reads = self.recorded()
+        body = answer['body']
+        self.assertIsInstance(body, dict)
+        self.assertEqual((len(body), bool(body)), (len(CATALOG['answers']['server-info']['body']), True))
+        self.assertEqual(dict(body), CATALOG['answers']['server-info']['body'])
+        self.assertEqual(json.loads(json.dumps(answer['body'])), CATALOG['answers']['server-info']['body'])
+        self.assertEqual(list(reversed(body))[0], list(CATALOG['answers']['server-info']['body'])[-1])
+        body['added'] = 1                      # a knob's write: not a read
+        del body['added']
+        self.assertEqual({**body}, CATALOG['answers']['server-info']['body'])
+        self.assertEqual([r['how'] for r in reads.to_json() if r['path'] == 'body.version'],
+                         [['keys', 'item', 'items', 'iter']])      # dict(), json.dumps, reversed
+        self.assertFalse(any(h.startswith(AC.OPAQUE) for r in reads.to_json() for h in r['how']))
+
+    def test_every_read_of_the_whole_answer_or_change_of_it_is_opaque_and_raises(self):
+        """Dispatch 14, S2 (the review's probe_core): one negative control per operation class."""
+        operations = {
+            'equality': [('==', lambda b: b == {}), ('!=', lambda b: b != {}), ('==', lambda b: {} == b)],
+            'text': [('repr', repr), ('str', str), ('format', lambda b: f'{b}'), ('format', lambda b: format(b, ''))],
+            'union': [('|', lambda b: b | {}), ('|', lambda b: {} | b), ('|=', lambda b: b.__ior__({}))],
+            'change': [('pop', lambda b: b.pop('uptime')), ('popitem', lambda b: b.popitem()),
+                       ('setdefault', lambda b: b.setdefault('idle_time', 0)), ('update', lambda b: b.update(x=1)),
+                       ('clear', lambda b: b.clear())],
+            'copy': [('copy', lambda b: b.copy())],
+            'unbound': [('dict-unbound', lambda b: dict.get(b, 'python_version')),
+                        ('dict-unbound', lambda b: dict.__getitem__(b, 'python_version')),
+                        ('dict-unbound', lambda b: dict.__contains__(b, 'python_version')),
+                        ('dict-unbound', lambda b: dict.pop(b, 'python_version')),
+                        ('dict-unbound', lambda b: str(next(iter(dict.keys(b))))),
+                        ('dict-unbound', lambda b: bool(next(iter(dict.values(b))))),
+                        ('dict-unbound', lambda b: list(dict.items(b))[0][1] == '1.60.1')],
+        }
+        for kind, cases in operations.items():
+            for operation, act in cases:
+                with self.subTest(kind=kind, operation=operation, act=act):
+                    answer, reads = self.recorded()
+                    with self.assertRaises(AC.OpaqueRead):
+                        act(answer['body'])
+                    opaque = [r for r in reads.to_json() if any(h.startswith(AC.OPAQUE) for h in r['how'])]
+                    self.assertEqual([(r['answer'], r['how']) for r in opaque],
+                                     [('server-info', [AC.OPAQUE + operation])])
+                    self.assertTrue(opaque[0]['path'].startswith('body.'), opaque)
+                    self.assertEqual(answer['body']['version'], '1.60.1', 'the answer is unchanged')
+
+    def test_not_seen_an_unbound_dict_method_on_a_key_the_answer_does_not_hold(self):
+        """The recorder's documented limit: dict's storage answers for an absent key without calling Python code."""
+        answer, reads = self.recorded()
+        self.assertIsNone(dict.get(answer['body'], 'absent'))
+        self.assertNotIn('body.absent', [r['path'] for r in reads.to_json()])
+
+    def test_each_read_notes_its_reader(self):
+        answer, reads = self.recorded()
+        answer['body'].get('version')
+        self.assertEqual(reads.readers_json(), [
+            {'answer': 'server-info', 'path': 'body', 'by': [
+                'outside:test_agentfixture_core.Recording.test_each_read_notes_its_reader']},
+            {'answer': 'server-info', 'path': 'body.version', 'by': [
+                'outside:test_agentfixture_core.Recording.test_each_read_notes_its_reader']}])
+        dispatch = REPO / 'integrations' / 'dispatch'
+        self.assertEqual(AC._kind(str(dispatch / 'attempt_end.py')), ('dispatch', 'attempt_end'))
+        self.assertEqual(AC._kind(str(dispatch / 'tests' / 'test_attempt_end.py'))[0], 'outside')
+        self.assertEqual(AC._kind(AC.__file__)[0], 'skip')
+        self.assertEqual(AC._kind(json.__file__)[0], 'skip')
 
 
 if __name__ == '__main__':

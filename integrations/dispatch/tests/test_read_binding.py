@@ -7,9 +7,12 @@ Run from the repository root, under the tools interpreter:
     <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -p test_read_binding.py -v
 
 **How it records.** At the answer boundary: every answer the core makes is returned as mappings that note each key
-read of them (``get``, ``[]``, ``in``, iteration), by catalog answer and field path, present or not
-(``agentfixture/core.py`` ``Reads``). ``read_binding_runner.py`` installs the recorder before any test module is loaded
-and runs dispatch test modules under it, in processes of their own (no visible window), four at a time.
+read of them, by catalog answer and field path, present or not, with its reader (the innermost dispatch function
+under the read), through exactly the operations ``agentfixture/core.py``'s docstring names (``m[k]``, ``get``, ``in``
+and the whole-key reads). Every other read of a whole answer, or change of it, is noted as an **opaque read** and
+raises; the judgement rejects each one by name (``OPAQUE_READ``), whatever the answer. ``read_binding_runner.py``
+installs the recorder before any test module is loaded and runs dispatch test modules under it, in processes of their
+own (no visible window), four at a time.
 
 **What it covers: the dispatch suite, whole.** Every ``test_*.py`` module of ``integrations/dispatch/tests`` but two:
 this module, and ``test_agentfixture_core.py``, whose tests read the core's answers themselves to test the core (their
@@ -20,8 +23,13 @@ which the core answered at all; a module whose tests never reach the core contri
 **Enough, and not.** The binding is a recorded fact over the suites it runs: it sees every read those tests make of a
 core answer, by any code, the test knobs' own reads of a core answer included (a knob that reads a field the dispatch
 path does not read would show here as a read; none does). It does not see a dispatch path no test runs, nor a read of
-an answer a test knob made instead of the core (those answers are not catalog answers). Reads of the core's refusals
+an answer a test knob made instead of the core (those answers are not catalog answers), nor an unbound ``dict``
+method on a key an answer does not hold (the recorder's one documented blind spot). Reads of the core's refusals
 (answers that are only its label) are allowed and listed: that is how the dispatch path finds it has no answer.
+
+**Where.** Each row marked read names the functions of ``integrations/dispatch/`` that read it (``readBy``); they are
+exactly the recorded readers of its paths that are dispatch functions (a test knob's own read is ``outside:`` and
+does not count).
 """
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -72,11 +80,16 @@ def rows_by_path():
 
 
 def judge(reads, rows):
-    """The recorded reads against the table: (violations, the read rows observed, the refusal reads)."""
+    """The recorded reads against the table: (violations, the read rows observed, the refusal reads). An opaque read
+    (a whole answer read, or changed, outside the recorded reads) is a violation named ``OPAQUE_READ`` on any answer,
+    a refusal included."""
     marked = {key for key, row in rows.items() if row['read']}
     violations, observed, refusals = [], set(), []
     for read in reads:
         key = (read['answer'], read['path'])
+        if any(how.startswith(AC.OPAQUE) for how in read['how']):
+            violations.append({**read, 'violation': 'OPAQUE_READ', 'row': None})
+            continue
         if read['answer'] == 'refusal':
             refusals.append(key)
             continue
@@ -120,9 +133,17 @@ class ReadBinding(unittest.TestCase):
         merged = {}
         for result in self.results.values():
             for read in result['reads']:
-                held = merged.setdefault((read['answer'], read['path']), dict(read))
+                held = merged.setdefault((read['answer'], read['path']), dict(read, how=[]))
                 held['present'] = held['present'] or read['present']
+                held['how'] += [how for how in read['how'] if how not in held['how']]
         return list(merged.values())
+
+    def readers(self):
+        merged = {}
+        for result in self.results.values():
+            for read in result['readers']:
+                merged.setdefault((read['answer'], read['path']), set()).update(read['by'])
+        return merged
 
     def test_every_module_ran_and_passed_under_the_recorder(self):
         for name, code, err in self.runs:
@@ -138,6 +159,16 @@ class ReadBinding(unittest.TestCase):
         self.assertEqual(violations, [], 'a read of a field not marked read, clock-valued, not served or not listed')
         self.assertEqual(observed, {key for key, row in rows.items() if row['read']},
                          'a row marked read that no suite reads')
+
+    def test_each_row_read_names_exactly_the_dispatch_functions_that_read_it(self):
+        """Dispatch 14, N4: the Read column's "where" is the recorded readers that are dispatch functions."""
+        readers = self.readers()
+        for row in CATALOG['provenance']:
+            if row['read']:
+                with self.subTest(answer=row['answer'], field=row['field']):
+                    found = set().union(*(readers.get((row['answer'], path), set())
+                                          for path in AC.field_paths(row['field'])))
+                    self.assertEqual(set(row['readBy']), {by for by in found if not by.startswith('outside:')})
 
     def test_no_row_marked_read_is_clock_valued_or_not_served(self):
         for row in CATALOG['provenance']:
@@ -185,6 +216,23 @@ class Judge(unittest.TestCase):
     def test_refusal_reads_are_listed_not_judged(self):
         violations, observed, refusals = self.judged(('refusal', 'body', False))
         self.assertEqual((violations, observed, refusals), ([], set(), [('refusal', 'body')]))
+
+    def test_an_opaque_read_is_a_named_violation_for_each_operation_class(self):
+        """Dispatch 14, S2: each operation class's opaque read, as the recorder records it, is rejected by name, on
+        a read row's answer and on a refusal alike."""
+        operations = {'equality': lambda b: b == {}, 'text': repr, 'union': lambda b: b | {},
+                      'change': lambda b: b.pop('status'), 'copy': lambda b: b.copy(),
+                      'unbound': lambda b: dict.get(b, 'status')}
+        for kind, act in operations.items():
+            for request in (('GET', '/server_info'), ('GET', '/alive')):
+                with self.subTest(kind=kind, request=request):
+                    core, reads = AC.AgentServerCore(), AC.Reads()
+                    with AC.recording(reads):
+                        answer = core(*request)
+                    with self.assertRaises(AC.OpaqueRead):
+                        act(answer)
+                    violations, _, _ = judge(reads.to_json(), rows_by_path())
+                    self.assertEqual([v.get('violation') for v in violations], ['OPAQUE_READ'])
 
 
 if __name__ == '__main__':

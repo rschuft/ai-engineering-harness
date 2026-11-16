@@ -174,6 +174,7 @@
     },
     "seed": {
       "status": 200,
+      "exit_code": 0,
       "rule": "integrations/dispatch/attempt_run.py SEED_SCRIPT"
     },
     "message": {
@@ -199,6 +200,9 @@
       "citation": "F-04.1c §3; F-04.2 §4.1; D1 §5 calls",
       "determinedBy": "the route (no input)",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.server_preconditions"
+      ],
       "served": true,
       "marks": ""
     },
@@ -209,6 +213,9 @@
       "citation": "F-04.1c §3; F-04.2 §4.1",
       "determinedBy": "the server's build",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.server_preconditions"
+      ],
       "served": true,
       "marks": ""
     },
@@ -217,8 +224,11 @@
       "field": "`body.capabilities`",
       "class": "observation",
       "citation": "F-04.1c §3 (F-04.2 §4.1 names two of them)",
-      "determinedBy": "the server's build",
+      "determinedBy": "the server's build, and the profile's server configuration (`app_backend_public_url`, unset over 90816fa..9684d9c: `as:openhands/agent_server/server_details_router.py:177-180`, `:189`)",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.server_preconditions"
+      ],
       "served": true,
       "marks": ""
     },
@@ -227,8 +237,11 @@
       "field": "`body.conversation_runtime`",
       "class": "observation",
       "citation": "F-04.1c §3; F-04.2 §4.1",
-      "determinedBy": "the profile's server configuration",
+      "determinedBy": "the profile's server configuration (`conversation_runtime`, unchanged over 90816fa..9684d9c: `as:openhands/agent_server/server_details_router.py:170`, `:187-188`)",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.server_preconditions"
+      ],
       "served": true,
       "marks": ""
     },
@@ -237,8 +250,11 @@
       "field": "`body.available_conversation_runtimes`",
       "class": "observation",
       "citation": "F-04.1c §3; F-04.2 §4.1",
-      "determinedBy": "the profile's server configuration",
+      "determinedBy": "the profile's server configuration (`conversation_runtime_selectable`, unchanged over 90816fa..9684d9c: `as:openhands/agent_server/server_details_router.py:171-173`, `:190`)",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.server_preconditions"
+      ],
       "served": true,
       "marks": ""
     },
@@ -249,6 +265,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the clock",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "clock-valued"
     },
@@ -259,6 +276,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the clock",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "clock-valued"
     },
@@ -267,8 +285,9 @@
       "field": "`body.app_backend_ingress_url`",
       "class": "observation",
       "citation": "F-04.1c §3",
-      "determinedBy": "the profile's server configuration",
+      "determinedBy": "the profile's server configuration (`app_backend_public_url`, unset over 90816fa..9684d9c: `as:openhands/agent_server/server_details_router.py:174`, `:189`)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -279,6 +298,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -289,6 +309,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -299,6 +320,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -309,6 +331,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the profile's server configuration",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -319,6 +342,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -329,6 +353,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -339,6 +364,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the profile's server configuration",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -349,6 +375,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -359,6 +386,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -369,6 +397,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -377,8 +406,9 @@
       "field": "`body.usable_tools`",
       "class": "observation",
       "citation": "F-04.1c §3",
-      "determinedBy": "the server's build",
+      "determinedBy": "the server's build, and the profile's server configuration (the browser: unavailable over 90816fa..9684d9c, before 881e728 by the image, from it by `enable_browser: false`; `as:openhands/agent_server/server_details_router.py:147-156`, `:175`, `:191`, `as:openhands/agent_server/launch.py:109-122`, `:128-134`)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -389,6 +419,7 @@
       "citation": "F-04.1c §3",
       "determinedBy": "the server's build",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -399,6 +430,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -406,9 +438,12 @@
       "answer": "create-new",
       "field": "`status`",
       "class": "observation",
-      "citation": "F-04.2 §4.2; D1 §5 (2)",
-      "determinedBy": "a valid create whose `conversation_id` the server does not hold",
+      "citation": "F-04.2 §4.2; D1 §5 (2); the `acp_model` value and the secret values, in which the matrix's create differs from D1's, do not determine it (the README's upstream source: `as:openhands/agent_server/docker_runtime/routers.py:221`, `as:openhands/agent_server/conversation_router.py:360`, `sdk:openhands/sdk/settings/model.py:1866`, `sdk:openhands/sdk/utils/pydantic_secrets.py:124-158`, `sdk:openhands/sdk/conversation/impl/local_conversation.py:1761-1769`)",
+      "determinedBy": "a `conversation_id` that is a UUID the server does not hold",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.create_receipt"
+      ],
       "served": true,
       "marks": ""
     },
@@ -419,6 +454,9 @@
       "citation": "the request's `conversation_id`",
       "determinedBy": "the request",
       "read": true,
+      "readBy": [
+        "dispatch_inputs.create_receipt"
+      ],
       "served": true,
       "marks": ""
     },
@@ -429,6 +467,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the clock",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "clock-valued"
     },
@@ -439,6 +478,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -449,6 +489,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -459,6 +500,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -469,6 +511,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -479,6 +522,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -489,6 +533,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -499,6 +544,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -509,6 +555,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -519,6 +566,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -529,6 +577,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the request other than `conversation_id` (F-04.2's fixture request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -539,6 +588,7 @@
       "citation": "F-04.2 §4.2",
       "determinedBy": "the whole request, `conversation_id` included (F-04.2's own request)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": "equal request only"
     },
@@ -549,6 +599,7 @@
       "citation": "not served: no committed observation (F-04.2 §4.2 records selected fields; the full answer is not committed)",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -559,6 +610,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -569,6 +621,12 @@
       "citation": "F-04.2 §4.3; D1 §5 (3), (6)",
       "determinedBy": "a conversation the server holds",
       "read": true,
+      "readBy": [
+        "attempt_end._answer",
+        "reconcile._lookup",
+        "reconcile.verdict_of",
+        "restart_recovery._lookup_reserved"
+      ],
       "served": true,
       "marks": ""
     },
@@ -579,6 +637,11 @@
       "citation": "the request path's `conversation_id`",
       "determinedBy": "the request",
       "read": true,
+      "readBy": [
+        "attempt_end.observe",
+        "attempt_run.inspect_conversation",
+        "reconcile.verdict_of"
+      ],
       "served": true,
       "marks": ""
     },
@@ -587,10 +650,15 @@
       "field": "`body.execution_status`",
       "class": "observation",
       "citation": "`idle`: F-04.2 §4.3 (a created conversation, no message); `finished`: D1 §5 (6) (its turn ended)",
-      "determinedBy": "the conversation's state",
+      "determinedBy": "the conversation's state; `finished` by the fixture's transition on the message (no turn runs)",
       "read": true,
+      "readBy": [
+        "attempt_end._finished",
+        "attempt_end.observe",
+        "attempt_run.conversation_status"
+      ],
       "served": true,
-      "marks": ""
+      "marks": "scenario: the core's transition (by call count)"
     },
     {
       "answer": "conversation",
@@ -599,6 +667,7 @@
       "citation": "not served: no committed observation of its value",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -609,6 +678,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -616,9 +686,14 @@
       "answer": "conversation-absent",
       "field": "`status`",
       "class": "observation",
-      "citation": "F-04.2 §4.9 (`GET` after the delete: 404)",
+      "citation": "F-04.2 §4.9 (`GET` after the delete: 404); a conversation never created answers alike, neither having a record or an event service (`as:openhands/agent_server/conversation_router.py:229-231`, `as:openhands/agent_server/conversation_service.py:1136-1143`; the delete leaves none: `as:openhands/agent_server/docker_runtime/routers.py:336-342`, `as:openhands/agent_server/conversation_service.py:984-989`)",
       "determinedBy": "a conversation the server does not hold",
       "read": true,
+      "readBy": [
+        "reconcile._lookup",
+        "reconcile.verdict_of",
+        "restart_recovery._lookup_reserved"
+      ],
       "served": true,
       "marks": ""
     },
@@ -629,6 +704,7 @@
       "citation": "not served: F-04.2 §4.9 records the status only",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -639,6 +715,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -649,6 +726,9 @@
       "citation": "F-04.1c §3; D1 §5 (3), (10)",
       "determinedBy": "the route (no input)",
       "read": true,
+      "readBy": [
+        "attempt_run._plain"
+      ],
       "served": true,
       "marks": ""
     },
@@ -659,6 +739,9 @@
       "citation": "`0`: F-04.1c §3, D1 §5 (10); `1`: D1 §5 (3)",
       "determinedBy": "the number of conversations the server holds (0 or 1; any other number is refused)",
       "read": true,
+      "readBy": [
+        "attempt_run._plain"
+      ],
       "served": true,
       "marks": ""
     },
@@ -669,6 +752,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -679,6 +763,9 @@
       "citation": "F-04.2 §4.3, §4.6; D1 §5 (3), (9)",
       "determinedBy": "a conversation the server holds",
       "read": true,
+      "readBy": [
+        "attempt_end._answer"
+      ],
       "served": true,
       "marks": ""
     },
@@ -689,6 +776,9 @@
       "citation": "`available`: F-04.2 §4.3, D1 §5 (3) (after the create); `missing`: F-04.2 §4.6, D1 §5 (9) (after the runtime stop)",
       "determinedBy": "the conversation's state",
       "read": true,
+      "readBy": [
+        "attempt_end.runtime_status"
+      ],
       "served": true,
       "marks": ""
     },
@@ -699,6 +789,7 @@
       "citation": "F-04.2 §4.3, §4.6; D1 §5 (3)",
       "determinedBy": "the conversation's state (`true` in both)",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -709,6 +800,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -719,18 +811,24 @@
       "citation": "F-04.2 §4.6; D1 §5 calls (`DELETE .../runtime` 204)",
       "determinedBy": "a held conversation whose runtime is `available`",
       "read": true,
+      "readBy": [
+        "attempt_end._answer"
+      ],
       "served": true,
       "marks": ""
     },
     {
       "answer": "runtime-stop",
       "field": "`body`",
-      "class": "observation",
-      "citation": "F-04.2 §4.6; D1 §5 calls: `204` No Content, so the transport's body is `null`",
-      "determinedBy": "the status",
+      "class": "pinned-rule",
+      "citation": "the observed `204` (F-04.2 §4.6; D1 §5 calls), by the production path's rule for an answer with no content: `tools/guest.py:9128` (`API_PROBE`: `json.loads(text) if text else None`), `integrations/dispatch/guest_transport.py:192` (`response.get('body')`)",
+      "determinedBy": "the status (`204`: no content)",
       "read": true,
+      "readBy": [
+        "attempt_end._answer"
+      ],
       "served": true,
-      "marks": "see the note below the readings"
+      "marks": ""
     },
     {
       "answer": "runtime-stop",
@@ -739,6 +837,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -747,8 +846,11 @@
       "field": "`status`",
       "class": "observation",
       "citation": "D1 §5 calls (`POST .../bash/execute_bash_command` 200, SEED) and (4)",
-      "determinedBy": "the harness's SEED command, the first on a held conversation",
+      "determinedBy": "the harness's SEED command, the first on a held conversation, and its exit `0` (another exit is refused with the label: no record observes it)",
       "read": true,
+      "readBy": [
+        "attempt_run.run_attempt"
+      ],
       "served": true,
       "marks": ""
     },
@@ -759,6 +861,9 @@
       "citation": "`integrations/dispatch/attempt_run.py` `SEED_SCRIPT`, run over the request's payload (its success line `AIEH-SEED ok <sha256> <files>`)",
       "determinedBy": "the request's payload and digest",
       "read": true,
+      "readBy": [
+        "attempt_run.run_attempt"
+      ],
       "served": true,
       "marks": ""
     },
@@ -767,8 +872,11 @@
       "field": "`body.exit_code`",
       "class": "pinned-rule",
       "citation": "`integrations/dispatch/attempt_run.py` `SEED_SCRIPT`, run over the request's payload",
-      "determinedBy": "the request's payload and digest",
+      "determinedBy": "the request's payload and digest (served only as `0`)",
       "read": true,
+      "readBy": [
+        "attempt_run.run_attempt"
+      ],
       "served": true,
       "marks": ""
     },
@@ -779,6 +887,7 @@
       "citation": "not served: not observed, and not read",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -789,6 +898,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -799,6 +909,9 @@
       "citation": "D1 §5 calls (`POST .../events` 200, the message)",
       "determinedBy": "the message tail, the first on a held conversation",
       "read": true,
+      "readBy": [
+        "attempt_run.send_message"
+      ],
       "served": true,
       "marks": ""
     },
@@ -809,6 +922,7 @@
       "citation": "not served: not observed (D1's call list records the status only)",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -819,6 +933,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -829,6 +944,9 @@
       "citation": "F-04.2 §4.4",
       "determinedBy": "a held conversation; no query",
       "read": true,
+      "readBy": [
+        "attempt_end._answer"
+      ],
       "served": true,
       "marks": ""
     },
@@ -836,11 +954,14 @@
       "answer": "events",
       "field": "`body.items`",
       "class": "observation",
-      "citation": "F-04.2 §4.4 (`[]` on an empty log); on a non-empty log, the catalog's events (`message-event`)",
-      "determinedBy": "the conversation's recorded events",
+      "citation": "F-04.2 §4.4 (`[]` on an empty log, a plain `Agent`'s create); an ACP agent's log is as empty before its message, SEED included: no event before the agent is initialized (`sdk:openhands/sdk/conversation/impl/local_conversation.py:357`), for an ACP agent not on the message (`:1761-1769`), and a command's events kept apart (`as:openhands/agent_server/dependencies.py:99-105`, `sdk:openhands/sdk/conversation/persistence_const.py:5`); on a non-empty log, the catalog's events (`message-event`)",
+      "determinedBy": "the conversation's recorded events; a non-empty log by the fixture's transition on the message (its event recorded; no turn runs)",
       "read": true,
+      "readBy": [
+        "attempt_end.observe"
+      ],
       "served": true,
-      "marks": ""
+      "marks": "scenario: the core's transition (by call count)"
     },
     {
       "answer": "events",
@@ -849,6 +970,9 @@
       "citation": "F-04.2 §4.4 (`null`)",
       "determinedBy": "no `page_id`, and the log within one page at the effective limit (`as:openhands/agent_server/event_router.py:76-79`, `as:openhands/agent_server/event_service.py:689-690`)",
       "read": true,
+      "readBy": [
+        "attempt_end.observe"
+      ],
       "served": true,
       "marks": "engineering manager's reading"
     },
@@ -859,6 +983,7 @@
       "citation": "the fixture's label",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -869,6 +994,9 @@
       "citation": "D1 §5 (7b) (`MessageEvent` in the log of a conversation that received the dispatcher's message)",
       "determinedBy": "the event's type",
       "read": true,
+      "readBy": [
+        "attempt_run.message_received"
+      ],
       "served": true,
       "marks": ""
     },
@@ -879,6 +1007,9 @@
       "citation": "`sdk:openhands/sdk/conversation/impl/local_conversation.py:2041-2043`; `sdk:openhands/sdk/event/llm_convertible/message.py:32`",
       "determinedBy": "a user message sent to the conversation",
       "read": true,
+      "readBy": [
+        "attempt_run.message_received"
+      ],
       "served": true,
       "marks": "source-derived"
     },
@@ -889,6 +1020,9 @@
       "citation": "`sdk:openhands/sdk/event/llm_convertible/message.py:33-35`; `as:openhands/agent_server/event_router.py:226`",
       "determinedBy": "the message",
       "read": true,
+      "readBy": [
+        "attempt_run._message_texts"
+      ],
       "served": true,
       "marks": "source-derived"
     },
@@ -899,6 +1033,9 @@
       "citation": "`sdk:openhands/sdk/llm/message.py:226`; `as:openhands/agent_server/event_router.py:226`",
       "determinedBy": "the request's `content`",
       "read": true,
+      "readBy": [
+        "attempt_run._message_texts"
+      ],
       "served": true,
       "marks": "source-derived"
     },
@@ -909,6 +1046,9 @@
       "citation": "the request's `content[].text` (`sdk:openhands/sdk/llm/message.py:179`)",
       "determinedBy": "the request",
       "read": true,
+      "readBy": [
+        "attempt_run._message_texts"
+      ],
       "served": true,
       "marks": "source-derived"
     },
@@ -919,6 +1059,7 @@
       "citation": "not served: no committed observation, and not read",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": false,
       "marks": ""
     },
@@ -929,6 +1070,7 @@
       "citation": "the fixture's refusal: `501`",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     },
@@ -939,6 +1081,7 @@
       "citation": "the fixture's label, with the reason it refused",
       "determinedBy": "",
       "read": false,
+      "readBy": [],
       "served": true,
       "marks": ""
     }
