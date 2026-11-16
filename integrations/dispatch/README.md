@@ -754,7 +754,7 @@ answer as the selected fields the evidence records).
 
 Nothing is retried. An `unknown` attempt is a live claim, so no other attempt on the same Work,
 design revision and stage is reserved until it is reconciled by its reserved conversation id
-(E-01.4.x). Treating a `5xx` as `unknown`, not `failed`, is this leaf's conservative reading of
+(E-01.4.1, [below](#reconciling-a-lost-create-acknowledgement-e-0141)). Treating a `5xx` as `unknown`, not `failed`, is this leaf's conservative reading of
 decision 0001's "any non-2xx is a refusal": the dispatch stops either way, and an outcome that
 may have created a conversation is reconciled before another attempt.
 
@@ -776,9 +776,51 @@ prevents.
 **Not this leaf.** The live transport and the per-attempt role tokens are E-01.3.3
 ([below](#the-live-transport-e-0133) and [the stage's role token](#the-stages-role-token-e-0133)),
 built offline. The create body is still the F-04.2 disposable template
-(finding F3, carried to A-01.x and E-03.1). Reconciliation and the idempotent retry are E-01.4.x.
+(finding F3, carried to A-01.x and E-03.1). The reconciliation of a lost acknowledgement is
+E-01.4.1 ([below](#reconciling-a-lost-create-acknowledgement-e-0141)); the lost response and the
+dispatcher restart at each step are exercised by E-01.4.2.
 The independent `docker inspect` of the created runtime is E-01.5. Nothing here has run against a
 live Agent Server: **not yet verified** live.
+
+## Reconciling a lost create acknowledgement (E-01.4.1)
+
+Plan leaf E-01.4.1: "On timeout query by reserved UUID and reattach existing conversation,
+preserving a separate unknown result if lookup is inconclusive." [`reconcile.py`](reconcile.py)
+is the integration store's reconcile oracle for dispatch attempts.
+
+A create whose answer is lost leaves the attempt `unknown` (the table above), and a restore
+epoch makes every `dispatched` attempt `unknown`
+([store contract](../store/README.md)). Nothing resends the create: an `unknown` attempt is a live
+claim, so `dispatch` on the same Work, design revision and stage is `LiveClaim` with no call, and
+reconciliation only reads. `reconcile_creates(store, transport=, actor=, read_artifact=)` runs
+`IntegrationStore.reconcile` with `create_oracle`, which answers only for the typed attempt
+namespace (`attempt/v1/`, the keys `reserve_attempt` writes):
+
+| What the oracle finds | Verdict | The store then |
+|---|---|---|
+| a key outside `attempt/v1/`: a recorder's receipt (P-04.2's `owner-authorization/v1/...`, P-04.3's `dispatch-inputs/v1/...`), a dispatch journal, any other key; **no call** | `indeterminate` | stays `unknown`; its own resolver settles it, and it holds a restore epoch open until then |
+| a typed attempt whose stored record is not its dispatch record (`stored_inputs(state='unknown')` refuses), whose row's conversation id is not its key's, or whose pinned route allowlist cannot be read or checked; **no call** | `indeterminate` | stays `unknown` |
+| `GET /api/conversations/{reserved id}` answers `200` with that id | `performed` | `confirmed`: reattached to its reserved conversation |
+| it answers `404` | `not_performed` | `failed` |
+| any other answer (a `5xx`, a `401`, another id, no id, no body, not an HTTP answer) or none | `indeterminate` | stays `unknown`, reconciliation `required` |
+
+The lookup goes through `AgentServerClient` on the attempt's pinned route allowlist, as every
+dispatcher call does. **Reattached** means the attempt is `confirmed` on the conversation it
+reserved; `stored_inputs(state='confirmed')` then reads it as any confirmed attempt, so the
+attempt run and the end proceed on it. **Not performed** follows the store's reconcile contract:
+`failed`, which is terminal, so the reserved conversation id is never sent again. A further
+attempt is the next ordinal with its own conversation id, reserved by the caller's policy
+(`reserve_attempt`), never by this module. **Inconclusive** keeps the attempt a separate
+`unknown`: nothing is recorded for it, the live claim stands, and a later `reconcile_creates` asks
+again. The report is the store's (`confirmed`, `failed`, `still_unknown`) plus `observations`:
+for each key the oracle was asked about, its verdict and basis (for a lookup, the HTTP status), in
+memory only.
+
+**Not this leaf.** An attempt left `dispatched` by a dispatcher that died after the send, outside
+a restore epoch, is not moved to `unknown` here (the store moves `dispatched` attempts only
+while an epoch is open): the dispatcher restart at each step is E-01.4.2's, with the fake traced
+to F-04.2's observations. Nothing here has run against a live Agent Server: **not yet verified**
+live.
 
 ## The live transport (E-01.3.3)
 
@@ -1654,6 +1696,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `RESERVATION_INVALID`, `ATTEMPT_NOT_RESERVED` | the stored reservation is not the dispatch record of its typed identity; the attempt is no longer `reserved` |
 | `CREATE_REFUSED` | the Agent Server answered the create with a `4xx` |
 | `ATTEMPT_NOT_CONFIRMED` | a role token was asked for, or an end of an interrupted attempt (E-05.8) asked of, an attempt that is not `confirmed` |
+| `ATTEMPT_NOT_UNKNOWN` | the record of an attempt that is not `unknown` was read for the create's reconciliation (E-01.4.1); the oracle answers `indeterminate` without a call |
 | `ROLE_TOKEN_MISSING`, `ROLE_TOKEN_UNAVAILABLE` | no entry for the stage's bot; the credential provider failed |
 | `ROLE_TOKEN_MISMATCH` | the entry names another account or holds no Gitea token; the token authenticates as another account or with other scopes |
 | `ROLE_TOKEN_REJECTED`, `ROLE_TOKEN_UNVERIFIED` | Gitea answered `401` for the token; Gitea's answer was lost or not a token view |
@@ -1854,6 +1897,17 @@ times wherever nothing may be called. The positive control asserts exactly one `
 | `ServerPreconditionTests` (unit) | the recorded `/server_info` meets P1 to P5; each precondition alone refuses (another version, a non-2xx or malformed answer, a missing capability, a local, process, case-variant or absent runtime, a selectable runtime list), and several failures are all named |
 | `CreateReceiptTests` (unit) | 201 is created, 200 existing; another, missing or hex id, other statuses and non-objects give no receipt; the execution reference parses as the lineage reader's attempt reference |
 | `DispatchTests` | the positive control (two calls, the store's three transitions and their details, `workRef` and `outcomeRef` in the reservation, nothing of the answer but its id stored, no event route called, the workspace created as plain directories); an existing conversation is confirmed as existing; the call order and the re-read record (spied: admit and `send_create` get the store's record, not the resolution's object; admission ran with no workspace, the send on a `dispatched` attempt with one); a stored intent altered in seven ways is `RESERVATION_INVALID` and failed; `reserved_inputs` on a missing, untyped or no longer reserved attempt; a resolution refusal reserves nothing; an admission refusal is failed and creates no workspace; junctions planted after admission at the category, the repository and the Work, and a file at the workspace, are refused and nothing is created through them; every precondition case refuses the create through `dispatch` (one `GET`, no `POST`, failed with `create_sent` false), as do an unanswered `/server_info` and an allowlist that no longer allows it; a 4xx is `CREATE_REFUSED` and failed; a 5xx, a 202 or another conversation's id is `unknown` (reconciliation required) and never retried; a lost answer is `unknown`, re-raised, and blocks the next attempt; the outcome reference absent, malformed, ambiguous or at two revisions is refused before any reservation |
+
+[`tests/test_reconcile.py`](tests/test_reconcile.py) (E-01.4.1), on the same fixture, with E-05.8's
+`ConversationServer` (unchanged); a lost answer is the transport raising after the server handled
+the create:
+
+| Class | What it shows |
+|---|---|
+| `VerdictTable` (unit) | each lookup answer's verdict (200 with the id performed; 404 not performed; another or no id, no body, a 201, 401, 5xx, a status as text or bool, no status, not a mapping indeterminate); only `attempt/v1/` keys are in the namespace, never a recorder's or a journal's key |
+| `LostAcknowledgement` | **the proof's first sentence**: after a lost answer another dispatch is `LiveClaim` with no call, reconciliation makes one `GET` and no create, and the call log holds one create; found, the attempt is `confirmed` (reconciled) on its reserved conversation and reads as confirmed, and a further reconciliation calls nothing; not found, it is `failed`, never dispatched again, and the next dispatch is ordinal 2 with another conversation id |
+| `InconclusiveLookup` | ten inconclusive answers (none, a reset, 503, 500, 401, another id, no id, no body, not HTTP, a status as text) each leave the attempt `unknown`, `required`, its events unchanged and the live claim standing, with one `GET` each and no create; a later reconciliation settles it; a drifted allowlist and a typed attempt that is not a dispatch record get no call; `stored_inputs(state='unknown')` is `ATTEMPT_NOT_UNKNOWN` once the attempt is settled |
+| `NamespaceRule` | **the proof's second sentence**: P-04.2's and P-04.3's receipts (under their recorders' own key builders and actors) and a dispatch journal, in flight when the store was backed up, are `unknown` after the restore and stay so after reconciliation, with no transport call for any of them, though the transport would answer every lookup "found"; the typed attempt beside them is confirmed; the epoch stays open; negative control: an oracle answering for every key settles them |
 
 [`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
 

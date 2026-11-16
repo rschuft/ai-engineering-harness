@@ -348,6 +348,8 @@ REFUSALS = {
     'RESERVATION_INVALID': 'the stored reservation is not a dispatch reservation consistent with its typed identity',
     'ATTEMPT_NOT_RESERVED': 'the stored attempt is no longer in the reserved state',
     'CREATE_REFUSED': 'the Agent Server answered the create with a 4xx refusal',
+    # E-01.4.1: the reconciliation of a create whose acknowledgement was lost (reconcile.py)
+    'ATTEMPT_NOT_UNKNOWN': 'the stored attempt is not unknown: there is no uncertain create outcome to reconcile',
     # E-01.3.3: the stage's bot role token, in the dispatcher's attempt context only (attempt_tokens.py).
     'ATTEMPT_NOT_CONFIRMED': 'the stored attempt is not confirmed: no role token is delivered for it, and it is not '
                              'ended as an interrupted attempt (its conversation was never observed created)',
@@ -2850,13 +2852,15 @@ def reserved_inputs(integration_store, operation_key: str) -> ResolvedInputs:
 
 
 # The refusal of an attempt found in another state than the reader needs.
-_STATE_REFUSALS = {'reserved': 'ATTEMPT_NOT_RESERVED', 'confirmed': 'ATTEMPT_NOT_CONFIRMED'}
+_STATE_REFUSALS = {'reserved': 'ATTEMPT_NOT_RESERVED', 'confirmed': 'ATTEMPT_NOT_CONFIRMED',
+                   'unknown': 'ATTEMPT_NOT_UNKNOWN'}
 
 
 def stored_inputs(integration_store, operation_key: str, *, state: str) -> ResolvedInputs:
-    """``reserved_inputs`` for an attempt that must be in STATE (``reserved``, or ``confirmed`` for the
-    role-token delivery of E-01.3.3): the same checks of the stored record; ATTEMPT_NOT_RESERVED or
-    ATTEMPT_NOT_CONFIRMED when the attempt is in another state."""
+    """``reserved_inputs`` for an attempt that must be in STATE (``reserved``, ``confirmed`` for the
+    role-token delivery of E-01.3.3, or ``unknown`` for the create's reconciliation of E-01.4.1): the
+    same checks of the stored record; ATTEMPT_NOT_RESERVED, ATTEMPT_NOT_CONFIRMED or
+    ATTEMPT_NOT_UNKNOWN when the attempt is in another state."""
     if state not in _STATE_REFUSALS:
         raise ValueError(f'state must be one of {sorted(_STATE_REFUSALS)}')
     reservation = integration_store.get(operation_key)
