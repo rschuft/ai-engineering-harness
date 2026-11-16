@@ -1,9 +1,10 @@
 ---
 id: TASK-3
 title: 'U-01.3: Serve the Integration process on host loopback behind the Owner UI'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T17:39:00Z'
 labels: []
 milestone: m-0
 dependencies: []
@@ -23,3 +24,9 @@ Plan contract: leaf U-01.3 of AI_Engineering_Implementation_Project_Plan_Oversee
 <!-- AC:BEGIN -->
 - [ ] #1 Edge nm-owner-ui-integration's enforcement is observed: the process binds 127.0.0.1 only (host census), every request needs the Owner UI session credential, and that credential is not shaped like an Agent Server key; the Integration process's Owner login and the UI session credential are built, and a missing or foreign credential is refused, as is an expired one, each with a stable code and changing nothing; no management key, bot token, the session credential itself, or any other Owner or provider credential is present in the process's environment, configuration or logs.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PASS (2026-11-16), the engineering manager's verdict: evidence/bootstrap-log.md#u-01-3-verdict-2026-11-16; decision 0025 Accepted.
+<!-- SECTION:FINAL_SUMMARY:END -->
