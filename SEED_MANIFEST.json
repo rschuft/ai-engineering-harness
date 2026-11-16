@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "adc456c65a88f710c00796a67b302d15f96d7764ef66903aadb5137556c666ca",
-      "size_bytes": 3563345
+      "sha256": "b46e93d258f8e7d1748d862576dc6454f4b34daf04c9fa75678103872e080379",
+      "size_bytes": 3591778
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "62c9ab4adcf4e5d7cac682b10facb5e5faeae4b269e4bf7108207acafd9c4343",
-      "size_bytes": 1875586
+      "sha256": "f596198bb5b25959dc0532cbe7b7d2d1eac596f387369d4ca7b47fbde0bf2264",
+      "size_bytes": 1894046
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "d9c64ea6a52644d4c481a7b04f5e6a123f78d590300c01b9c31cd8f074dbeabe",
-      "size_bytes": 338314
+      "sha256": "9ac9ad5794e2bb79f8f5944426ba283d603a6c617f8732c724ecfc66922af363",
+      "size_bytes": 341598
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,7 +49,7 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "c9db1c6d1fb28390c5b4087ed3bf995db3aff456411daec84b643ea8086719bf",
+      "sha256": "50f09328656abe35e5eaae3cc47979eafaa1aa7323f82e6cf7c9e810e3b5d5f2",
       "size_bytes": 58432
     },
     {
@@ -134,8 +134,8 @@
     },
     {
       "path": "task_prompts/E-01.7.md",
-      "sha256": "1a4c023b05d02d3b33123eac119b9f3681401390775ba559ec63ecbf9d8a1ba8",
-      "size_bytes": 5258
+      "sha256": "6611e77fe899e29de7be2812db45ec0e943ee2c26dd30a5f30d3f2fdba2808a0",
+      "size_bytes": 8047
     },
     {
       "path": "task_prompts/E-01.8.md",
@@ -974,8 +974,8 @@
     },
     {
       "path": "task_prompts/U-03.2.md",
-      "sha256": "507f34d09e69acdf3a13be5acbc0e0feda8311fb6dd5d10666c3486456b6daf0",
-      "size_bytes": 4219
+      "sha256": "0ade9463d0a2e0b3b676f8ee476d344607c00a152e1252a68dceaa20f6fe0e9f",
+      "size_bytes": 4714
     },
     {
       "path": "task_prompts/U-04.1.md",

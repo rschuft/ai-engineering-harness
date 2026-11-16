@@ -4,6 +4,7 @@ title: 'U-04.1: Build source-aware outcome projection endpoint'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T15:44:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -27,3 +28,9 @@ Plan contract: leaf U-04.1 of AI_Engineering_Implementation_Project_Plan_Oversee
 - [ ] #2 The lineage message and statement resolvers resolve, and archived tasks resolve; an unresolved message, statement or archived-task reference is a failure.
 - [ ] #3 The attempt's result receipt (E-05.4's) is joined as evidence, its commit, diff and test output referenced, not copied.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Planning note (2026-11-16): in I1 the failed state is met by observed path failures; E-01.7 serves no error, stuck or paused turn (this leaf's plan notes). Criteria unchanged. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
+<!-- SECTION:NOTES:END -->

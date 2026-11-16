@@ -59,8 +59,8 @@ what it blocks, and its status.
 | OA-22 | D1 commitment (2026-11-12); decision 0018 point 5 | **The D1 standing authorization, each item separately answerable:** (a) the inference broker's loopback listeners; (b) edge `nm-guest-inference`; (c) edge `nm-job-inference`; (d) edge `nm-dispatcher-agent-server` (if granted, OA-07's dispatch-path approval under decision 0013); (e) S-03.2's guest hardening change; (f) agent attempts through the dispatcher on the D1 demo repository's content only; (g) model calls under the cap set in OA-12 (reconciled 2026-11-13, planning: folded into OA-12's approval, row "A6 + D1" of the package, with no cap; not presented separately); (h) provisioning the demo repository and its protections on the host Gitea inside declared policy; (i) the demo repository's content in a disposable guest for E-05.1's offline test run in the pinned image (the standing guest authorization excludes repository content; item (f) covers only agent attempts) (added 2026-11-12, planning). (j) the D1 manifest envelope (decision 0018 point 3.3): the demo repository and the design of the change named under OA-25, the qualified execution profile and binding, and the D1 agent assignment with no Skills, and E-01.3.2's entries for its disposable work attempt where they use the demo repository, inside which the product manager promotes D1's manifests; an entry outside it is an Owner decision per act (added 2026-11-12, planning). Items (a), (b), (c) and (e) are the same acts as OA-12's A2, A3 and A4: they are presented once, together. Excludes host shares, any other egress, any Owner credential in a guest, and every other repository. Stops on any failed containment case, unexpected egress, credential finding, or the cap reached (the cap retired 2026-11-13: a provider refusal is an interruption handled by E-05.8, not a stop of the authorization). Expires at D1's acceptance. | Each widens an Owner-approved policy record or spends; (j) is decision 0018's point-3.3 envelope, which the Owner grants | `policy/network-matrix.json` (the three edges' `owner_act`); decision 0003 (the guest authorization this extends); decision 0015 | S-03.2's guest qualification, S-03.3, E-01.3.3's probe (item (d): it is the first live traversal of edge `nm-dispatcher-agent-server`, through the existing forward, with no new host port), E-01.3.2, E-05.1 (items (h) and (i)), E-05.4 (items (f) and, for the demo repository, (h)) and D1 (E-05.5) (corrected 2026-11-12, planning). | **Reconciled 2026-11-14 for the native profile (planning; [record](#d1-native-reconciliation-2026-11-14); decision 0023, Proposed):** for D1, item (a) (the broker's listeners) and item (g) are not used; (b), (c) and (e) (approved) cover the guest side, which is unchanged, and the forward's new target and the tunnel's egress are OA-31 (a). The exclusion "any Owner credential in a guest" stands for every item here: the native token enters a guest only under OA-31 (b) and (f), never under this standing authorization (a credential's exposure is never standing, decision 0018 points 4.1 and 5); "any other egress" stands, and the tunnel's one origin is OA-31 (a). Item (f), when presented, no longer includes the broker's token issue and revocation (E-05.6): the native token's delivery is OA-31 (f). (d), (f), (h), (i) and (j) stay unanswered and on D1's path. **Items (a), (b), (c), (e) APPROVED 2026-11-14 by the Owner with OA-12** ([verbatim](#owner-decision-oa-12-2026-11-14)); (d), (f), (h), (i), (j) approved 2026-11-14. Items (a), (b), (c), (e) presented with OA-12 on 2026-11-13 ([package](OA-12-OA-22-provider-access-package.md)). Prepared 2026-11-12. Items (a), (b), (c) and (e) with OA-12's A2 to A4 are the first gate on D1's critical path and are presented when OA-12 is prepared, not after the other offline leaves; the rest at their leaves (planning, 2026-11-12). Nothing is granted until the Owner answers. Item (f), when presented, states that it includes ((g) is folded into OA-12 since 2026-11-13) the dispatcher's issuance and revocation of each attempt's inference token through the broker (E-05.6; planning, 2026-11-13). **Presented 2026-11-14** by the engineering manager with OA-31, consolidated ([presentation](OA-31-consolidated-presentation-2026-11-14.md)); awaiting the Owner. **Items (d), (f), (h), (i), (j) APPROVED 2026-11-14** ([verbatim](#owner-decision-oa-31-2026-11-14)). **Expired 2026-11-16 at D1's acceptance** ([record](#d1-milestone-acceptance-2026-11-16)). |
 | OA-25 | D1 commitment; E-05.5's proof ("The Owner names one small change in a demo repository on the host Gitea") | **Name the D1 change and its demo repository.** Intent, not an authorization: one small change, testable offline in the pinned image. | The proof makes the naming the Owner's. | Nothing to prepare; it can be given at any time before E-05.1 starts. Planning refines it into the OpenSpec change. | E-05.1, then E-05.5 | **Named 2026-11-14** ([verbatim](#owner-decision-oa-31-2026-11-14)): `aieh-d1-demo`, a small Python package with unittest tests; the change: implement `slugify(text)` with appropriate tests. |
 | OA-31 | Decision 0023 (Accepted by the product manager 2026-11-14); the Owner's [direction](#owner-direction-native-d1-2026-11-14) of 2026-11-14; the plan amendment of 2026-11-14 | **The native profile's reserved acts, each separately answerable** ([prepared presentation](#oa-31-prepared-2026-11-14)): (a) the standing authorization of the native path: the forward's new target, the tunnel's loopback listener and its egress to `api.anthropic.com:443`, with the residuals disclosed; (b) the new credential class in disposable guests (the native Claude Code token); (c) D1's model calls billed to the Owner's subscription, with the model identifiers; (d) the Owner's reading of the provider's terms; (e) the act: run `claude setup-token` on the host and paste the token at the hidden prompt; (f) the token's delivery to attempts, per attempt or by an Owner amendment of decision 0018 point 5. | Decision 0018 points 4.1, 4.7 and 4.8: an egress origin and an edge, a credential class, the Owner's credential and account, and the delegation itself | The [prepared presentation](#oa-31-prepared-2026-11-14); decision 0023 sections 6 to 8 | (a): E-05.10's live step; (b) to (f): E-05.11's live step and D1 (E-05.5). Asked as one presentation when E-05.9 and E-05.10's offline part have passed, (e) right after (b) to (d) | **Approved 2026-11-14** ((a), (b), (c1), (c2), (f); (d) acknowledged with the Owner's conditions) ([verbatim](#owner-decision-oa-31-2026-11-14)); **(e) performed 2026-11-15** by the Owner ([his report](#owner-act-oa-31-e-2026-11-15)). **(a), (b), (c2) and (f) expired 2026-11-16 at D1's acceptance** ([record](#d1-milestone-acceptance-2026-11-16)). The token stays in its host entry; revoking it is the Owner's act. |
-| OA-32 | [Commitment: I1](#commitment-i1-2026-11-16); U-06.1's proof (1) and (2) | **The Owner's I1 session, request and acceptance, in the Owner host.** (a) the Owner enters his Owner UI session credential (`cred-owner-ui-session`, issued only by an Owner act) at the Integration process's Owner login; (b) one small change the Owner requests in the Owner host's chat; (c) his acceptance of its objective through the recorder's single-use challenge there. (b) and (c) are participation and intent, not an approval. | (a) is entering an Owner credential (decision 0018 point 4.1); the request is the Owner's intent, and the acceptance of an objective is his (decision 0018 point 4.3); no agent records, paraphrases or impersonates either. | Nothing to prepare beyond the running Owner host; execution names the moment. | U-06.1's run | Open (future; not needed before U-06.1) |
-| OA-33 | [Commitment: I1](#commitment-i1-2026-11-16); U-06.1's proof (4); decision 0018 points 3.3 and 5 | **The dispatch-input manifest for U-06.1's fixture dispatch:** either a standing envelope inside which the product manager promotes it, or a per-act Owner decision on the manifest itself. | Manifest promotion outside an Owner-granted envelope is the Owner's (decision 0018 point 3.3); the D1 envelope (OA-22 (j)) expired at D1's acceptance. | Each item separately answerable: the project repository, the design of OA-32's change, the fixture profile and binding (from E-01.8), the agent assignment and catalog pin, the leaf it serves (U-06.1), its conditions (deterministic fixture only: no live guest, attempt, model or credential), its stop conditions (any live transport or credential read) and its expiry (I1's acceptance). | U-06.1's dispatch | Pending (future); presented when E-01.8 has produced the profile and binding |
+| OA-32 | [Commitment: I1](#commitment-i1-2026-11-16); U-06.1's proof (1) and (2) | **The Owner's I1 session, request and acceptance, in the Owner host.** (a) the Owner enters his Owner UI session credential (`cred-owner-ui-session`, issued only by an Owner act) at the Integration process's Owner login; (b) one small change the Owner requests in the Owner host's chat; (c) his acceptance of its objective through the recorder's single-use challenge there. (b) and (c) are participation and intent, not an approval. | (a) is entering an Owner credential (decision 0018 point 4.1); the request is the Owner's intent, and the acceptance of an objective is his (decision 0018 point 4.3); no agent records, paraphrases or impersonates either. | Nothing to prepare beyond the running Owner host; execution names the moment. To be stated when it is presented ([planning, PB-8](#i1-blockers-disposed-2026-11-16)): the request is entered through a labelled form (objective, criteria, suggestions); the delivered diff and test output are D1's recorded ones, labelled fixture, whatever is requested; planning suggests, and does not ask, a request the recorded result fits: D1's slugify change (OA-25), in the run's copy of the demo repository. Also as information: the fixture's UI face may serve source-derived fields, labelled as such, where no observation is committed (E-01.7's amended proof). | U-06.1's run | Open (future; not needed before U-06.1) |
+| OA-33 | [Commitment: I1](#commitment-i1-2026-11-16); U-06.1's proof (4); decision 0018 points 3.3 and 5 | **The dispatch-input manifest for U-06.1's fixture dispatch:** either a standing envelope inside which the product manager promotes it, or a per-act Owner decision on the manifest itself. | Manifest promotion outside an Owner-granted envelope is the Owner's (decision 0018 point 3.3); the D1 envelope (OA-22 (j)) expired at D1's acceptance. | Each item separately answerable: the project repository, the design of OA-32's change, the fixture profile and binding (from E-01.8), the agent assignment and catalog pin, the leaf it serves (U-06.1), its conditions (deterministic fixture only: no live guest, attempt, model or credential), its stop conditions (any live transport or credential read) and its expiry (I1's acceptance). Planning's choices for the presentation ([PB-7](#i1-blockers-disposed-2026-11-16)): the project repository is a copy of D1's demo repository carrying the id `aieh-d1-demo`, without D1's Work, run on a store holding no D1 record (U-06.1's notes); the result path's admitted set is not changed; the design carries D1's test command. Execution verifies the store arrangement before the presentation. | U-06.1's dispatch | Pending (future); presented when E-01.8 has produced the profile and binding |
 
 ### 4. Optional housekeeping
 
@@ -5182,6 +5182,117 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - PB-7: the unchanged result path admits one repository id, `aieh-d1-demo`. I1's project repository must carry it, or planning accepts a change to the admitted set.
     - PB-8: the Owner's request is entered through a labelled form (objective, criteria, suggestions). The delivered diff and test output are D1's recorded ones, whatever he asks for, labelled fixture.
   - **For the Owner's information, not a request:** three new host-loopback listeners are planned: the Integration process on 127.0.0.1:13310, the fixture, and the standalone Canvas server. Each is recorded before it first listens and is not an Owner act under 0025 point 7 (decision 0013 points 4 to 6; no forward, no outbound connection, no credential held). The tools set gains Starlette, uvicorn and websockets (wheels only, hash-locked).
+- <a id="i1-blockers-disposed-2026-11-16"></a>**2026-11-16: Planning: I1's questions PB-1 to PB-8 disposed of; the plan amendment of 2026-11-16 (I1 blockers) applied (planning, program manager).** By the product manager, on [execution's questions](#i1-execution-questions-2026-11-16) and [the I1 design record](I1-integration-design-2026-11-16.md) section 2, within the [Owner's direction](#owner-direction-i1-2026-11-16). No architect consultation: the architect's work design already states the options, and what remained was planning's choice among them. The program manager challenged the change twice, read-only, and every defect was taken before this commit:
+  - **Dispatch 1, the draft: twelve defects.** Among them:
+    - schemas taken from the locked document only for the serving face's runtime;
+    - the route inventory named by file and digest, with routes matched by template;
+    - an observation cited only for an equivalent request (D1's test command);
+    - source-derived values confined to the UI face, per field;
+    - the runtime-credential route dropped rather than served;
+    - a complete re-homing to U-03.2;
+    - every scenario under the provenance rule;
+    - PB-5's node set defined by rule;
+    - PB-3 worded so it can be checked;
+    - PB-7's isolation from D1's records.
+  - **Dispatch 2, the applied change: thirteen defects.** Among them:
+    - the pinned-rule class closed to the fixture's own code;
+    - the refusal clause reconciled with the source-derived exception;
+    - source-derived fields limited to the statuses a live run reaches without fault injection, so that U-03.2 can compare them all;
+    - the UI face defined in the proof;
+    - the 16th deferral's trigger stated exactly;
+    - E-01.8's "cited recorded result" read per PB-4;
+    - the test output's determining inputs named;
+    - item (4)'s "credential" reading;
+    - the Canvas reading listed as a delegated decision;
+    - PB-7 made subject to OA-33;
+    - TASK-9's criteria made self-contained.
+  - **Observed starting state.** HEAD `a85d6ba` = `origin/main`, clean. `plan_commitment.py U-06.1`: 72 leaves, 58 passed, 14 open, ready U-01.3, E-01.4.1, E-01.7. `verify_seed` PASS (190); `--baseline seed` PASS (136).
+  - **PB-1 and PB-2: E-01.7's proof is corrected through the integrity process** (decision 0018 points 2 and 3: a criterion that cannot be met as written is corrected without lowering what it proves, and its observed counterpart is re-homed). The full text is the plan's `amendments` entry and E-01.7's proof, action, artifact and notes; TASK-9's seven criteria equal the new proof.
+    - **Why it cannot be met as written.** The locked release OpenAPI documents the local runtime only, and no WebSocket route (F-04.2 finding 1). No raw payload of a live run is committed. The UI face is unobserved beyond E-01.3.3 step (4)'s status pair.
+    - **Faces.** The proof now defines the UI face: read-only, called only by the Owner UI and Agent Canvas, never by the dispatcher, and no value it serves reaches a record of the dispatch path.
+    - **Routes and schemas.**
+      - Routes are matched by method and path template against the locked OpenAPI or the pinned route inventory of the profile D1 ran. That inventory is `profiles/strong-windows-qemu-whpx/agent-server/routes.json`, sha256 `919d67e2...bc09`, equal to the D1 run record's. A route in neither is a failure.
+      - A response is validated against the locked document where that document defines the route for the serving face's runtime. Otherwise it is validated against the pinned upstream source's response model.
+    - **Every field is one of four classes:**
+      - an observation, cited only for an equivalent request (D1's test output only for D1's test command);
+      - a request echo;
+      - a rule pinned in an accepted decision, or in harness code outside the fixture that the production path runs (the result's commit by decision 0024 point 4.4's rule; D1's commit id is a citation only, PB-4);
+      - the label.
+
+      A field derived only from the fixture's own code is a failure.
+    - **Source-derived values.** They are admitted on the UI face only, for an unobserved field, and in the statuses idle, running and finished. Each is marked in the provenance table and in the answer's label header.
+      - Their observed counterpart is re-homed to U-03.2, whose proof and artifact now carry it.
+      - No new dependency: U-03.2 reaches E-01.7 through U-03.1 and U-01.2.
+      - U-03.2 is committed as the I1 commitment already says.
+    - **Refusals and scenarios.** A request outside the catalog, or one whose answer needs an observed field that matches no observation, is refused with the label. Transport events are listed with their scenario. The failed scenario reproduces S-01.3.1's observed refusal.
+      - No `error`, `stuck` or `paused` turn is served: none is observed, and no I1 proof needs one. U-04.1's failed state is met by observed path failures.
+      - A live provider interruption, the 16th deferral's trigger, is the first expected live failed turn.
+      - The live mapping of the other turns is observed by no committed leaf, and no proof requires it.
+    - **Rejected options.**
+      - Recording the missing observations live: outside I1's conditions and the Owner's "Do not require another live model call merely to requalify the execution path."
+      - Committing D1's raw event log: outside this session's paths, it would not cover the inner server's views, and it is a publication risk.
+    - **Not reserved to the Owner** (decision 0018 point 4.8):
+      - U-06.1's items (1) to (8) and the U-06 gate are unchanged.
+      - The clause was planning's own, written the same day.
+      - Its observed-fidelity obligation is re-homed, not dropped.
+      - Source-derived answers served to the real Agent Canvas remain functional integration, not static screens.
+    - **The I1 commitment's sentence** "The fixture answers the locked Agent Server API from recorded observations" now reads per E-01.7's amended proof. This is disclosed to the Owner as information in the next report and in OA-32's presentation material.
+  - **PB-6: the runtime-credential route is removed from E-01.7's action.** No I1 component calls it at the pins, and serving it would expand I1. A fixture counterpart, if wanted, is U-03.1's (its notes). U-01.2's notes record I1's session access.
+  - **The Agent Canvas reading** (E-01.7's notes; planning's answer to decision 0026 point 8). "Agent Canvas code paths run against it unmodified" holds when:
+    - upstream's static server serves the standalone application from a derived copy of the pinned build;
+    - the copy differs only by its two removed remote font imports, shown by a byte diff;
+    - no JavaScript file is changed;
+    - telemetry is disabled only by an upstream setting.
+  - **PB-3: confirmed, as a reading of E-01.8 and the I1 commitment's conditions** (E-01.8's notes; U-06.1's notes apply it to item (4)).
+    - The only credential provider constructed on the fixture path declares authority `fixture`. It holds only values derived from a public seed committed in the repository. The host credential provider is never constructed (an import census).
+    - The fixture profile cannot be launched and has its own digest. It replays the native execution kind, so decision 0024 point 8's gate runs unchanged; decision 0024 is not reopened. No native-profile authorization is used or renewed.
+    - Item (4)'s "credential" is one on the dispatch path. A public-seed value is not one, and the Owner's own Owner UI session credential (item (2), OA-32 (a)) is outside item (4).
+    - The 19th, 20th and 21st deferrals stay unfired: the native profile is not used, no provider CLI runs, and no attempt is live.
+    - E-01.8's "the fixture's cited recorded result" reads per PB-4.
+  - **PB-5: the reading of U-06.1 item (8)**, fixed by planning before the run (U-06.1's notes):
+    - every node resolves, with its authority mode stated;
+    - the mode is `fixture` exactly on the nodes whose answering source's bound authority is fixture (the attempt, its session, the recorded inspect, the result, and its work branch and pull request on the fake Gitea), and `live` elsewhere;
+    - the only uncertainties are `fixture-authority` on those nodes; any `authority-unavailable` or `unknown` is a failure.
+
+    Execution writes the run's decision rule, listing the nodes, before the run.
+  - **PB-7: the result path's admitted set is not changed.** Changing it would change E-05.4's contract, which E-01.8 keeps. As presented in OA-33 (if the Owner answers otherwise, it is a blocker for planning):
+    - U-06.1's project repository is a copy of D1's demo repository carrying the id `aieh-d1-demo`, without D1's Work;
+    - D1's three recorded file changes apply to its base, which outside `openspec/` and `backlog/` equals D1's base tree (the determining inputs of the cited test output, with the test command);
+    - the run uses a store that holds no D1 record, and its ids equal no D1 record;
+    - D1's clone, Gitea repository, store and evidence are not modified.
+
+    Execution verifies the store arrangement before OA-33 is presented.
+  - **PB-8:** OA-32's presentation states two things: the request is entered through a labelled form, and the delivered diff and test output are D1's recorded ones, labelled fixture, whatever is requested. The accepted design carries D1's test command. Planning suggests, as a suggestion only, a request the recorded result fits: D1's slugify change (OA-25). The OA-32 and OA-33 rows carry this material.
+  - **Decision 0026 (Proposed).** Its points 5 and 8 waited for these answers: PB-3 for point 5, and the Canvas reading for point 8. Its acceptance stays the engineering manager's, at its leaves' verdicts.
+  - **Delegated decisions made in this pass** (decision 0018 point 3):
+    - E-01.7's corrected proof, action and artifact;
+    - U-03.2's added criterion and artifact;
+    - the notes on E-01.7, U-03.2, U-03.1, U-04.1, U-01.2, E-01.8 and U-06.1;
+    - the readings PB-3 and PB-5, and the Agent Canvas reading;
+    - PB-7's choice;
+    - PB-8's presentation material.
+
+    No dependency, leaf, status or deferral changes. The critical path is unchanged: 6 leaves, two chains.
+  - **Integrity process.** A script outside the checkout first checked, before the change, that:
+    - the plan JSON re-serializes byte for byte;
+    - `planData` equals the plan;
+    - every `task_prompts/` file equals its leaf's `overseer_prompt`.
+
+    It then changed the two leaves' fields in the plan and replaced their exact text in each prompt, CSV row and card. Afterwards:
+    - all 190 CSV rows agree with the plan (title, action, artifact, proof);
+    - every card's prompt and proof agree with the plan;
+    - a card-by-card comparison shows only E-01.7's and U-03.2's cards changed, besides `planData`;
+    - `task_manifest.json` and `SEED_MANIFEST.json` are updated.
+
+    With the pinned Backlog.md CLI 1.55.3, TASK-9's criteria were set and the notes of TASK-9, 10, 13, 14 and 16 updated.
+  - **Checks at this commit:**
+    - `verify_seed` PASS (190); `--baseline seed` PASS (136);
+    - `tools/tests/test_plan_commitment.py` (54, 1 skipped) and `test_verify_seed.py` (19) pass;
+    - `plan_commitment.py U-06.1`: 72 leaves, 58 passed, 14 open, ready U-01.3, E-01.4.1, E-01.7; U-06.1 waits on OA-32 and OA-33.
+  - **Owner acts:** none new. OA-32 and OA-33 stay at U-06.1, with their presentation material added.
+  - **Next:** execution continues.
+    - E-01.7 (slice 9) and U-01.2 (slice 13) have planning's answers; E-01.8 (slice 11) has PB-3's.
+    - Planning runs again for U-06.1's design acceptance, OA-33's presentation, a blocker, or I1's acceptance.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

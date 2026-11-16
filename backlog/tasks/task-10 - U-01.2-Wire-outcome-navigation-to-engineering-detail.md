@@ -4,7 +4,7 @@ title: 'U-01.2: Wire outcome navigation to engineering detail'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-updated_date: '2026-11-16T15:26:00Z'
+updated_date: '2026-11-16T15:44:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -31,5 +31,5 @@ Plan contract: leaf U-01.2 of AI_Engineering_Implementation_Project_Plan_Oversee
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Blocker for planning (2026-11-16): PB-2 (no committed observation of the UI vantage); note PB-6. See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+Disposed of by planning (2026-11-16): PB-2 by the plan amendment of 2026-11-16 (I1 blockers): E-01.7's UI face may serve source-derived fields where nothing is observed, marked; their observed counterpart is U-03.2's. PB-6 is recorded in this leaf's plan notes. Criteria unchanged; no blocker remains for planning. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
 <!-- SECTION:NOTES:END -->

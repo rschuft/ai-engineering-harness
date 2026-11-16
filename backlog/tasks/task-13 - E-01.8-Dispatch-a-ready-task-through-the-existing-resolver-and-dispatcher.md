@@ -4,7 +4,7 @@ title: 'E-01.8: Dispatch a ready task through the existing resolver and dispatch
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-updated_date: '2026-11-16T15:26:00Z'
+updated_date: '2026-11-16T15:44:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -30,5 +30,5 @@ Plan contract: leaf E-01.8 of AI_Engineering_Implementation_Project_Plan_Oversee
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Reading for planning (2026-11-16): PB-3 (fixture replays the native kind with a public-seed token; no host credential entry read); PB-7 (admitted repository id). See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+Disposed of by planning (2026-11-16): the PB-3 reading is confirmed and PB-7 decided (the result path's admitted set is not changed); both are recorded in this leaf's plan notes. Criteria unchanged. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
 <!-- SECTION:NOTES:END -->

@@ -828,7 +828,7 @@
         "U-03.1"
       ],
       "path": "task_prompts/U-03.2.md",
-      "sha256": "507f34d09e69acdf3a13be5acbc0e0feda8311fb6dd5d10666c3486456b6daf0"
+      "sha256": "0ade9463d0a2e0b3b676f8ee476d344607c00a152e1252a68dceaa20f6fe0e9f"
     },
     {
       "id": "E-01.4.3",
@@ -890,7 +890,7 @@
         "U-01.1"
       ],
       "path": "task_prompts/E-01.7.md",
-      "sha256": "1a4c023b05d02d3b33123eac119b9f3681401390775ba559ec63ecbf9d8a1ba8"
+      "sha256": "6611e77fe899e29de7be2812db45ec0e943ee2c26dd30a5f30d3f2fdba2808a0"
     },
     {
       "id": "E-01.8",
