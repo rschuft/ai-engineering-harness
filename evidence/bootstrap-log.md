@@ -4848,6 +4848,33 @@ push never implies parent acceptance.
   - The offline clauses (fakes) are in `test_attempt_tokens.py` at HEAD: another stage's credential is refused; sequential and concurrent attempts; a revoked credential fails closed until the administrative lifecycle restores it; no credential reaches a guest, container, conversation or the UI.
   - **Disclosed:** step (4) reads the runtime-credentials answer under `ASSUMED_CREDENTIAL_SHAPE`. The shape held live; U-01.2 owns its general check. The live administrative revocation stays optional and its own Owner act.
   - **Decisions under delegated authority:** the reading of `--egress-falsification` as the same disposable-guest act as OA-20's `create --provision` (an existing create mode used by every passing job-access-probe run since S-01.4); and re-running the probe after a verdict-code fix rather than re-judging the first record.
+- <a id="handoff-d1-promotion-v2-2026-11-16"></a>**2026-11-16: Handoff to planning: the D1 manifest promotion, version 2 (engineering manager).** Asked for: one delegated `manifest delegate` (decision 0018 point 3.3; decision 0020 point 2 refuses it to execution), version 2, `previous` version 1 `sha256:6e6d17f1cd2fbee0f747890c5a0f65678bf3babde4d16ae0e9f6da167e02723d`, basis `envelope` on `#owner-direction-d1-planning-2026-11-15` ("Reconcile the manifest with the current native execution profile and its digest."). No `accept-design`, no plan amendment.
+  - **Why the profile changed.** An architect consultation (gates C and G; work design accepted by the engineering manager, rulings R1 to R8 below) settled how D1's attempt sends its task, gets content in and the result out through the guest exchange, and who commits. The dispatcher's checked route allowlist now admits the conversation proxy `POST /api/conversations/{conversation_id}/{tail}` for exactly two tails, `events` and `bash/execute_bash_command`, pinned inside `routes.json` (now `919d67e2...bc09`).
+  - **The profile's diff is one value**, `provisioning.agent_server.admission.routes.sha256`: profile `7d01e62c...a17b` becomes **`b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7`**. The guest composition, create template (`660001d2...`), secrets admission, tunnel endpoint and seed are byte-identical. The assignment `d06a1fc0...` at `135fb94` and the accepted design at C2 are unchanged.
+  - **Candidate version 2:** `integrations/dispatch/candidates/d1-approved-inputs.json`, sha256 **`0809dc32261d444be0c401368eef6ee3babf36d02b7389bc6c5bc9da98329218`**. It is version 1 with only the version number and the profile digest changed; a test rebuilds version 1 from it. The same five entries as version 1, all inside OA-22 (j).
+  - **No Owner act:** no new host-to-guest connection, seed or guest change, credential, principal or edge. The edge `nm-dispatcher-agent-server` was approved route-agnostic under OA-22 (d). The inventory split (`op-as-conversation-message`, `op-as-conversation-command`) enumerates acts the management dispatcher already performs over that edge and narrows `op-as-unenumerated-routes`.
+  - **What execution built, offline** (each slice independently reviewed, fixed forward and delta-checked; full suite green):
+    - A1 to A4, `5edeffc`: route admission with exact per-tail grammars and pinned command builders; bodies on standard input; no body digest for a `secrets` body; the exchange delivery.
+    - `attempt_run.py`: SEED, MESSAGE, the turn journal, RESULT with a fresh git directory, host intake with commit-id equality and tree policy, close and resume.
+    - B, `0a0ba01`, `bc586fb`: `result_path.py`, with the result journal, the outbound token search gate, reconciliation, the builder push and a `WIP:` draft pull request (Gitea 28.3.0 work-in-progress prefixes, read in the pinned source), the lineage receipt and the Owner report.
+    - C, `a9abdeb` to `6ddffef`: the D1 run driver `d1_run` under `D1_RUN_RULE` (sha256 `eb791981...3c0f`, (11d) excluded) and the step-0 rehearsal driver. Review findings fixed: stops persisted and ending the attempt on every path; admission refuses `PRIOR_ATTEMPT_STOP_UNRESOLVED`.
+  - **Step 0, live, PASS** (engineering manager's main session, guest `d1-step0`, destroyed). A disposable fixture conversation, with no token, no model call, no repository content and nothing in the live store, observed:
+    - git 2.47.3 and Python 3.13.15 in the container;
+    - the bash route keeps CRLF as sent; masking left `tRuE` untouched; 1 MiB of output came back whole;
+    - a 126,976-byte command ran, and a 139,264-byte one failed with `Argument list too long: '/bin/sh'`;
+    - demo-size SEED 19,777 and RESULT 52,735 bytes;
+    - the exclusive `os.link` delivery, pathspec exclusion, `update-index --index-info`, pull, the retained verifier, the host's commit-id equality, RESULT again without a delivery giving the same commit, and `EXISTS`.
+  - **Engineering manager's rulings on the design** (decisions under delegated authority, for the D1 report):
+    - R1: a failing test run still opens the draft PR, and E-05.5 is then not met.
+    - R2: two security-stop kinds, `model-stop` and `provider-stop`.
+    - R3, revised: RESULT excludes `.claude`, `.mcp.json` and changes to `openspec/` and `backlog/` by a recorded rule; host intake refuses them.
+    - R4: step 0 before the live run.
+    - R5: the commit identity `aieh-bot-builder <aieh-bot-builder@localhost.invalid>` with Task, Attempt, Outcome and Design trailers.
+    - R6: the network matrix's `builds_at` set to E-05.4.
+    - R7: no body digest recorded for a `secrets` body.
+    - R8: a decision record at E-05.5's completion.
+    - The slice-C stop mappings, and a resumed run reading the native entry only to search with it.
+  - **After the promotion:** execution runs one live D1 run of TASK-1 (`d1-run-plan`, main session). It gives the evidence for E-01.3.2, E-05.4 and E-05.5. No commit may touch `profile.json` or `routes.json` between this promotion and the run.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
