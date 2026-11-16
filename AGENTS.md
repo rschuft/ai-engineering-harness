@@ -129,6 +129,8 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
   <tools python> -I -B -m unittest discover -s integrations/repository/tests -v
   <tools python> -I -B -m unittest discover -s integrations/inference/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/conversation/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/ownerhost/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the

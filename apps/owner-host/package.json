@@ -2,7 +2,7 @@
   "name": "aieh-owner-host",
   "version": "0.0.0",
   "private": true,
-  "description": "Owner host shell (plan leaf U-01.1): navigation, session identity, assistant-ui chat and embedded Agent Canvas in one React app. Not connected to any backend.",
+  "description": "Owner host shell (plan leaf U-01.1): navigation, session identity, assistant-ui chat and embedded Agent Canvas in one React app; signs in to the Integration process (U-01.3), its only backend.",
   "license": "MIT",
   "type": "module",
   "engines": {

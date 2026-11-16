@@ -6,9 +6,12 @@ It is a responsive shell with persistent navigation, one session identity, the
 Owner chat built on assistant-ui, empty objective and Work surfaces, and Agent
 Canvas embedded as a library for engineering sessions.
 
-**Nothing is connected.** There is no chat model, conversation store, objective
-source, Work system or Agent Server behind it, and it makes no network request.
-Every surface says so instead of showing sample data.
+**One backend, for sign-in only.** Since U-01.3 the shell signs in to the
+Integration process ([`integrations/ownerhost`](../../integrations/ownerhost/README.md))
+on `http://127.0.0.1:13310`; that is the only request it makes, and only when
+the Owner signs in or a stored sign-in is checked. There is still no chat model,
+conversation thread, objective source, Work system or Agent Server behind it,
+and every surface says so instead of showing sample data.
 
 Commands, prerequisites and verification status: [Owner host](../../docs/development.md#owner-host)
 in the development reference.
@@ -21,6 +24,7 @@ in the development reference.
 | `/chat` | Chat | assistant-ui's headless primitives over `useLocalRuntime` with a model-free adapter: an empty in-memory thread and a disabled composer. |
 | `/work` | Work | The Objectives and Work items surfaces, each with an empty state that says no source is connected. |
 | `/engineering` | Engineering | A "No Agent Server is connected" notice, then Agent Canvas's providers and scoped root, loaded lazily. |
+| `/sign-in` | (none) | The login view (U-01.3): paste the Owner UI session credential; once signed in, the session and "Sign out". Not an area, so not in the navigation; the header links to it. |
 | any other | (none) | "Page not found" inside the shell, with links to the three areas. |
 
 The table is `ownerRoutes` in [`src/routes.tsx`](src/routes.tsx); the areas'
@@ -32,10 +36,12 @@ mounted while the area changes.
 
 | Component | File | Role |
 |---|---|---|
-| `OwnerApp` | `src/App.tsx` | The identity provider above the router. |
-| `OwnerShell` | `src/shell/OwnerShell.tsx` | Header (product name, identity), area navigation (`NavLink`, `aria-current`), outlet. |
+| `OwnerApp` | `src/App.tsx` | The identity provider and the sign-in state above the router. |
+| `OwnerShell` | `src/shell/OwnerShell.tsx` | Header (product name, identity, sign-in control), area navigation (`NavLink`, `aria-current`), outlet. |
 | `useShellLayout` | `src/shell/layout.ts` | `wide` at or above 900 px, `narrow` below, from `matchMedia`. The shell sets `data-layout`; `shell.css` keys the grid on it. |
-| `SessionIdentity` | `src/identity/SessionIdentity.tsx` | Shows "Owner", the local session's short id and "Not signed in"; compact in the narrow layout. |
+| `SessionIdentity` | `src/identity/SessionIdentity.tsx` | Shows "Owner", the local session's short id and "Not signed in" or "Signed in"; compact in the narrow layout. |
+| `OwnerSessionProvider` | `src/identity/OwnerSessionContext.tsx` | The sign-in state: checks a stored credential once when the shell opens, `signIn` (verify, then keep), `signOut` (remove), and the Integration process client of the signed-in session. |
+| `SignIn`, `SessionControl` | `src/identity/SignIn.tsx`, `src/identity/SessionControl.tsx` | The login view, and the header's "Sign in" link or "Sign out" button. |
 | `ChatArea` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
@@ -53,11 +59,48 @@ every route, every tab and after a reload, until the browser's site data is
 cleared. It is resolved once, above the router. If storage is unavailable, the
 value lasts for the page and is marked `persisted: false`.
 
-It is **not** authentication: it holds no credential, token or key, and the UI
-says "Not signed in". How the Owner UI authenticates to the Agent Server and the
-Integration Service is the open finding `fd-owner-ui-access` in
-[`security/inventory.json`](../../security/inventory.json) (carried to S-01.3.1).
-Nothing here decides it.
+It is **not** authentication: it holds no credential, token or key. How the
+Owner UI reaches the Agent Server is the open finding `fd-owner-ui-access` in
+[`security/inventory.json`](../../security/inventory.json); nothing here decides
+it.
+
+## Sign-in to the Integration process (U-01.3)
+
+[Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
+(Proposed), point 4 as amended. The Owner mints the Owner UI session credential,
+`cred-owner-ui-session` (`aieh-oui-` and 52 lower-case base32 characters), at his
+own console with `task ownerhost:enroll`, and pastes it into `/sign-in`.
+[`src/identity/owner-session.ts`](src/identity/owner-session.ts) holds the rules:
+
+- The pasted value is checked for the shape first (nothing is sent otherwise),
+  then verified with `POST /session`; only a verified credential is kept, as
+  one record under `aieh.owner-host.owner-ui-session` in this origin's
+  `localStorage` (the origin is scheme, host and port, so another loopback
+  listener cannot read it), with the session's public id and expiry. The field
+  is emptied after each attempt.
+- Every request to the Integration process goes through one client: to
+  `http://127.0.0.1:13310` only, a path and never a URL, with the
+  `X-AIEH-Owner-Session` header, `credentials: "omit"` (never a cookie),
+  `redirect: "error"` and no referrer.
+- A stored copy is checked once when the shell opens (the browser may have been
+  closed and reopened). A refused credential (`SESSION_CREDENTIAL_FOREIGN`,
+  `_EXPIRED`, `_REVOKED`) removes the copy; an unreachable process keeps it.
+- "Sign out" removes the copy. The service's expiry bounds it either way.
+
+A process of the Owner's account that reads the browser profile can read the
+copy: inside decision 0010 point 1's disclosed same-account limit.
+
+### Content-security policy
+
+[`build/csp.ts`](build/csp.ts): the shell's origin holds the session's
+authority, so the page may load code only from itself and connect only to
+itself and to `http://127.0.0.1:13310`. `vite preview` sends it as a header (with
+`frame-ancestors 'none'`), the build puts it into `index.html` as its first
+element, and `vite dev` sends it with one allowance, inline scripts, for the
+React refresh preamble Vite injects. Styles may be inline (Canvas and its
+bundled libraries insert `<style>` elements) and images may be `data:` URLs
+(Canvas shows browser screenshots so); frames are refused until the standalone
+Canvas origin exists (U-01.2).
 
 ## Dependencies
 
@@ -165,4 +208,7 @@ and npm 11.17.0 on Windows 11 x86_64, in jsdom and in the production build.
 - Any host but Windows 11 x86_64 with Node 24.19.0 and npm 11.17.0.
 - Canvas against a real Agent Server, existing-session selection,
   reconnection and history (U-01.2, E-01.x).
-- Owner authentication (`fd-owner-ui-access`).
+- The Owner UI's access to the Agent Server (`fd-owner-ui-access`).
+- The sign-in against the running Integration process in a real browser, the
+  content-security policy as a browser enforces it, and the Owner's own
+  credential (OA-32 (a)). The tests use a fake Integration process.

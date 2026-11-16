@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router";
 import { AREAS } from "../areas";
+import { SessionControl } from "../identity/SessionControl";
 import { SessionIdentity } from "../identity/SessionIdentity";
 import { useShellLayout } from "./layout";
 
@@ -15,6 +16,7 @@ export function OwnerShell() {
       <header className="owner-shell__header">
         <span className="owner-shell__brand">AI Engineering</span>
         <SessionIdentity compact={narrow} />
+        <SessionControl />
       </header>
       <nav className="owner-shell__nav" aria-label="Owner areas">
         <ul className="owner-nav" aria-orientation={narrow ? "horizontal" : "vertical"}>

@@ -4,13 +4,15 @@ import { ChatArea } from "./areas/ChatArea";
 import { WorkArea } from "./areas/WorkArea";
 import { EngineeringArea } from "./areas/EngineeringArea";
 import { NotFound } from "./areas/NotFound";
+import { SignIn } from "./identity/SignIn";
 import { DEFAULT_AREA_PATH } from "./areas";
 
 /**
  * Route table of the Owner host. Every area renders inside OwnerShell, so the
  * navigation and the session identity stay mounted while the area changes.
  * U-01.2 adds outcome-to-session selection under /engineering; nothing here
- * selects a session yet.
+ * selects a session yet. /sign-in is the login to the Integration process
+ * (U-01.3): not an area, so it is not in the navigation.
  */
 export const ownerRoutes: RouteObject[] = [
   {
@@ -21,6 +23,7 @@ export const ownerRoutes: RouteObject[] = [
       { path: "chat", element: <ChatArea /> },
       { path: "work", element: <WorkArea /> },
       { path: "engineering", element: <EngineeringArea /> },
+      { path: "sign-in", element: <SignIn /> },
       { path: "*", element: <NotFound /> },
     ],
   },

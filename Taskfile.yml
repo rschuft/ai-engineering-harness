@@ -101,7 +101,7 @@ tasks:
       - '{{.PYTHON}} -I -B tools/run_tests.py {{.CLI_ARGS}}'
 
   test:serial:
-    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run, one after another, the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the Owner decision recorder tests (owner:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test), the repository-access contract tests (repository:test) and the inference broker tests (inference:test)"
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run, one after another, the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the Owner decision recorder tests (owner:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test), the repository-access contract tests (repository:test), the inference broker tests (inference:test), the Owner conversation store tests (conversation:test) and the Integration process tests (ownerhost:test)"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -120,6 +120,8 @@ tasks:
       - task: dispatch:test
       - task: repository:test
       - task: inference:test
+      - task: conversation:test
+      - task: ownerhost:test
 
   # Test profile and test check (plan leaf F-09.1; docs/development.md#testing), under the python-tools
   # interpreter, as test runs the suites (plan leaf F-10.2). test:budget is an acceptance obligation:
@@ -539,6 +541,91 @@ tasks:
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/inference/tests -v'
+
+  # The Owner conversation store and the Integration process (plan leaf U-01.3; Proposed decision 0025): the store's
+  # tests, the process's tests, its lifecycle verbs through the platform contract (decision 0011), and the Owner's
+  # enroll command, run by the Owner in his own console window only.
+  conversation:test:
+    desc: "Run the Owner conversation store tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/conversation/tests -v): its store kind and application_id, refusal of other kinds, the migration ledger, locations, and the append-only session table that keeps a verifier and never a credential, with one current session"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/conversation/tests -v'
+
+  ownerhost:test:
+    desc: "Run the Integration process tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/ownerhost/tests -v): the Owner UI session credential's shape, verifier and refusals (missing, foreign, expired, revoked, each changing nothing; every other inventory credential shape foreign); the route-table walk, the preflight, Host and Origin; the enroll command's console guard (gate G8); the lifecycle with a fake adapter; R2's structural tests; and the real service started and stopped on 127.0.0.1:13310 with a throwaway layout (the listener table, the host census, the environment, records and logs scanned for credentials, no window, no orphan)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/ownerhost/tests -v'
+
+  ownerhost:up:
+    desc: "Start the Integration process: a supervisor holding a kill-on-close Job Object and the server inside it, on 127.0.0.1:13310 only; refuses a running environment and a held port; waits until it listens (<tools python> -I -B integrations/ownerhost/service.py up; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py up'
+
+  ownerhost:down:
+    desc: "Stop the Integration process: its stop request, then the supervisor; terminating the supervisor ends the server through the job (<tools python> -I -B integrations/ownerhost/service.py down; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py down'
+
+  ownerhost:restart:
+    desc: "Stop and start the Integration process under a write-ahead transition record (<tools python> -I -B integrations/ownerhost/service.py restart; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py restart'
+
+  ownerhost:status:
+    desc: "Report the Integration process: its supervisor, server, listeners and job; changes nothing (<tools python> -I -B integrations/ownerhost/service.py status; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py status'
+
+  ownerhost:inspect:
+    desc: "Report the Integration process: platform, records, configuration, readiness, latest transition; changes nothing (<tools python> -I -B integrations/ownerhost/service.py inspect; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py inspect'
+
+  ownerhost:verify:
+    desc: "Print the Integration process readiness record (aieh-readiness/1); exit 0 only when it passes (<tools python> -I -B integrations/ownerhost/service.py verify; plan leaf U-01.3, Proposed decision 0025)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/service.py verify'
+
+  ownerhost:enroll:
+    desc: "The Owner's enrollment of the Owner UI session credential (<tools python> -I -B integrations/ownerhost/enroll.py [--hours N]; plan leaf U-01.3, Proposed decision 0025 point 3, OA-32 (a)), run by the Owner in his own console window: refused unless standard input and standard output are both console handles, before anything is resolved or written; mints aieh-oui- and 52 lower-case base32 characters, keeps only its verifier with the session id and expiry (default 12 hours, 1 to 168) in <state>/owner-host/conversation.sqlite, supersedes the current session, and shows the credential once on the console; exit 2 on a refusal"
+    interactive: true
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/ownerhost/enroll.py {{.CLI_ARGS}}'
 
   # The Owner's key entry (S-03.3; the OA-12 package's act 2): run by the Owner in his own console window only.
   inference:credential-enter:
