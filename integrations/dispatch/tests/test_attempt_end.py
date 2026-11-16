@@ -610,6 +610,28 @@ class NewAttempt(EndFixture):
         self.end(second)
         self.assertEqual(self.ordinal(self.dispatch_native().operation_key), 3)
 
+    def test_a_recorded_stop_refuses_a_new_attempt_until_the_end_is_a_security_stop(self):
+        """D1 slice C, the delta check of the review of B and C (S-b): a stop the dispatcher recorded after an
+        interruption's end was written is never lost behind that retryable end: no new attempt
+        (PRIOR_ATTEMPT_STOP_UNRESOLVED) until the engineering manager escalates it, then the security stop's refusal."""
+        first = self.interrupted(SURFACED['connection-reset'][0])
+        self.assertEqual(self.end(first)['classification'], AE.INTERRUPTION)
+        stop = record('egress-stop', 'OTHER_TARGET', f'attempt:{store_mod.attempt_id_for(first.operation_key)}#x')
+        written = AE.record_stop(self.store, first.operation_key, [stop], actor='c3-test')
+        self.assertEqual(AE.record_stop(self.store, first.operation_key, [dict(stop, ref='a:b')], actor='c3-test'),
+                         written)
+        work_id = self.store.attempt_identity(first.operation_key).identity.work_id
+        self.assertEqual([(s['kind'], s['code'], s['workId']) for s in AE.stops_of(self.store, work_id=work_id)],
+                         [('egress-stop', 'OTHER_TARGET', work_id)])
+        before = len(self.store.attempts())
+        self.refused_dispatch('PRIOR_ATTEMPT_STOP_UNRESOLVED')
+        self.assertEqual(len(self.store.attempts()), before)
+        AE.record_end_cause(self.store, first.operation_key, cause=AE.END_CAUSE_SECURITY_STOP, actor='c3-test')
+        self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+        with self.assertRaises(di.DispatchRefused) as caught:     # only a security stop's kind is a stop receipt
+            AE.record_stop(self.store, first.operation_key, [record('run-not-started', 'X', 'a:b')], actor='c3-test')
+        self.assertEqual(caught.exception.code, 'DISPATCHER_RECORD_INVALID')
+
     def test_refused_while_the_earlier_attempt_has_no_end_record(self):
         self.interrupted(SURFACED['rate-limit'][0])
         _, before, reads = self.refused_dispatch('PRIOR_ATTEMPT_NOT_ENDED')

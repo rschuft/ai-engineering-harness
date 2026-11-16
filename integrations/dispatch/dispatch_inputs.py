@@ -422,6 +422,10 @@ REFUSALS = {
                                'unexpected-egress stop, or the engineering manager\'s security-stop): the leaf is '
                                'stopped as a security stop and no new attempt is admitted on any design revision or '
                                'stage of the work item',
+    'PRIOR_ATTEMPT_STOP_UNRESOLVED': 'an earlier attempt of the work item has a recorded security stop of the '
+                                     'dispatcher\'s and its end is not a security stop (none yet, or an interruption\'s '
+                                     'written before the stop was seen): no new attempt until the engineering manager '
+                                     'escalates it (record-end-cause security-stop)',
     'PRIOR_END_UNCLASSIFIED': 'an earlier attempt ended unclassified (no provider interruption surfaced, or its '
                               'conversation was absent) and the engineering manager has not classified it '
                               '(record-end-cause): no new attempt is admitted on it',

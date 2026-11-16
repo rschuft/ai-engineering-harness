@@ -707,6 +707,54 @@ def work_item_ends(integration_store, work_id: str) -> list[dict]:
     return out
 
 
+# The dispatcher's observed stops, kept durably as they are observed (D1 slice C, the review of B and C, B1 and S-b):
+# one confirmed receipt per attempt, kind and code, its intent the work item, attempt, kind and code (no text), the first
+# ref in its confirmed detail. A stop observed only after an interruption's end was written leaves that end as it is;
+# the admission below then refuses a new attempt until the engineering manager escalates it (record-end-cause
+# security-stop), so a stop is never lost behind a retryable end.
+STOP_KEY = 'dispatch/attempt/{attempt_id}/stop/{kind}/{code}'
+STOP_FORMAT = 'ai-engineering-harness/dispatch/attempt-stop/v1'
+
+
+def record_stop(integration_store, operation_key: str, records: Sequence[Mapping], *, actor: str) -> list[str]:
+    """Each of the dispatcher's stop RECORDS ({kind, code, ref}, of a security-stop kind) kept as a confirmed receipt
+    for the attempt OPERATION_KEY; a repeat of the same kind and code is the same receipt. DISPATCHER_RECORD_INVALID
+    for a record outside the grammar or not a security stop's kind."""
+    checked = check_records(list(records))
+    if any(r['kind'] not in NON_RETRYABLE_RECORDS for r in checked):
+        raise _refused('DISPATCHER_RECORD_INVALID', 'a stop receipt is of a security-stop kind only')
+    held_identity = integration_store.attempt_identity(operation_key)
+    if held_identity is None:
+        raise _refused('RESERVATION_INVALID', f'no dispatch reservation under {operation_key!r}')
+    attempt_id, written = store.attempt_id_for(operation_key), []
+    for record in checked:
+        key = STOP_KEY.format(attempt_id=attempt_id, kind=record['kind'], code=record['code'])
+        intent = {'format': STOP_FORMAT, 'workId': held_identity.identity.work_id, 'attemptId': attempt_id,
+                  'kind': record['kind'], 'code': record['code']}
+        held = integration_store.reserve(key, intent, actor=actor).reservation
+        if held.state == 'reserved':
+            di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'stop-observed', None)
+            di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'stop-observed', {'ref': record['ref']})
+        written.append(key)
+    return written
+
+
+def stops_of(integration_store, *, attempt_id: str | None = None, work_id: str | None = None) -> list[dict]:
+    """The confirmed stop receipts' intents of one attempt (ATTEMPT_ID) or of every attempt of a work item (WORK_ID)."""
+    out = []
+    for held in integration_store.attempts(['confirmed']):
+        key = held.operation_key
+        if not (key.startswith('dispatch/attempt/') and '/stop/' in key):
+            continue
+        intent = json.loads(held.intent_json)
+        if intent.get('format') != STOP_FORMAT:
+            continue
+        if (attempt_id is None or intent.get('attemptId') == attempt_id) and \
+                (work_id is None or intent.get('workId') == work_id):
+            out.append(intent)
+    return out
+
+
 def _finished(client, conversation_id: str) -> bool:
     """Whether the conversation's recorded status is ``finished`` (S5); False when it cannot be read."""
     try:
@@ -726,6 +774,14 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
             raise _refused('PRIOR_END_SECURITY_STOP', f'attempt {record.get("attemptId")} of work item '
                            f'{identity.work_id} ended non-retryable: a security stop for every design revision and '
                            'stage of the work item', attempt_id=record.get('attemptId'))
+    ends = {r.get('attemptId'): r for r in work_item_ends(integration_store, identity.work_id)}
+    for stop in stops_of(integration_store, work_id=identity.work_id):    # B1/S-b: a stop is never lost behind an end
+        record = ends.get(stop['attemptId'])
+        if record is None or effective_classification(integration_store, record) != NON_RETRYABLE:
+            raise _refused('PRIOR_ATTEMPT_STOP_UNRESOLVED', f'attempt {stop["attemptId"]} of work item '
+                           f'{identity.work_id} has a recorded {stop["kind"]} ({stop["code"]}) and its end is not a '
+                           'security stop: the engineering manager escalates it (record-end-cause security-stop)',
+                           attempt_id=stop['attemptId'], stop_kind=stop['kind'], stop_code=stop['code'])
     prior = []
     for claim in integration_store.claims(identity.work_id, identity.design_revision, identity.stage):
         held = integration_store.get(claim.operation_key)
