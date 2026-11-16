@@ -74,8 +74,8 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
-| `python/tools-requirements.in` / `.txt` | The Python tools venv (`task tools:install`, part of `task setup`; F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md); F-10.1, [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): `dulwich==1.2.21` and `urllib3==2.8.0`, for the Python components' repository operations, and `pyyaml==6.0.3`, for the optional `config.yml`, compiled universally for CPython 3.12; and `keyring==25.7.0`, the credential provider on Linux and macOS (F-06.3), with its closure copied from the per-target locks below, with `sys_platform` markers. Not part of the component resolution. See [Tools lock](#tools-lock-f-071-f-101) and [`integrations/paths`](../../integrations/paths/README.md). | 4 direct, 14 pins |
-| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, and the tools set's `dulwich==1.2.21`, `pyyaml==6.0.3` and `urllib3==2.8.0`, compiled universally for CPython 3.12, and its keyring closure (F-06.3). Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 6 direct, 22 pins |
+| `python/tools-requirements.in` / `.txt` | The Python tools venv (`task tools:install`, part of `task setup`; F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md); F-10.1, [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): `dulwich==1.2.21` and `urllib3==2.8.0`, for the Python components' repository operations, and `pyyaml==6.0.3`, for the optional `config.yml`, compiled universally for CPython 3.12; and `keyring==25.7.0`, the credential provider on Linux and macOS (F-06.3), with its closure copied from the per-target locks below, with `sys_platform` markers; and `starlette==1.10.0`, `uvicorn==0.54.0` and `websockets==16.1.1`, the Integration process's ASGI stack (U-01.3), with their closure copied from the per-target locks. Not part of the component resolution. See [Tools lock](#tools-lock-f-071-f-101) and [`integrations/paths`](../../integrations/paths/README.md). | 7 direct, 22 pins |
+| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, and the tools set's `dulwich==1.2.21`, `pyyaml==6.0.3` and `urllib3==2.8.0`, compiled universally for CPython 3.12, its keyring closure (F-06.3) and its ASGI stack (U-01.3). Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 9 direct, 30 pins |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -214,8 +214,8 @@ locally, and each hash equals both the lock and PyPI's JSON API, as do PyYAML's 
 
 The licence election is also recorded in `../candidates.json` (`dulwich`, `license_elected`) and
 in `../inventory/LEDGER.md`. A contract test in `tools/tests/test_pytest_conftest.py` keeps the
-tools lock to exactly these three pins and the keyring closure below, and the dev lock's blocks for them
-equal to it.
+tools lock to exactly these three pins, the keyring closure and the ASGI stack below, and the dev lock's
+blocks for them equal to it.
 
 ### The keyring closure (F-06.3)
 
@@ -252,6 +252,39 @@ On CPython 3.12 keyring needs no `importlib_metadata` and jaraco.context no `bac
 only below 3.12). macOS needs none of the Linux packages: keyring's macOS backend uses ctypes on the
 Security framework. The Linux installation (including `cryptography` and `cffi`, which are platform
 wheels) and the macOS installation are **not yet verified** (F-06.4, F-06.5).
+
+### The ASGI stack (U-01.3)
+
+On 2026-11-16 (plan leaf U-01.3; Proposed decision 0025 point 1, gate G1 of the I1 work design) the
+Integration process's ASGI stack was added the way the keyring closure was: `starlette==1.10.0`,
+`uvicorn==0.54.0` and `websockets==16.1.1` to `python/tools-requirements.in` and
+`python/dev-requirements.in`, and their closure on CPython 3.12 **copied** into `tools-requirements.txt`
+and `dev-requirements.txt`, each block byte for byte from `windows-x86_64.txt`. These are the versions
+the F-01.2 locks pin for the Agent Server's own closure, and each block is the same in all three
+per-target locks (every file PyPI publishes; websockets has 109). Nothing was resolved. The closure was
+read from each wheel's `Requires-Dist` on CPython 3.12: Starlette needs anyio and typing-extensions,
+anyio needs idna and typing-extensions, uvicorn needs click and h11 (and typing-extensions only below
+3.11), and websockets and click need nothing (click 8.5.0 declares no colorama dependency; anyio
+4.16.0 none on sniffio). No head line has a marker: every package is needed on every platform.
+websockets is uvicorn's WebSocket protocol (an extra of uvicorn, pinned here directly). A contract
+test (`test_the_asgi_stack_is_copied_from_the_component_locks`) keeps every block equal to the
+per-target locks'.
+
+`task tools:install` installed the set on the Windows x86_64 host (CPython 3.12.10) from wheels
+only, with every hash required; `pip check` found no broken requirement.
+
+| Package | Version | Licence (wheel metadata) | On Windows x86_64 |
+|---|---|---|---|
+| Starlette | 1.10.0 | BSD-3-Clause | installed, `py3-none-any` |
+| uvicorn | 0.54.0 | BSD-3-Clause | installed, `py3-none-any` |
+| websockets | 16.1.1 | BSD-3-Clause | installed, `cp312-cp312-win_amd64` |
+| anyio | 4.16.0 | MIT | installed, `py3-none-any` |
+| idna | 3.20 | BSD-3-Clause | installed, `py3-none-any` |
+| typing-extensions | 4.16.0 | PSF-2.0 | installed, `py3-none-any` |
+| click | 8.5.0 | BSD-3-Clause | installed, `py3-none-any` |
+| h11 | 0.16.0 | MIT | installed, `py3-none-any` |
+
+The Linux and macOS installations are **not yet verified**.
 
 ## Dev tools lock (F-09.2)
 
@@ -301,5 +334,5 @@ parallel runner as under `task test`, and the lock recompiled with the same pinn
 (archive sha256 checked first), environment and command. The nine existing pins and their hashes
 did not move (the recompiled file differs from the previous one only by the two added blocks),
 and the two blocks carry exactly the hashes, in the same order, that `tools-requirements.txt`
-admits; the contract test keeps the dev lock's PyYAML, Dulwich and urllib3 blocks equal to the
-tools lock's. Licences and the election are in [Tools lock](#tools-lock-f-071-f-101).
+admits; the contract test keeps the dev lock's PyYAML, Dulwich and urllib3 blocks (and, since F-06.3 and
+U-01.3, its keyring closure and ASGI stack blocks) equal to the tools lock's. Licences and the election are in [Tools lock](#tools-lock-f-071-f-101).

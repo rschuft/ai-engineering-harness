@@ -269,7 +269,7 @@
     "set": "python-tools",
     "lock": {
       "path": "composition/lock/python/tools-requirements.txt",
-      "sha256": "b1846ac4621dd1b862c9606a8733722620d8d57ccb1ddf10089b30a9466410ef"
+      "sha256": "0bf590a3af96c7658e4798a6aa2e256cc3a96b25e857b017cfdd233dba3f1d53"
     },
     "target": {
       "os": "linux",

@@ -94,8 +94,8 @@ unless adaptation is necessary.
 - Setup and verification: `task setup`, or the commands it wraps. The first
   three are the basic-tier checks (standard library, offline, seconds). The
   fourth installs the hash-locked Python tools set (PyYAML, Dulwich, urllib3,
-  keyring; wheels only, under the managed data root; network to PyPI once per
-  lock).
+  keyring, Starlette, uvicorn, websockets; wheels only, under the managed data
+  root; network to PyPI once per lock).
   The tests then run under that set's interpreter, `<tools python>`, which
   `python -I -B integrations/paths/tools_install.py --python` prints (`task
   test`, each per-suite target such as `task repository:test`, `task

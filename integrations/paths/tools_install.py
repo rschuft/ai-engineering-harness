@@ -6,8 +6,8 @@ assets/python-wheels/python-tools/<version>/ with its aieh-asset/1 record, and t
 from them is an install, persistent/installs/python-tools/<version>/. pip's cache is
 ephemeral/cache/pip. <version> is the interpreter tag and the lock digest, so versions sit side
 by side. Wheels only, with required hashes, from composition/lock/python/tools-requirements.txt:
-the tools set is PyYAML, Dulwich, urllib3 and keyring with its closure (each platform's part by its
-sys_platform marker). `--set python-dev-tools` installs the dev set (pytest, pytest-xdist, and the
+the tools set is PyYAML, Dulwich, urllib3, keyring with its closure (each platform's part by its
+sys_platform marker), and Starlette, uvicorn and websockets with their closure (U-01.3). `--set python-dev-tools` installs the dev set (pytest, pytest-xdist, and the
 tools set) the same way, from
 composition/lock/python/dev-requirements.txt, as python-dev-tools beside it.
 

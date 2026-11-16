@@ -23,8 +23,8 @@ tasks:
       - '"{{.TASK_EXE}}" --list'
 
   # setup runs the basic-tier checks first, with the plain PYTHON (standard library, offline), then
-  # installs the python-tools set (PyYAML, Dulwich, urllib3, keyring; hash-locked, wheels only; PyPI once per
-  # lock) and runs test under that set's interpreter (plan leaf F-10.1, decision 0014 section 9).
+  # installs the python-tools set (PyYAML, Dulwich, urllib3, keyring, Starlette, uvicorn, websockets;
+  # hash-locked, wheels only; PyPI once per lock) and runs test under that set's interpreter (plan leaf F-10.1, decision 0014 section 9).
   setup:
     desc: "Run the qualification smoke checks: prereqs, verify and verify:baseline (standard library, offline), then tools:install (network, PyPI, once per lock) and test under the python-tools interpreter"
     cmds:
@@ -162,7 +162,7 @@ tasks:
   # workers do not inherit -B) keep bytecode out of the checkout; pyproject.toml disables pytest's
   # cache. The e2e (live) classes never run in parallel: they stay opt-in in their own targets.
   dev:install:
-    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist, and the python-tools set: PyYAML, Dulwich, urllib3, keyring) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
+    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist, and the python-tools set: PyYAML, Dulwich, urllib3, keyring, Starlette, uvicorn, websockets) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools'
 

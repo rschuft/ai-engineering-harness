@@ -1,13 +1,14 @@
 """Tests for the pytest configuration: pyproject.toml, the root conftest.py and the dev lock (plan
-leaf F-09.2), and the tools lock (plan leaves F-07.1, F-10.1 and F-06.3).
+leaf F-09.2), and the tools lock (plan leaves F-07.1, F-10.1, F-06.3 and U-01.3).
 
 Run from the repository root:  python -I -B -m unittest discover -s tools/tests -v
 
 The contract cases read the committed configuration: the pytest suites equal the Taskfile's,
 every category is a declared marker, collection matches unittest discovery, the dev and tools
 locks each pin exactly the locked set with hashes, the dev lock admits exactly the tools
-lock's files for PyYAML, Dulwich, urllib3 and the keyring closure, and the keyring closure's blocks
-are those of the F-01.2 per-target locks, with their sys_platform markers. The integration cases copy conftest.py, pyproject.toml and
+lock's files for PyYAML, Dulwich, urllib3, the keyring closure and the ASGI stack, and the keyring
+closure's and the ASGI stack's blocks are those of the F-01.2 per-target locks, the keyring closure's
+with their sys_platform markers. The integration cases copy conftest.py, pyproject.toml and
 tools/test_profile.py into a generated project in a temporary directory and run pytest on it in a
 child process, serially and with two xdist workers: the unit guard fails a unit test that
 launches a process (the launch itself is refused), opens a socket or changes directory, in a test
@@ -68,6 +69,19 @@ KEYRING_PINS = {
     'cffi': ('2.1.1', "sys_platform == 'linux'", 'linux-x86_64.txt'),
     'pycparser': ('3.12', "sys_platform == 'linux'", 'linux-x86_64.txt'),
 }
+# The ASGI stack of the Integration process (plan leaf U-01.3; Proposed decision 0025 point 1): Starlette,
+# uvicorn and websockets and their closure on CPython 3.12, copied with their hashes from the F-01.2
+# per-target locks (the Agent Server's own closure), without a marker; the same in every per-target lock.
+ASGI_PINS = {
+    'starlette': '1.10.0',
+    'anyio': '4.16.0',
+    'idna': '3.20',
+    'typing-extensions': '4.16.0',
+    'uvicorn': '0.54.0',
+    'click': '8.5.0',
+    'h11': '0.16.0',
+    'websockets': '16.1.1',
+}
 
 
 def lock_markers(name):
@@ -123,7 +137,8 @@ class Configuration(unittest.TestCase):
             self.assertGreaterEqual(len(hashes), 1, head)
             pins[match.group(1)] = (match.group(2), (match.group(3) or '').strip(' ;'))
         self.assertEqual(set(pins), {'pytest', 'pytest-xdist', 'execnet', 'pluggy', 'iniconfig', 'pygments',
-                                     'packaging', 'colorama'} | set(TOOLS_PINS) | set(KEYRING_PINS))
+                                     'packaging', 'colorama'} | set(TOOLS_PINS) | set(KEYRING_PINS)
+                         | set(ASGI_PINS))
         self.assertEqual(pins['pytest-xdist'][0], '3.8.0')
         self.assertGreaterEqual(int(pins['pytest'][0].split('.')[0]), 9)
         self.assertEqual(pins['colorama'][1], "sys_platform == 'win32'")
@@ -133,7 +148,8 @@ class Configuration(unittest.TestCase):
                           if name != 'colorama' and name not in KEYRING_PINS}, {''})
         source = (REPO / 'composition' / 'lock' / 'python' / 'dev-requirements.in').read_text(encoding='utf-8')
         self.assertEqual(source.split(), ['dulwich==1.2.21', 'keyring==25.7.0', 'pytest>=9.0', 'pytest-xdist==3.8.0',
-                                          'pyyaml==6.0.3', 'urllib3==2.8.0'])
+                                          'pyyaml==6.0.3', 'starlette==1.10.0', 'urllib3==2.8.0', 'uvicorn==0.54.0',
+                                          'websockets==16.1.1'])
 
     def test_the_tools_lock_pins_exactly_the_locked_set_with_hashes(self):
         # The python-tools set (F-07.1, F-10.1, F-06.3): PyYAML for config.yml, Dulwich with its one
@@ -141,15 +157,17 @@ class Configuration(unittest.TestCase):
         # with its markers; every file PyPI publishes.
         blocks = lock_blocks('tools-requirements.txt')
         self.assertEqual({name: version for name, (version, _) in blocks.items()},
-                         {**TOOLS_PINS, **{name: pin[0] for name, pin in KEYRING_PINS.items()}})
+                         {**TOOLS_PINS, **{name: pin[0] for name, pin in KEYRING_PINS.items()}, **ASGI_PINS})
         markers = lock_markers('tools-requirements.txt')
         self.assertEqual({name: markers[name] for name in TOOLS_PINS}, dict.fromkeys(TOOLS_PINS, ''))
+        self.assertEqual({name: markers[name] for name in ASGI_PINS}, dict.fromkeys(ASGI_PINS, ''))
         self.assertEqual({name: markers[name] for name in KEYRING_PINS},
                          {name: pin[1] for name, pin in KEYRING_PINS.items()})
         self.assertGreater(len(blocks['dulwich'][1]), 9)  # the platform wheels, the pure wheel and the sdist
         self.assertEqual(len(blocks['urllib3'][1]), 2)    # the pure wheel and the sdist
         source = (REPO / 'composition' / 'lock' / 'python' / 'tools-requirements.in').read_text(encoding='utf-8')
-        self.assertEqual(source.split(), ['dulwich==1.2.21', 'keyring==25.7.0', 'pyyaml==6.0.3', 'urllib3==2.8.0'])
+        self.assertEqual(source.split(), ['dulwich==1.2.21', 'keyring==25.7.0', 'pyyaml==6.0.3', 'starlette==1.10.0',
+                                          'urllib3==2.8.0', 'uvicorn==0.54.0', 'websockets==16.1.1'])
 
     def test_the_keyring_closure_is_copied_from_the_component_locks(self):
         # F-06.3 resolved nothing: each block is the F-01.2 lock's, the same version and hashes in the same
@@ -163,12 +181,24 @@ class Configuration(unittest.TestCase):
                 if name in blocks:
                     self.assertEqual(blocks[name], tools[name], (name, target))
 
+    def test_the_asgi_stack_is_copied_from_the_component_locks(self):
+        # U-01.3 resolved nothing: each block is the F-01.2 per-target locks' (every target has it), the same
+        # version and hashes in the same order, every file PyPI publishes.
+        tools = lock_blocks('tools-requirements.txt')
+        for target in ('windows-x86_64.txt', 'linux-x86_64.txt', 'linux-aarch64.txt'):
+            blocks = lock_blocks(target)
+            for name, version in ASGI_PINS.items():
+                self.assertEqual(blocks[name], tools[name], (name, target))
+                self.assertEqual(tools[name][0], version, name)
+        self.assertGreater(len(tools['websockets'][1]), 9)  # the platform wheels, the pure wheel and the sdist
+
     def test_the_dev_lock_admits_exactly_the_tools_lock_files(self):
-        # PyYAML, Dulwich, urllib3 and keyring are in the dev set so that every suite runs under the parallel
-        # runner as under task test; for each, the dev lock admits exactly the files the tools lock
+        # PyYAML, Dulwich, urllib3, keyring and the ASGI stack are in the dev set so that every suite runs under
+        # the parallel runner as under task test; for each, the dev lock admits exactly the files the tools lock
         # admits, in the same order, no other.
         dev, tools = lock_blocks('dev-requirements.txt'), lock_blocks('tools-requirements.txt')
-        for name, version in {**TOOLS_PINS, **{name: pin[0] for name, pin in KEYRING_PINS.items()}}.items():
+        for name, version in {**TOOLS_PINS, **{name: pin[0] for name, pin in KEYRING_PINS.items()},
+                              **ASGI_PINS}.items():
             self.assertEqual(dev[name][0], version, name)
             self.assertGreater(len(dev[name][1]), 1, name)
             self.assertEqual(dev[name], tools[name], name)

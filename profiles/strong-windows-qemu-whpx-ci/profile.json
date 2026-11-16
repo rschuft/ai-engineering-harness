@@ -38,7 +38,7 @@
     },
     "provision_lock": {
       "path": "profiles/strong-windows-qemu-whpx-ci/provision.lock.json",
-      "sha256": "16b83a9508c7403f9e7e018f6c4e60aa647c0e1af3d92888deec69d728b9ba53"
+      "sha256": "366d9e1ea2f121cc3e1491f462be76be0063ab6ea7b3bf60a6b9cdae30e86e39"
     },
     "binaries": {
       "qemu-system-x86_64": {

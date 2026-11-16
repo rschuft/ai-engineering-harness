@@ -59,7 +59,9 @@ not part of the resolver's run or of the inventory, SBOM and Grant outputs above
 urllib3 pins come from plan leaf F-10.1 and
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
 (Proposed); keyring and its closure come from plan leaf F-06.3 (draft decision 0011), copied with their
-hashes from the F-01.2 per-target locks. Each is a PyPI release whose every file is hash-locked; no
+hashes from the F-01.2 per-target locks; the ASGI stack (Starlette, uvicorn, websockets and their closure)
+comes from plan leaf U-01.3 (Proposed decision 0025 point 1), copied the same way from the Agent Server's
+closure in those locks. Each is a PyPI release whose every file is hash-locked; no
 tag → commit mapping was resolved for it.
 
 | Package | Version | Declared licence (evidence) | Elected | Locked channels |
@@ -70,6 +72,10 @@ tag → commit mapping was resolved for it.
 | keyring's closure on every platform: jaraco.classes, jaraco.context, jaraco.functools, more-itertools | 3.4.0, 6.1.2, 4.6.0, 11.2.1 | MIT (wheel METADATA; jaraco.classes by classifier) | not applicable | as keyring |
 | keyring's closure on Windows: pywin32-ctypes | 0.2.3 | BSD-3-Clause (wheel METADATA) | not applicable | as keyring |
 | keyring's closure on Linux: SecretStorage, jeepney, cryptography, cffi, pycparser | 3.5.0, 0.9.0, 50.0.2, 2.1.1, 3.12 | not read in F-06.3 (not installed on the Windows host); to read at F-06.4 | not applicable | PyPI: every file by sha256, copied from the F-01.2 locks; not yet installed anywhere |
+| Starlette (the Integration process's ASGI framework; plan leaf U-01.3) | 1.10.0 | BSD-3-Clause (wheel METADATA `License-Expression`) | not applicable | PyPI: the `py3-none-any` wheel and the sdist by sha256, copied from the F-01.2 locks; installed from the wheel |
+| uvicorn (its ASGI server) | 0.54.0 | BSD-3-Clause (wheel METADATA `License-Expression`) | not applicable | as Starlette |
+| websockets (uvicorn's WebSocket protocol) | 16.1.1 | BSD-3-Clause (wheel METADATA `License-Expression`) | not applicable | PyPI: every file (109) by sha256, copied from the F-01.2 locks; installed from the `cp312-cp312-win_amd64` wheel (Windows x86_64 observed) |
+| their closure on CPython 3.12: anyio, idna, typing-extensions (Starlette's), click, h11 (uvicorn's) | 4.16.0, 3.20, 4.16.0, 8.5.0, 0.16.0 | anyio MIT, idna BSD-3-Clause, typing-extensions PSF-2.0, click BSD-3-Clause (wheel METADATA `License-Expression`); h11 MIT (wheel METADATA `License`) | not applicable | as Starlette |
 
 The election records which licence the harness relies on. It is not a compliance verdict:
 **License compliance: NOT VERIFIED** applies here as everywhere in this ledger.

@@ -18,11 +18,11 @@ publication gate and the guest tooling keep their current locations until F-07.2
 | Path | What |
 |---|---|
 | `aieh_paths.py` | The resolver, the configuration loader and the command line (`show`, `init`, `doctor`), the category table, the legacy table and the asset record format |
-| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract. `--set python-dev-tools` (`task dev:install`) installs the dev tools set (pytest, pytest-xdist, PyYAML, Dulwich, urllib3 and keyring) the same way, from its own lock, as `python-dev-tools` beside it; `--python` prints a set's venv interpreter for the current lock, creating nothing, and exits 1 when it is not installed |
+| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract. `--set python-dev-tools` (`task dev:install`) installs the dev tools set (pytest, pytest-xdist, PyYAML, Dulwich, urllib3, keyring, Starlette, uvicorn and websockets) the same way, from its own lock, as `python-dev-tools` beside it; `--python` prints a set's venv interpreter for the current lock, creating nothing, and exits 1 when it is not installed |
 | `tests/test_aieh_paths.py` | The section 9 criteria 1 to 10 of the Owner directive, the adapters, the legacy table, `example_config.yml`, the asset records, `tools:install` and its `--set` and `--python` options |
 | `../../example_config.yml` | The tracked, commented configuration template |
-| `../../composition/lock/python/tools-requirements.txt` | The tools venv lock: `pyyaml==6.0.3` with the hashes of the F-01.2 lock, `dulwich==1.2.21` and `urllib3==2.8.0` (F-10.1), and `keyring==25.7.0` with its closure copied from the F-01.2 locks, with `sys_platform` markers (F-06.3) |
-| `../../composition/lock/python/dev-requirements.txt` | The dev tools venv lock (F-09.2): pytest, pytest-xdist and their dependencies, and `pyyaml==6.0.3`, `dulwich==1.2.21`, `urllib3==2.8.0` and the keyring closure with the same hashes as the tools lock |
+| `../../composition/lock/python/tools-requirements.txt` | The tools venv lock: `pyyaml==6.0.3` with the hashes of the F-01.2 lock, `dulwich==1.2.21` and `urllib3==2.8.0` (F-10.1), `keyring==25.7.0` with its closure copied from the F-01.2 locks, with `sys_platform` markers (F-06.3), and `starlette==1.10.0`, `uvicorn==0.54.0` and `websockets==16.1.1` with their closure copied from the F-01.2 locks (U-01.3) |
+| `../../composition/lock/python/dev-requirements.txt` | The dev tools venv lock (F-09.2): pytest, pytest-xdist and their dependencies, and `pyyaml==6.0.3`, `dulwich==1.2.21`, `urllib3==2.8.0`, the keyring closure and the ASGI stack with the same hashes as the tools lock |
 
 ## Commands
 
@@ -101,18 +101,32 @@ built from them an install.
   "format": "aieh-asset/1",
   "kind": "python-wheels",
   "name": "python-tools",
-  "version": "cp312-442f4405a6dc",
+  "version": "cp312-0bf590a3af96",
   "provenance": {"source": "https://pypi.org/simple/"},
   "integrity": {
     "sha256": {
+      "anyio-4.16.0-py3-none-any.whl": "c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026",
+      "click-8.5.0-py3-none-any.whl": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
       "dulwich-1.2.21-cp312-cp312-win_amd64.whl": "b3d30d40384cee2e8aa3722f87cef2f3d71717a0b45ac88eba457d62acf65dda",
+      "h11-0.16.0-py3-none-any.whl": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+      "idna-3.20-py3-none-any.whl": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "jaraco.classes-3.4.0-py3-none-any.whl": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790",
+      "jaraco_context-6.1.2-py3-none-any.whl": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535",
+      "jaraco_functools-4.6.0-py3-none-any.whl": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30",
+      "keyring-25.7.0-py3-none-any.whl": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f",
+      "more_itertools-11.2.1-py3-none-any.whl": "35a7377edd1dd6608dcb2cdf534ded55ea32d49448875ad042cd3f879fb1ded0",
+      "pywin32_ctypes-0.2.3-py3-none-any.whl": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8",
       "pyyaml-6.0.3-cp312-cp312-win_amd64.whl": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
-      "urllib3-2.8.0-py3-none-any.whl": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
+      "starlette-1.10.0-py3-none-any.whl": "478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4",
+      "typing_extensions-4.16.0-py3-none-any.whl": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "urllib3-2.8.0-py3-none-any.whl": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "uvicorn-0.54.0-py3-none-any.whl": "505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf",
+      "websockets-16.1.1-cp312-cp312-win_amd64.whl": "b436f6ec4fc3a6b4237c84d3f83170ed2b40bb584222f0ac47a0c8a5921980c7"
     },
-    "pin": "composition/lock/python/tools-requirements.txt sha256:442f4405a6dc3d583beb8fffd81762a796b20ed4e465bcabd5f57ec4bb6de8bd"
+    "pin": "composition/lock/python/tools-requirements.txt sha256:0bf590a3af96c7658e4798a6aa2e256cc3a96b25e857b017cfdd233dba3f1d53"
   },
   "reacquire": "task tools:install (pip download --require-hashes --only-binary=:all: -r composition/lock/python/tools-requirements.txt)",
-  "acquired_at": "2026-11-07T16:29:10Z",
+  "acquired_at": "2026-11-16T15:07:51Z",
   "consumers": ["installs/python-tools"]
 }
 ```
