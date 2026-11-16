@@ -676,17 +676,33 @@ I1_WAVE = {'U-01.3', 'E-01.4.1', 'E-01.7', 'U-02.1', 'U-01.2', 'E-01.4.2', 'U-02
 
 
 def committed_copy(test):
-    """A throwaway copy of the committed backlog/ with every task's status reset to To Do, so that a
-    test of a status change stays true whatever the committed statuses are as I1 progresses."""
+    """A throwaway copy of the committed backlog/ with every task's status reset to To Do and every
+    reference to an Owner record (``evidence/bootstrap-log.md#owner-...``) removed, so that a test of
+    a status change or of an Owner act stays true whatever the committed statuses and recorded acts
+    are as I1 progresses."""
     tmp = tempfile.TemporaryDirectory()
     test.addCleanup(tmp.cleanup)
     copy = Path(tmp.name) / 'backlog'
     shutil.copytree(ROOT / pc.BACKLOG, copy)
+    owner_ref = pc.LOG + '#' + pc.OWNER_ANCHOR_PREFIX
     for path in (copy / 'tasks').glob('*.md'):
         lines = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
         end = lines.index('---', 1)
-        lines[:end] = ['status: To Do' if line.startswith('status: ') else line for line in lines[:end]]
-        path.write_text('\n'.join(lines), encoding='utf-8', newline='\n')
+        head = []
+        n = 0
+        while n < end:
+            line = lines[n]
+            if line == '  - >-' and n + 1 < end and lines[n + 1].strip().startswith(owner_ref):
+                n += 2  # a folded reference item
+                continue
+            if line.startswith('  - ' + owner_ref):
+                n += 1
+                continue
+            head.append('status: To Do' if line.startswith('status: ') else line)
+            n += 1
+        head = ['references: []' if line == 'references:' and (i + 1 == len(head) or not head[i + 1].startswith('  - '))
+                else line for i, line in enumerate(head)]
+        path.write_text('\n'.join(head + lines[end:]), encoding='utf-8', newline='\n')
     return copy
 
 

@@ -331,3 +331,8 @@ act, and points 1, 2, 4, 6 and 7.
   act a leaf waits on is a Backlog.md task that the leaf's task depends on, `Done` only by reference to the
   Owner's recorded act in the log's Decisions; until then the leaf is blocked, naming the act. The I1 wave's
   14 leaves and the Owner acts OA-32 and OA-33 are the first such tasks.
+- 2026-11-16 (later the same day, P-05.1's review fixes): `tools/plan_commitment.py` pins the closed Leaves
+  table, its 80 rows' leaf ids in order, and refuses any change to them other than a verdict edited in place.
+  Each Owner-act task names the leaves it gates with `gates:<leaf id>` labels, cross-checked against the act's
+  row in the log's Owner actions and the gated leaves' task dependencies; the recorded act it cites must name
+  the act (for example `oa-32`); a leaf task is Done only after its dependencies and its acts.
