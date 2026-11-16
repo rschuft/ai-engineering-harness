@@ -61,6 +61,7 @@ import logging
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -416,10 +417,34 @@ def bind_listener(port: int = PORT) -> socket.socket:
     return listener
 
 
+# A record (run.json, server.json) is replaced while another process of the managed environment may be reading it.
+# On Windows the replacement is refused while a reader holds the file open (access denied: os.open shares no delete),
+# and a reader's open fails while a replacement runs (measured on Windows 11, CPython 3.12.10, 2026-11-16: the
+# supervisor exited 1 on it under load, the flake of dispatch 11). Each side retries for at most the ceiling; the
+# ceiling bounds a reader that never lets go, it is not an estimate of the wait.
+SHARED_FILE_CEILING_S = 5.0
+SHARED_FILE_RETRY_S = 0.01                   # the retry interval; the bound is the ceiling above
+SHARING_WINERRORS = (5, 32)                  # ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION
+
+
+def replace_shared(partial: Path, path: Path, *, ceiling_s: float = SHARED_FILE_CEILING_S) -> None:
+    """``os.replace(PARTIAL, PATH)``, retried while Windows refuses it because another handle has PATH open (a
+    reader of the record); any other error, or the refusal still there at the ceiling, is raised."""
+    deadline = time.monotonic() + ceiling_s
+    while True:
+        try:
+            os.replace(partial, path)
+            return
+        except PermissionError as exc:
+            if getattr(exc, 'winerror', None) not in SHARING_WINERRORS or time.monotonic() > deadline:
+                raise
+        time.sleep(SHARED_FILE_RETRY_S)
+
+
 def _write_json(path: Path, data: dict) -> None:
     partial = path.with_name(path.name + '.partial')
     partial.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    os.replace(partial, path)
+    replace_shared(partial, path)
 
 
 def harness_modules() -> list[str]:

@@ -215,7 +215,23 @@ def server_argv(lay: Layout, python: str = sys.executable) -> list[str]:
 def _write_json(path: Path, data: dict) -> None:
     partial = path.with_name(path.name + '.partial')
     partial.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    os.replace(partial, path)
+    app.replace_shared(partial, path)     # retried while a reader of the record holds it open (Windows)
+
+
+def read_run_record(path: Path) -> dict | None:
+    """``contract.read_run_record``, retried while its read meets the record's replacement by another process (on
+    Windows the open is refused while ``os.replace`` runs; app.SHARED_FILE_CEILING_S bounds it). Any other failure,
+    or the refusal still there at the ceiling, is its RUN_RECORD_INVALID."""
+    deadline = time.monotonic() + app.SHARED_FILE_CEILING_S
+    while True:
+        try:
+            return contract.read_run_record(path)
+        except LifecycleError as exc:
+            # the contract raises RUN_RECORD_INVALID "from None": the OSError it met is still its __context__
+            if os.name != 'nt' or exc.code != 'RUN_RECORD_INVALID' \
+                    or not isinstance(exc.__context__, PermissionError) or time.monotonic() > deadline:
+                raise
+        time.sleep(app.SHARED_FILE_RETRY_S)  # the retry interval; the bound is the ceiling above
 
 
 def _read_json(path: Path) -> dict | None:
@@ -332,7 +348,7 @@ def readiness_checks(adapter, record: dict | None) -> dict:
 
 
 def status(lay: Layout, adapter) -> dict:
-    record = contract.read_run_record(lay.run_record)
+    record = read_run_record(lay.run_record)
     supervisor, server = live(adapter, record, 'supervisor'), live(adapter, record, 'server')
     checks = readiness_checks(adapter, record)
     report = {'url': f'http://{LOOPBACK}:{PORT}/', 'running': bool(supervisor and server),
@@ -362,7 +378,7 @@ def up(lay: Layout, adapter, *, python: str = sys.executable) -> dict:
 
 
 def _up(lay: Layout, adapter, python: str) -> dict:
-    record = contract.read_run_record(lay.run_record)
+    record = read_run_record(lay.run_record)
     if live(adapter, record, 'supervisor') or live(adapter, record, 'server'):
         raise refused('ALREADY_RUNNING', f'the managed environment runs (supervisor {record["supervisor"]["pid"]})')
     if InstanceLock(lay.instance_lock).held_elsewhere():
@@ -376,7 +392,7 @@ def _up(lay: Layout, adapter, python: str) -> dict:
         supervisor = adapter.launch_supervisor(argv, log, lay.state, env=child_environment(os.environ))
     deadline = time.monotonic() + READY_CEILING_S
     while True:
-        mine = (contract.read_run_record(lay.run_record) or {}).get('launch_id') == launch_id
+        mine = (read_run_record(lay.run_record) or {}).get('launch_id') == launch_id
         report = status(lay, adapter) if mine else None
         if report is not None and report['ready']:
             report['launched'] = {'pid': supervisor.pid, 'launch_id': launch_id}
@@ -391,7 +407,7 @@ def _up(lay: Layout, adapter, python: str) -> dict:
 
 
 def down(lay: Layout, adapter) -> dict:
-    record = contract.read_run_record(lay.run_record)
+    record = read_run_record(lay.run_record)
     supervisor, server = live(adapter, record, 'supervisor'), live(adapter, record, 'server')
     if supervisor is None and server is None:
         return {'stopped': False, 'detail': 'not running', 'port_open': adapter.port_in_use(PORT, LOOPBACK)}
@@ -479,14 +495,14 @@ def recover(lay: Layout, adapter) -> dict:
 
 
 def readiness(lay: Layout, adapter) -> dict:
-    return contract.readiness_record(SERVICE, adapter, readiness_checks(adapter, contract.read_run_record(
+    return contract.readiness_record(SERVICE, adapter, readiness_checks(adapter, read_run_record(
         lay.run_record)))
 
 
 def inspect(lay: Layout, adapter) -> dict:
     log = contract.TransitionLog(lay.transitions, SERVICE, adapter.asset_key)
     return {'platform': adapter.record(), 'status': status(lay, adapter), 'readiness': readiness(lay, adapter),
-            'run_record': contract.read_run_record(lay.run_record), 'server_record': _read_json(lay.server_record),
+            'run_record': read_run_record(lay.run_record), 'server_record': _read_json(lay.server_record),
             'configuration': configuration(lay), 'latest_transition': log.latest()}
 
 

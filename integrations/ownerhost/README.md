@@ -22,7 +22,7 @@ Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. 
 | `tests/test_session.py` | The shape, the verifier, `check`'s four refusals (each changing nothing), every other inventory credential shape refused, enrollment (unit) |
 | `tests/test_app.py` | The route-table walk, the preflight, Host and Origin, the refusals over ASGI, no cookie, the log (contract) |
 | `tests/test_enroll.py` | The console guard on pipes, files and the null device, refusing before anything is resolved or written; gate G8 on a real (hidden) console in a child process (unit, integration) |
-| `tests/test_service.py` | The server's environment allowlist, the configuration, readiness from the TCP table, `up`'s refusals, `down`, with a fake adapter (unit) |
+| `tests/test_service.py` | The server's environment allowlist, the configuration, readiness from the TCP table, `up`'s refusals, `down`, with a fake adapter; a record replaced while another handle reads it waits for the reader within the ceiling, any other refusal is raised at once, and a read that meets a replacement is made again (Windows) (unit) |
 | `tests/test_structure.py` | R2's structural tests: no client socket (syntax trees), the import census (a fresh interpreter), one declared port (unit, integration) |
 | `tests/test_listener.py` | The real start and stop on a throwaway layout: the listener table, the host census by port, every request over HTTP, the refusals, the environment and command line read from outside, the records and logs, the live import census, no window, no orphan (integration, Windows) |
 | `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
@@ -148,6 +148,10 @@ Data (decision 0009): `<state>/owner-host/` holds `conversation.sqlite`, `run.js
 supervisor and server processes, the job, the harness commit and tools lock digest, the configuration snapshot) and
 `server.json` (the server's own record: process, address, port, whether its console has a window, and its live
 import census at start and at stop); `<logs>/owner-host/` holds `supervisor.log`, `console.log` and `service.log`.
+Each record is written whole (a `.partial` file, then `os.replace`). On Windows the replacement is refused while
+another process has the record open, and a read is refused while a replacement runs: the writer and `service`'s
+reader (`read_run_record`) retry for at most `SHARED_FILE_CEILING_S` (5 s), any other error at once (before, the
+supervisor exited 1 when `up`'s poll held `run.json` open under load: dispatch 11's flake).
 
 The supervisor is started by the platform adapter's `launch_supervisor` with the same environment allowlist as the
 server, so neither holds what the starting environment holds beyond those names. It loads the Windows adapter, which

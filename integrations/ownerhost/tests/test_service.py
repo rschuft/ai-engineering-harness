@@ -9,10 +9,15 @@ the port. The real start and stop are test_listener.py's.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import ownerhost_support as T
 
@@ -194,6 +199,92 @@ class Instance(Base):
             SV.up(self.lay, adapter)
         self.assertEqual((caught.exception.code, caught.exception.refusal), ('ALREADY_RUNNING', True))
         self.assertEqual(adapter.launched, [])
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'the refusal is Windows\' (a reader without FILE_SHARE_DELETE)')
+class SharedRecord(Base):
+    """The flake of dispatch 11 (test_listener's START_FAILED under the parallel run): the supervisor's os.replace of
+    run.json was refused (WinError 5) while ``up``'s poll had the file open, and the supervisor exited 1. A record's
+    replacement now waits for the reader to let go, and a reader that meets a replacement reads again, each bounded
+    by app.SHARED_FILE_CEILING_S. Shown with a handle this process holds (Windows refuses it like another's)."""
+
+    def test_a_record_replaced_while_another_handle_reads_it_is_written_once_the_reader_lets_go(self):
+        path = self.lay.run_record
+        path.write_text('{"old": true}\n', encoding='utf-8')
+        reader = open(path, 'rb')
+        self.addCleanup(reader.close)
+        refused, attempts, errors = threading.Event(), [], []
+        real = os.replace
+
+        def replace(src, dst):
+            attempts.append(dst)
+            try:
+                return real(src, dst)
+            except PermissionError:
+                refused.set()                 # the reader still holds it: the writer was refused and retries
+                raise
+
+        def write():
+            try:
+                SV._write_json(path, {'new': True})
+            except BaseException as exc:      # noqa: BLE001 - reported to the main thread
+                errors.append(exc)
+        with mock.patch.object(SV.app.os, 'replace', replace):
+            writer = threading.Thread(target=write, daemon=True)
+            writer.start()
+            self.assertTrue(refused.wait(SV.app.SHARED_FILE_CEILING_S), 'the reader\'s handle refuses the replace')
+            reader.close()                    # the reader lets go
+            writer.join(SV.app.SHARED_FILE_CEILING_S * 2)
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(errors, [])
+        self.assertGreater(len(attempts), 1)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'new': True})
+        self.assertFalse(path.with_name(path.name + '.partial').exists())
+
+    def test_a_reader_that_never_lets_go_fails_the_write_at_the_ceiling(self):
+        path = self.lay.run_record
+        path.write_text('{"old": true}\n', encoding='utf-8')
+        partial = path.with_name(path.name + '.partial')
+        partial.write_text('{"new": true}\n', encoding='utf-8')
+        with open(path, 'rb'):
+            with self.assertRaises(PermissionError) as caught:
+                SV.app.replace_shared(partial, path, ceiling_s=0)
+        self.assertIn(caught.exception.winerror, SV.app.SHARING_WINERRORS)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'old': True})
+
+    def test_any_other_refusal_of_the_replace_is_raised_at_once(self):
+        calls = []
+
+        def replace(src, dst):
+            calls.append(dst)
+            raise PermissionError(13, 'not a sharing refusal')        # no winerror: a real permission error
+        with mock.patch.object(SV.app.os, 'replace', replace), self.assertRaises(PermissionError):
+            SV._write_json(self.lay.run_record, {'new': True})
+        self.assertEqual(len(calls), 1)
+
+    def test_a_read_that_meets_a_replacement_is_made_again(self):
+        record = {'format': SV.RUN_FORMAT, 'state': 'running'}
+        answers = []
+
+        def read(path):
+            answers.append(path)
+            if len(answers) == 1:
+                try:
+                    raise PermissionError(13, 'the replacement runs')
+                except PermissionError:
+                    raise SV.LifecycleError('RUN_RECORD_INVALID', f'{path} is unreadable') from None
+            return record
+        with mock.patch.object(SV.contract, 'read_run_record', read):
+            self.assertEqual(SV.read_run_record(self.lay.run_record), record)
+        self.assertEqual(len(answers), 2)
+
+    def test_an_unreadable_record_is_still_run_record_invalid(self):
+        self.lay.run_record.write_text('{not json', encoding='utf-8')
+        started = time.monotonic()
+        with self.assertRaises(SV.LifecycleError) as caught:
+            SV.read_run_record(self.lay.run_record)
+        self.assertEqual(caught.exception.code, 'RUN_RECORD_INVALID')
+        self.assertLess(time.monotonic() - started, SV.app.SHARED_FILE_CEILING_S, 'not retried: it is no sharing')
 
 
 class OtherLaunch(FakeAdapter):

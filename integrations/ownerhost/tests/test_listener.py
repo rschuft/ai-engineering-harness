@@ -147,7 +147,7 @@ class Listener(unittest.TestCase):
                 thread.start()
             for thread in threads:
                 thread.join(4 * (SV.READY_CEILING_S + SV.STOP_CEILING_S))
-            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            run = SV.read_run_record(cls.lay.run_record) or {}
             observed = {'outcomes': outcomes, 'pending': cls.transitions().pending(),
                         'listener_pids': sorted({r['pid'] for r in cls.adapter.listeners()
                                                  if r['proto'] == 'tcp' and r['port'] == A.PORT}),
@@ -166,7 +166,7 @@ class Listener(unittest.TestCase):
         try:
             SV.down(cls.lay, cls.adapter)
         finally:
-            supervisor = SV.live(cls.adapter, SV.contract.read_run_record(cls.lay.run_record), 'supervisor')
+            supervisor = SV.live(cls.adapter, SV.read_run_record(cls.lay.run_record), 'supervisor')
             if supervisor is not None:
                 supervisor.terminate()
                 supervisor.wait(SV.STOP_CEILING_S)
@@ -186,7 +186,7 @@ class Listener(unittest.TestCase):
                 thread.start()
             for thread in threads:
                 thread.join(SV.READY_CEILING_S + 30)
-            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            run = SV.read_run_record(cls.lay.run_record) or {}
             held = sorted({r['pid'] for r in cls.adapter.listeners() if r['proto'] == 'tcp' and r['port'] == A.PORT})
             observed = {'outcomes': sorted(outcomes), 'listener_pids': held,
                         'recorded_server': (run.get('server') or {}).get('pid') if run.get('state') == 'running'
@@ -264,7 +264,7 @@ class Listener(unittest.TestCase):
         try:
             cls.obs['down'] = SV.down(cls.lay, cls.adapter)
         finally:
-            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            run = SV.read_run_record(cls.lay.run_record) or {}
             supervisor = SV.live(cls.adapter, run, 'supervisor')
             if supervisor is not None:           # started by this test: never left behind
                 supervisor.terminate()

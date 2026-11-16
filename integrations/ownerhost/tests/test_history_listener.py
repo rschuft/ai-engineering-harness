@@ -127,7 +127,7 @@ class HistoryOverTheService(unittest.TestCase):
         try:
             SV.down(cls.lay, cls.adapter)
         finally:
-            run = SV.contract.read_run_record(cls.lay.run_record) or {}
+            run = SV.read_run_record(cls.lay.run_record) or {}
             supervisor = SV.live(cls.adapter, run, 'supervisor')
             if supervisor is not None:           # started by this test: never left behind
                 supervisor.terminate()
