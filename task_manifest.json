@@ -1,5 +1,5 @@
 {
-  "task_count": 183,
+  "task_count": 190,
   "tasks": [
     {
       "id": "F-01.1",
@@ -414,25 +414,37 @@
       "sha256": "6ab0ea5165e0a37080e5f3377e3362425a454e745f1dcc5e319bc19a8e443119"
     },
     {
+      "id": "U-01.3",
+      "title": "Serve the Integration process on host loopback behind the Owner UI session credential",
+      "phase": 1,
+      "deps": [
+        "U-01.1",
+        "F-07.1"
+      ],
+      "path": "task_prompts/U-01.3.md",
+      "sha256": "6a3b8a83f6a8476e029e21988a8d3d1bc2de11b5f3d1215b17cb8b64867a9287"
+    },
+    {
       "id": "U-01.2",
       "title": "Wire outcome navigation to engineering detail",
       "phase": 1,
       "deps": [
-        "U-01.1"
+        "U-01.1",
+        "E-01.7"
       ],
       "path": "task_prompts/U-01.2.md",
-      "sha256": "399c6c7eb1afcca613607c1fcf2f016aabe8809cbb5c3b9ee871b7db1785abd7"
+      "sha256": "b526529a1f4b16c9828ef8d1314bddd41dd0755038751c18985a69487c3701b0"
     },
     {
       "id": "U-02.1",
       "title": "Persist canonical Owner thread/message identities",
       "phase": 1,
       "deps": [
-        "U-01.2",
+        "U-01.3",
         "F-05.2"
       ],
       "path": "task_prompts/U-02.1.md",
-      "sha256": "3662304def8c6fc1606318699e512ea46c573a7056c7f54b3d418db45a8cdf2c"
+      "sha256": "4e26e369c6d1686559608a9ab6304eac10c504f6ee2b0404d9d5d40bcb2f2f9b"
     },
     {
       "id": "U-02.2",
@@ -463,6 +475,19 @@
       ],
       "path": "task_prompts/P-01.2.md",
       "sha256": "53e39d128538a1757b5df9aa906fa54e29e30d68bf2a1b339c63f8c20cd4ad43"
+    },
+    {
+      "id": "P-01.3",
+      "title": "Capture an Owner chat request as an OpenSpec intent change",
+      "phase": 1,
+      "deps": [
+        "U-02.1",
+        "P-01.2",
+        "F-10.3",
+        "P-03.2"
+      ],
+      "path": "task_prompts/P-01.3.md",
+      "sha256": "8115c1ad7e17e8dae9a4aece5b1e2b655a4f4783bb2a12ad832eb35b7dc67b01"
     },
     {
       "id": "P-02.1",
@@ -676,6 +701,18 @@
       "sha256": "bae401eaf5c6158b158c2d5cca8d5401504c1321bcaadf976a8da89e83c6cd95"
     },
     {
+      "id": "P-04.4",
+      "title": "Record the Owner's objective acceptance from the Owner UI",
+      "phase": 1,
+      "deps": [
+        "P-01.3",
+        "U-02.2",
+        "P-04.1"
+      ],
+      "path": "task_prompts/P-04.4.md",
+      "sha256": "b7d11803ea1fb244ecdc3daa2bb1aa591502f3024680a545b663bf6a4df23cdd"
+    },
+    {
       "id": "S-03.5",
       "title": "Bind the broker's real-provider start to a recorded provider-envelope authorization",
       "phase": 0,
@@ -777,10 +814,11 @@
         "F-04.2",
         "S-01.4",
         "E-01.3.3",
-        "F-06.3"
+        "F-06.3",
+        "U-01.3"
       ],
       "path": "task_prompts/U-03.1.md",
-      "sha256": "e4c5640f70c13da50d959ac0633079dfbce154452f0086d9886d33580ec94e81"
+      "sha256": "7838769b7a15f27b532cefed139840cca0ee76ca9e2b20969a6a3e509618b278"
     },
     {
       "id": "U-03.2",
@@ -790,7 +828,7 @@
         "U-03.1"
       ],
       "path": "task_prompts/U-03.2.md",
-      "sha256": "a18f49a29653d55be1a23f53d0e318776a405535e6846affa068a98e89f013eb"
+      "sha256": "507f34d09e69acdf3a13be5acbc0e0feda8311fb6dd5d10666c3486456b6daf0"
     },
     {
       "id": "E-01.4.3",
@@ -821,7 +859,7 @@
         "E-01.4.1"
       ],
       "path": "task_prompts/E-01.4.2.md",
-      "sha256": "e80f3bbda6230a68674b56831b575e8a6709127a706a5ec1f870b8798385788d"
+      "sha256": "97dbc742943bf5b6ac867276fdf5452bf97f2af935c63be9855af3ee673580b4"
     },
     {
       "id": "E-01.5",
@@ -831,7 +869,40 @@
         "E-01.4.2"
       ],
       "path": "task_prompts/E-01.5.md",
-      "sha256": "66f2d5e90332bbc3e950c4f98e16ae8ded1039041330a4aee5f9282f77a22c14"
+      "sha256": "cb524da6e8a4435569c784f9afe290d5db1cc105acc630c27c5d1e20a69e78dc"
+    },
+    {
+      "id": "E-01.6",
+      "title": "Requalify dispatch recovery and the launch gate against the pinned Agent Server, with no model call",
+      "phase": 1,
+      "deps": [
+        "E-01.5"
+      ],
+      "path": "task_prompts/E-01.6.md",
+      "sha256": "eff2e8e8f3156505bfabdc1a49fc54b9b68e34dc9e1c61f03f2ceb8337f382a2"
+    },
+    {
+      "id": "E-01.7",
+      "title": "Serve a deterministic Agent Server fixture on host loopback",
+      "phase": 1,
+      "deps": [
+        "E-01.3.2",
+        "U-01.1"
+      ],
+      "path": "task_prompts/E-01.7.md",
+      "sha256": "1a4c023b05d02d3b33123eac119b9f3681401390775ba559ec63ecbf9d8a1ba8"
+    },
+    {
+      "id": "E-01.8",
+      "title": "Dispatch a ready task through the existing resolver and dispatcher on the deterministic fixture transport",
+      "phase": 1,
+      "deps": [
+        "E-01.5",
+        "E-01.7",
+        "E-05.4"
+      ],
+      "path": "task_prompts/E-01.8.md",
+      "sha256": "b29a94839a5b3c3f93e1e7ba25a407ade670f576013a1398351ae389c4903e63"
     },
     {
       "id": "E-02.1",
@@ -839,10 +910,11 @@
       "phase": 1,
       "deps": [
         "E-01.5",
-        "P-03.2"
+        "P-03.2",
+        "E-01.6"
       ],
       "path": "task_prompts/E-02.1.md",
-      "sha256": "98e0faec85cfc18d98a0378dc948a389027d41c50996ba6aaeca275c40ad2844"
+      "sha256": "160406c4c8a2094ee3edb8292a52b5f1a840fc072377845f6aec0e4cbb584edf"
     },
     {
       "id": "E-02.2",
@@ -861,10 +933,11 @@
       "deps": [
         "U-02.2",
         "P-03.2",
-        "E-01.5"
+        "E-01.5",
+        "E-05.4"
       ],
       "path": "task_prompts/U-04.1.md",
-      "sha256": "eac98e3d829b3b38565e0e116c17a888b49110b7fb16699091587f2bc919b91e"
+      "sha256": "9eb66a72f4e1d2756d1975a627a9e2dbdba9e7c5310a554828adef812f6db7f6"
     },
     {
       "id": "U-04.2",
@@ -875,6 +948,19 @@
       ],
       "path": "task_prompts/U-04.2.md",
       "sha256": "ea2f70be001b7a31db93c9a32db220840bb6aa7d7e009bc9d76855fa8ab21086"
+    },
+    {
+      "id": "U-06.1",
+      "title": "Demonstrate I1: one Owner request through the Owner UI to an accepted objective, ready Work, a dispatched session and an inspectable, reconnectable outcome",
+      "phase": 1,
+      "deps": [
+        "U-04.2",
+        "U-01.2",
+        "P-04.4",
+        "E-01.8"
+      ],
+      "path": "task_prompts/U-06.1.md",
+      "sha256": "c8e0777ca4f5d451d592650a161ddd601c39daa1c56042235b0156a8c962b0b5"
     },
     {
       "id": "E-05.12",
@@ -1001,7 +1087,7 @@
         "E-05.5"
       ],
       "path": "task_prompts/P-05.1.md",
-      "sha256": "4adc2fec886fec67a3b61857b9a340d856eeb0e6e7cf3c2a2b1e4a613ea27895"
+      "sha256": "34cd06bad1bc7d68ed86254d77b39f266f09c414d2c1c344fefcb7413c1afe40"
     },
     {
       "id": "A-01.1",
@@ -1627,10 +1713,11 @@
       "deps": [
         "E-01.5",
         "E-04.4",
-        "G-01.2"
+        "G-01.2",
+        "E-01.6"
       ],
       "path": "task_prompts/O-01.1.md",
-      "sha256": "ed47b44d43d27926ba24e2eb2663aabb706d0ee0def72881ed0527fb80fd0bf8"
+      "sha256": "1b68d8d21a6afa30a2c8410fd0ab7e06092a71381473f4ee83162a81cebf6bf0"
     },
     {
       "id": "O-01.2",
