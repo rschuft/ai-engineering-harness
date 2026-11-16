@@ -5343,6 +5343,64 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   - **PB-12, conditional, E-01.7.** If gate G4 finds properties the response model requires that no committed record observes for the D1-shaped create, "not served" conflicts with E-01.7's validation clause on the dispatcher's face. Raised early to save a round trip.
   - **Carried by me to E-01.5 (no planning action):** on the restart path, the next ordinal is refused before reservation while any earlier ordinal whose history holds a `dispatched` event is not known ended at the server (R22).
   - **Execution continues** with slices 5a and 5b, then U-02.2 and the other ready leaves.
+- <a id="i1-recovery-disposed-2026-11-16"></a>**2026-11-16: Planning: I1's questions PB-10 to PB-12 disposed of; the plan amendment of 2026-11-16 (I1 recovery) applied (planning, program manager).** By the product manager, on [execution's second questions](#i1-execution-questions-2-2026-11-16) and [the restart-recovery design](I1-restart-recovery-design-2026-11-16.md) sections 4 and 5, within the [Owner's direction](#owner-direction-i1-2026-11-16). No architect consultation: the architect's advice already states the options, and what remained was planning's choice among them.
+  - **The program manager's challenge of the applied change** (one dispatch, read-only): thirteen defects (1 blocking, 7 should-fix, 5 nits), all taken before this commit. Among them:
+    - the blocking one: the test-knob sentence, as recommended, forbade the only answer that can decide the restart matrix's after-message rows (the events answer holding the source-derived entry); that answer is now excepted;
+    - E-01.7's refusal clause excepts a property listed not served, so that the D1-shaped create is answered;
+    - the source-derived entry is excepted in E-01.7 from the UI-face-only rule, and is at most one entry, E-01.4.2's, so that E-01.7's verdict does not wait on E-01.4.2's;
+    - the exception is bounded to the event's fields the dispatch path reads, as the read-binding test records them;
+    - E-01.6 re-runs E-01.4.2's matrix against any correction, its message differs from the dispatcher's only by the run flag, and a field not re-cited is a failure;
+    - a false premise corrected: the dispatch path also reads the event log to end an attempt;
+    - the Owner-information line names the after-message rows;
+    - one clock-valued sentence in both leaves; E-01.7's pinned-rule class quoted exactly; the read-binding test's scope stated; the summary's and the deferral's wording.
+  - **Observed starting state.** HEAD `fd6c76a` = `origin/main`, clean. `plan_commitment.py U-06.1`: 72 leaves, 60 passed, 12 open, ready U-02.1, E-01.7, E-01.4.2. `verify_seed` PASS (190); `--baseline seed` PASS (136).
+  - **PB-10: E-01.4.2's citation clause is corrected through the integrity process** (decision 0018 points 2 and 3: a criterion that cannot be met as written is corrected without lowering what it proves, and its observed counterpart is re-homed). The full text is the plan's `amendments` entry and E-01.4.2's proof, action and notes; TASK-11's seven criteria equal the new proof.
+    - **Why it cannot be met as written.** F-04.2 sent no message (its finding 2). The message route, `count`, `finished` and the SEED answer were observed only at D1, the complete `/server_info` only at F-04.1c, and a refused create only at S-01.3.1. Some fields are observed nowhere, and the event recording the dispatcher's own message, which `reconcile_turn` reads, is in no committed record.
+    - **What it now requires.** The architect's recommended wording (design section 4.3), with planning's changes: the equivalent-request rule in E-01.7's own words ("only when the inputs that determine it equal the observed request's"); "a field of none of those classes" instead of "a field the committed evidence does not observe", so that an unobserved echo is still served; and the program manager's fixes above. In short:
+      - each answer is an entry of the one fixture catalog, which E-01.7's fixture serves, and each field is of E-01.7's four classes;
+      - an observation is cited to the committed record of the live run that observed it, F-04.2 first, else F-04.1c, the E-01.3.x or S-01.3.1 evidence, or the D1 run record;
+      - a clock-valued field replays its cited value unchanged, whatever the request's time, marked;
+      - a field of no class is not served, and a request the dispatch path would read from one is refused;
+      - one exception: the fields the dispatch path reads of the event recording the dispatcher's own initial message (its source and the content holding the message text), source-derived and marked; its observed counterpart is E-01.6's;
+      - a test, recording at the answer boundary over the restart matrix and the dispatch suites, binds the dispatch path's reads to the catalog's fields marked read, none clock-valued or unserved (design section 4.5, made a criterion);
+      - the call log records what the fake received; injected transport events are listed; an answer no cited run gave, other than the one holding the exception, is a test knob and decides no row.
+    - **Why this does not lower the proof.** Every served field still has a cited, echoed, pinned-rule or label origin. The one source-derived exception is bounded, answered in process only, and has a live home. The binding test turns "unread" into a recorded fact over the suites it runs; it does not see a path no suite runs.
+    - **E-01.6 receives the observed counterpart** (proof and artifact). Each such field is compared with the event its own initial message records, read live; that message differs from the dispatcher's only by the run flag (run:false there, run:true at the dispatcher), and each field's independence of the flag is shown from the pinned source. A divergence is corrected in the catalog and E-01.4.2's matrix is re-run against the correction. A field not re-cited, or a failing row, is a failure of E-01.6. No new dependency: E-01.6 depends on E-01.5, which depends on E-01.4.2. E-01.6 stays outside I1.
+    - **The action** now reads "traced to recorded live observations".
+  - **PB-11: confirmed, as a reading of E-01.4.2's "Same conversation is recovered"** (its notes). At the three held points (after SEED with no turn journal; the turn journal `reserved`; the turn `dispatched` with the message not in the events), it reads as the blueprint's "attach to existing run or report unknown state" (`#integration-contracts`, "Process dies during dispatch"): recovery holds the attempt on its conversation, reports it and sends nothing; the exit is E-05.8's end and a new attempt.
+    - This keeps the original E-01.4 gate ("does not launch a second independent attempt or resend the initial message"), which never required continuation. It follows, by analogy, the Owner's direction of 2026-11-13, which was given for D1's provider interruptions ("preserve durable Work and attempt state and permit a new attempt", "Do not design or implement a new general-purpose resumption framework for D1").
+    - **Continuation on the same conversation** (a seed receipt and a turn resume) is the plan's **23rd deferral**. Reconsider when a live attempt is held at one of those points, at the first commitment whose proof requires an interrupted attempt to continue on its own conversation, or when decision 0024's attempt-run contract is next amended.
+  - **PB-12: decided now, in E-01.7's proof, rather than as a note reading.** A note that let a response omit a required property would contradict the validation clause's plain words, so the proof says it:
+    - on the dispatcher's face, a property the validating schema or response model requires is not served when no class admits a value for it and the dispatch path does not read it. It is listed as not served, and its absence alone is not a validation failure, while every served field still validates. The refusal clause excepts such a property. This narrows "each response validates" on the dispatcher's face only, where it and the provenance rule could not both be met; it bites only where gate G4 finds such a property, and the UI face's rules are unchanged.
+    - E-01.7's proof also carries PB-10's shared rules, so that one catalog is judged one way: the same clock-valued sentence, the same read-binding test, and at most one dispatcher-face source-derived entry, E-01.4.2's, excepted from the UI-face-only rule, answered in process only and not served by the fixture's listener while it is marked so. Its action names F-04.1c. TASK-9's eleven criteria equal the new proof.
+    - Rejected: filling such a property with a value no class admits, which would be the fixture's own invention, a failure under E-01.7, consumed silently by a later reader; refusing the create, which would stop I1's dispatch.
+  - **Not reserved to the Owner** (decision 0018 point 4.8):
+    - U-06.1's items (1) to (8), the U-06 gate and the I1 outcome are unchanged.
+    - The corrected clauses were planning's own, written the same day, and the PB-12 narrowing corrects two clauses that could not both be met while keeping what validation protects for the face's only caller.
+    - No obligation is dropped: each observed counterpart has a home (E-01.6, as U-03.2 for the UI face), and continuation is an explicit deferral.
+    - No live act, model call or credential is added to any I1 leaf.
+    - The dispatch path reads the event log only to settle a turn whose answer was lost and to end an attempt (E-05.8's end). I1's run does neither after its message: its one failed scenario is S-01.3.1's refused create, before any message. So the source-derived entry is never requested in it. Execution confirms this against E-01.8's and U-04.1's scenarios; a scenario that does either is a blocker for planning.
+  - **Delegated decisions made in this pass** (decision 0018 point 3):
+    - E-01.4.2's corrected proof and action, and E-01.7's corrected proof and action;
+    - E-01.6's added criterion and artifact;
+    - the notes on E-01.4.2, E-01.7 and E-01.6, and the reading PB-11;
+    - the 23rd deferral.
+
+    No dependency, leaf or status changes. The critical path is unchanged in shape: two chains of 5 open leaves, U-02.1 → U-02.2 → U-04.1 → U-04.2 → U-06.1 and E-01.4.2 → E-01.5 → U-04.1 → U-04.2 → U-06.1.
+  - **Integrity process.** A script outside the checkout first checked that the plan JSON re-serializes byte for byte, that `planData` equals the plan, that every `task_prompts/` file equals its leaf's `overseer_prompt`, and that the CSV re-serializes. It then changed the three leaves' fields, notes, contracts and prompts in the plan, appended the amendment and the deferral, and regenerated the three prompts, the CSV rows and the cards. Afterwards:
+    - all 190 CSV rows agree with the plan (title, action, artifact, proof, handoff), and every prompt equals its leaf's;
+    - a card-by-card comparison shows only the E-01.4.2, E-01.6 and E-01.7 cards changed, besides `planData`, which equals the plan;
+    - `task_manifest.json` and `SEED_MANIFEST.json` are updated.
+
+    With the pinned Backlog.md CLI 1.55.3, TASK-11's and TASK-9's criteria were set and their notes updated (TASK-11's blocker note replaced by the disposition).
+  - **Checks at this commit:**
+    - `verify_seed` PASS (190); `--baseline seed` PASS (136);
+    - `tools/tests/test_plan_commitment.py` (54, 1 skipped) and `test_verify_seed.py` (19) pass;
+    - `plan_commitment.py U-06.1`: 72 leaves, 60 passed, 12 open, ready U-02.1, E-01.7, E-01.4.2; U-06.1 waits on OA-32 and OA-33.
+  - **Owner acts:** none new. OA-32 and OA-33 are unchanged. For the Owner's information in the next report:
+    - within I1, E-01.4.2's after-message restart rows are proved against an event whose dispatcher-read fields are derived from the pinned upstream source; their live counterpart, E-01.6, is outside I1;
+    - E-01.4.2 and E-01.7 now admit clock-valued replays and, on the dispatcher's face, listed unserved properties.
+  - **Next:** execution continues. E-01.4.2's slice 5c has its clauses (PB-10) and its decision rule's held rows (PB-11); E-01.7 has PB-12's answer. Planning runs again for U-06.1's design acceptance, OA-33's presentation, a blocker, or I1's acceptance.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

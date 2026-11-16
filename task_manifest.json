@@ -859,7 +859,7 @@
         "E-01.4.1"
       ],
       "path": "task_prompts/E-01.4.2.md",
-      "sha256": "97dbc742943bf5b6ac867276fdf5452bf97f2af935c63be9855af3ee673580b4"
+      "sha256": "fceedc9d2dab630851a278fd1aa1ee2d92756c6e66e6d5cdaf630de5d43e8a19"
     },
     {
       "id": "E-01.5",
@@ -879,7 +879,7 @@
         "E-01.5"
       ],
       "path": "task_prompts/E-01.6.md",
-      "sha256": "eff2e8e8f3156505bfabdc1a49fc54b9b68e34dc9e1c61f03f2ceb8337f382a2"
+      "sha256": "1c1173dc490614c19a5b1f032883fc2ece3921e56ae179c3f2ac2a4c1e9244bc"
     },
     {
       "id": "E-01.7",
@@ -890,7 +890,7 @@
         "U-01.1"
       ],
       "path": "task_prompts/E-01.7.md",
-      "sha256": "6611e77fe899e29de7be2812db45ec0e943ee2c26dd30a5f30d3f2fdba2808a0"
+      "sha256": "738c84cff3f9f8d92b5bc43412533f1dd42d77be8736864c3d6c4fb17965c59e"
     },
     {
       "id": "E-01.8",
