@@ -24,7 +24,7 @@ installed the answers are plain dicts.
 
 SEED's answer is derived by running the harness's own ``integrations/dispatch/attempt_run.py`` ``SEED_SCRIPT`` (the
 script the production path sends, compared with it exactly) over the request's payload in a scratch directory, with no
-visible window; its output's line ends are the guest's (``\\n``). Standard library only.
+visible window (the shared no-window helper); its output's line ends are the guest's (``\\n``). Standard library only.
 """
 from __future__ import annotations
 
@@ -44,7 +44,6 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 CATALOG_PATH = HERE / 'observations.json'
 ATTEMPT_RUN = REPO / 'integrations' / 'dispatch' / 'attempt_run.py'
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 PYTHON = getattr(sys, '_base_executable', None) or sys.executable
 
 CONVERSATIONS = '/api/conversations'
@@ -63,6 +62,19 @@ def load_catalog(path: Path = CATALOG_PATH) -> dict:
 def field_paths(cell: str) -> list[str]:
     """The field paths a provenance row's Field cell names (one, or several separated by commas)."""
     return [part.strip().strip('`') for part in cell.split(',')]
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', REPO / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 
 
 def _attempt_run():
@@ -375,6 +387,6 @@ class AgentServerCore:
         where.mkdir(parents=True, exist_ok=True)
         done = subprocess.run([PYTHON, '-I', '-c', match.group(2), str(where / repository), digest],
                               input=payload.encode('ascii'), capture_output=True, timeout=body['timeout'],
-                              cwd=where, creationflags=NO_WINDOW)
+                              cwd=where, creationflags=_no_window().no_window_flags())
         stdout = done.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
         return self.made('seed', self.answers['seed']['status'], {'stdout': stdout, 'exit_code': done.returncode})
