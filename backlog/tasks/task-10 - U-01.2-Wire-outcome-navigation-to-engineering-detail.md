@@ -4,6 +4,7 @@ title: 'U-01.2: Wire outcome navigation to engineering detail'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T15:26:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -26,3 +27,9 @@ Plan contract: leaf U-01.2 of AI_Engineering_Implementation_Project_Plan_Oversee
 - [ ] #2 The Canvas session-selection fallback (UI-01) works, with rendering observed in a real browser, not only in jsdom.
 - [ ] #3 Against the deterministic Agent Server fixture (E-01.7), labelled a fixture; the same against a live conversation through the dispatcher-issued forward is U-03.1's and U-03.2's.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Blocker for planning (2026-11-16): PB-2 (no committed observation of the UI vantage); note PB-6. See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+<!-- SECTION:NOTES:END -->

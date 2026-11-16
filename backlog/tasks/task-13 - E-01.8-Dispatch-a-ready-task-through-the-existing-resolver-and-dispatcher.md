@@ -4,6 +4,7 @@ title: 'E-01.8: Dispatch a ready task through the existing resolver and dispatch
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T15:26:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -25,3 +26,9 @@ Plan contract: leaf E-01.8 of AI_Engineering_Implementation_Project_Plan_Oversee
 <!-- AC:BEGIN -->
 - [ ] #1 Offline, on a throwaway ledger and project repository: a ready task resolves and is dispatched exactly once on the fixture through the production resolver, admission and gate; on the fixture transport the gate compares the fixture's cited recorded inspect with its logic unchanged, and the result intake takes the fixture's cited recorded result; the attempt receipt, the resolved record (outcome reference, design revision, profile digest, catalog pin) and the result receipt are written, each labelled fixture; no credential entry is read and the native token's entry is shown untouched; a fixture profile is refused for a live transport and a live profile is refused as fixture, each with a stable code; the native admission's and E-05.4's suites are unchanged.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Reading for planning (2026-11-16): PB-3 (fixture replays the native kind with a public-seed token; no host credential entry read); PB-7 (admitted repository id). See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+<!-- SECTION:NOTES:END -->

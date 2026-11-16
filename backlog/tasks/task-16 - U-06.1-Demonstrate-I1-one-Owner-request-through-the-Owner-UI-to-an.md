@@ -4,6 +4,7 @@ title: 'U-06.1: Demonstrate I1: one Owner request through the Owner UI to an'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T15:26:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -31,3 +32,9 @@ Plan contract: leaf U-06.1 of AI_Engineering_Implementation_Project_Plan_Oversee
 - [ ] #2 Original U-06 proof satisfied.
 - [ ] #3 Live execution (E-01.6, U-03.1, U-03.2), review, CI and Knowledge stay with their own leaves.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+For planning (2026-11-16): PB-5 (item 8 reading), PB-7 and PB-8 (OA-32/OA-33 presentation). See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+<!-- SECTION:NOTES:END -->

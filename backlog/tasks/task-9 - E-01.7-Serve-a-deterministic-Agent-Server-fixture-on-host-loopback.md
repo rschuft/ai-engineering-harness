@@ -4,6 +4,7 @@ title: 'E-01.7: Serve a deterministic Agent Server fixture on host loopback'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-16T15:26:00Z'
 labels: []
 milestone: m-0
 dependencies: []
@@ -23,3 +24,9 @@ Plan contract: leaf E-01.7 of AI_Engineering_Implementation_Project_Plan_Oversee
 <!-- AC:BEGIN -->
 - [ ] #1 Every route served is in the locked OpenAPI and each response validates against its schema; each scripted answer cites the recorded observation it reproduces, and an answer without one is a failure; the fixture binds 127.0.0.1 only; the production dispatcher and Agent Canvas code paths run against it unmodified, with no fixture-only branch in either; every record it causes carries authority mode fixture, and a test shows it can never be recorded as a live attempt.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Blocker for planning (2026-11-16): PB-1 (the locked-OpenAPI route clause cannot be met as written) and PB-2 (no committed observation of the UI vantage or of a failed turn); notes PB-4, PB-6. See evidence/bootstrap-log.md#i1-execution-questions-2026-11-16
+<!-- SECTION:NOTES:END -->
