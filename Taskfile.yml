@@ -79,7 +79,7 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   plan:commitment:
-    desc: "Report a commitment's committed set read-only: the terminal leaf's transitive dependencies in the plan, each leaf's status from the Leaves table of evidence/bootstrap-log.md, readiness and a summary (python -I -B tools/plan_commitment.py LEAF [--json]); pass -- LEAF [--json]"
+    desc: "Report a commitment's committed set read-only: the terminal leaf's transitive dependencies in the plan, each leaf's status from exactly one source (its Leaves-table row in evidence/bootstrap-log.md, else its Backlog.md task in backlog/, else not started), readiness with the Owner acts a leaf waits on, and a summary; every run checks the Backlog.md tasks against the plan and the log (python -I -B tools/plan_commitment.py LEAF [--json] [--backlog-dir DIR]); pass -- LEAF [--json]"
     cmds:
       - '{{.PYTHON}} -I -B tools/plan_commitment.py {{.CLI_ARGS}}'
 

@@ -209,7 +209,7 @@ Only what is listed as verified has been exercised.
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `plan:commitment -- LEAF [--json]` | `python -I -B tools/plan_commitment.py LEAF [--json]` | no | Read-only report of a commitment's committed set (decision 0018, point 6): the terminal leaf's transitive dependencies in the plan, itself included, each with its status (the first bold token of its row in the Leaves table of `evidence/bootstrap-log.md`; no row is "not started") and dependencies; a leaf is ready when it has not passed and every dependency has; a summary of total, passed, open, ready and blocked. Exit 0; 2 with a stable code on an unknown leaf (`UNKNOWN_LEAF`), a cycle (`DEPENDENCY_CYCLE`) or an unreadable file (`UNREADABLE_FILE`). |
+| `plan:commitment -- LEAF [--json]` | `python -I -B tools/plan_commitment.py LEAF [--json] [--backlog-dir DIR]` | no | Read-only report of a commitment's committed set (decision 0018, point 6): the terminal leaf's transitive dependencies in the plan, itself included, each with its dependencies and its status from exactly one source (plan leaf P-05.1): its row in the Leaves table of `evidence/bootstrap-log.md` if it has one (the first bold token; PASS is passed), else its Backlog.md task's in `backlog/` (`Done` is passed, any other status open), else "not started". A leaf is ready when it has not passed, every dependency has, and its task depends on no open Owner-act task; a leaf waiting on an open Owner act is blocked and the act is named. A summary of total, passed, open, ready and blocked. Every run checks the repository's Backlog.md tasks against the plan and the log (see [Repository Work in Backlog.md](#repository-work-in-backlogmd)) and the Leaves table's closure, and a mismatch refuses the report. Standard library only (basic tier). Exit 0; 2 with a stable code: `UNKNOWN_LEAF`, `DEPENDENCY_CYCLE`, `UNREADABLE_FILE`, `LEAVES_CLOSURE_MISSING`, `LEAVES_TABLE_REOPENED`, `BACKLOG_UNREADABLE`, `BACKLOG_CONFIG_REFUSED`, `TASK_UNMAPPED`, `TASK_DUPLICATE`, `TASK_LINK_MISMATCH`, `TASK_MILESTONE_MISMATCH`, `TASK_CRITERIA_MISMATCH`, `TASK_DEPENDENCIES_MISMATCH`, `TASK_MISSING`, `STATUS_TWO_SOURCES`, `OWNER_ACT_UNKNOWN` or `OWNER_ACT_UNRECORDED` (each listed in the tool's docstring). |
 | `test [-- --jobs N --suite NAME]` | `<tools python> -I -B tools/run_tests.py [--jobs N] [--suite NAME]` | no | [Testing](#testing): every suite of `test:serial` concurrently (by default all at once, at most one per processor), each in its own child process of `<tools python>` with an empty data root of its own (`AIEH_DATA_ROOT`) and `PYTHONDONTWRITEBYTECODE=1`, started with the no-window helper's flags; prints each suite's output as it ends, then each suite's result and wall time and the run's wall time, as information. Exit 0 when every suite passed, 1 otherwise, 2 could not run. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
 | `test:serial` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `owner:test`, `paths:test`, `platform:test`, `credentials:test`, `gitea:test`, `dispatch:test`, `repository:test` and `inference:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, Owner decision recorder tests, managed data root tests, lifecycle contract and platform adapter tests, host Gitea tests, dispatch resolution and admission tests, repository-access contract tests and inference broker tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `<tools python> -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially, under the tools interpreter, and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -1529,8 +1529,36 @@ Backlog.md's own command line (`backlog task create --ref ... --dep ...`, then
 `task view --json` to check each one). It never writes Backlog.md's files and never
 sets, derives or reports a status. It refuses a change that carries its own
 implementation checklist (`tasks.md`) or whose schema tracks one (`apply.tracks`).
-This repository does not adopt Backlog.md or OpenSpec for its own Work: both run in
-a managed project's repository, and in the tests in a throwaway one.
+The adapter does not create this repository's own Work (see
+[Repository Work in Backlog.md](#repository-work-in-backlogmd)); it runs in a managed
+project's repository, and in the tests in a throwaway one.
+
+### Repository Work in Backlog.md
+
+Since plan leaf P-05.1 the repository's own Work is Backlog.md tasks in
+[`backlog/`](../backlog/), in Backlog.md 1.55.3's own layout (`config.yml`,
+`milestones/`, `tasks/`), made and changed only with the pinned Backlog.md command line
+(installed outside the checkout as in
+[Installing the pinned tools](../integrations/planning/README.md#installing-the-pinned-tools)).
+Its configuration keeps `auto_commit`, `remote_operations` and `check_active_branches` off.
+The plan keeps the acceptance contracts; each task links to one:
+
+- a leaf's task is titled `<leaf id>: <plan title>`, references
+  `AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#<leaf id>`,
+  carries the plan milestone of the leaf's phase, and its acceptance criteria, joined by one
+  space, are the leaf's plan proof (split into items freely; only whitespace may differ);
+- its dependencies are the tasks of its plan dependencies, plus the Owner-act tasks it waits on;
+- an Owner act that a leaf waits on is a task titled `OA-<n>: <what>`, for an act in the log's
+  Owner actions. It is `Done` only when it references the Owner's recorded act, an
+  `evidence/bootstrap-log.md#owner-...` anchor in the log's Decisions.
+
+A leaf's status has exactly one source: its Leaves-table row if it has one, else its task's
+status, else not started. The Leaves table is closed (the log records the row count at closure)
+and gains no rows; a leaf never has both a row and a task. `tools/plan_commitment.py` checks all
+of this on every run with a strict reader of the Backlog.md file subset it needs (standard library
+only) and refuses the report on any mismatch, naming the leaf or task. Its tests
+(`tools/tests/test_plan_commitment.py`) include one that runs the pinned Backlog.md command line
+on a copy of `backlog/` when `AIEH_BACKLOG` names its `cli.js`, and is skipped otherwise.
 
 Every task carries one source pointer per design artifact it implements:
 

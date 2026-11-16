@@ -111,6 +111,15 @@ locally, then pushed to `origin/main`. Parent acceptance is recorded separately.
 Merging does not apply, because verified work is committed directly to `main`. A
 push never implies parent acceptance.
 
+<a id="leaves-table-closed-2026-11-16"></a>**Closed on 2026-11-16 at 80 rows** (plan leaf P-05.1;
+[decision 0018](../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md)
+point 6). The table gains no rows. A leaf that has a row keeps it, and its status and verdict stay
+there. Every other leaf's status is its Backlog.md task's, in [`backlog/`](../backlog/) (`Done` is
+passed, any other status is open), and a leaf with neither is not started. The tasks are linked to
+their plan contracts, and the plan keeps the acceptance contracts. `tools/plan_commitment.py`
+refuses a table with another row count (`LEAVES_TABLE_REOPENED`) and a leaf with both a row and a
+task (`STATUS_TWO_SOURCES`).
+
 | Task | Verdict | Revision | Evidence | Parent gates |
 |---|---|---|---|---|
 | F-03.2.1 Declare reference Linux guest profile | **PASS (2026-11-06)** for the reference profile `strong-windows-qemu-whpx` (W1, this host). `strong-incus-vm` is declared but not validated: it has no Incus host here and 4 pins remain UNRESOLVED, carried to its Linux leaves | `e90b02f` (part a); `dcef745`, `d1aa45f`, `f42b2c7` (part b) | Part a: `profiles/strong-windows-qemu-whpx/` (Debian 13 genericcloud image pinned by sha512 and sha256, TLS-only provenance; SeaBIOS from the pinned QEMU; NoCloud seed on a read-only virtio disk; 8 vCPU, 16 GiB, 40+120 GiB; SLIRP `restrict=on` with loopback-only forwards; `-accel whpx` with no fallback; vmx/svm masked), the QEMU MSYS2 lock, `tools/check_profile.py`. Part b: contract amendment allowing read-only configuration media (QEMU NoCloud seed; Incus `cloud-init:config`/`agent:config`), 9p `config` share still forbidden; [provider validation evidence](F-03.2.1b-provider-validation.md): strict profile check PASS; `QEMU emulator version 11.1.3`, accelerators `tcg whpx`; image sha256 and sha512 match; paused boot (`-S`, full 65-argument argv from `profile.json`, guest code never run) answered QMP with `query-accelerators` `enabled: whpx`, `prelaunch`, 8 CPUs, base memory 17179869184, QOM `vmx`/`svm` false on all vCPUs, `quit` then exit 0. Defects fixed forward in PREREQUISITES: the QMP one-liner returned the SHUTDOWN event instead of the `quit` reply, and it had a launch race. Open for F-03.2.2: `-mon` is deprecated in 11.1.3 (Overseer: replace it in F-03.2.2 and re-run the paused boot then; no argv change now); a prelaunch warning, `Ignoring request for interrupt vector 0`; guest-visible CPUID masking. The Overseer independently re-ran the strict check and re-hashed the image, read `query-accelerators` in the raw QMP transcript, confirmed no QEMU process remained and the instance directory was gone, and reviewed the contract diff. | F-03.2: not yet; it is evaluated at F-03.2.2 (real boot and the observable isolation tests, C6). |

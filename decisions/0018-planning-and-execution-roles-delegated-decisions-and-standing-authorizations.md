@@ -322,3 +322,12 @@ act, and points 1, 2, 4, 6 and 7.
 - 2026-11-14: Revision 6 applied on the Owner's decision (log anchor `owner-decision-oa-31-2026-11-14`): it
   authorizes the native token's delivery to D1 attempts and routine model selection within the native profile,
   both until D1's acceptance; entering the token stays the Owner's act (OA-31 (e)).
+- 2026-11-16: Point 6's D1 transition applied by plan leaf P-05.1 (the decision text is unchanged). The
+  repository's Work is Backlog.md tasks in `backlog/`, each linked to its plan contract; the plan keeps the
+  acceptance contracts. The log's Leaves table is closed at 80 rows (log anchor
+  `leaves-table-closed-2026-11-16`) and gains no rows. `tools/plan_commitment.py` computes the committed set
+  as before and reads each leaf's status from exactly one source: its Leaves-table row if it has one, else
+  its Backlog.md task's status (`Done` is passed), else not started. A leaf with both is refused. Each Owner
+  act a leaf waits on is a Backlog.md task that the leaf's task depends on, `Done` only by reference to the
+  Owner's recorded act in the log's Decisions; until then the leaf is blocked, naming the act. The I1 wave's
+  14 leaves and the Owner acts OA-32 and OA-33 are the first such tasks.
