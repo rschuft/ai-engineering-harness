@@ -6,12 +6,13 @@ It is a responsive shell with persistent navigation, one session identity, the
 Owner chat built on assistant-ui, empty objective and Work surfaces, and Agent
 Canvas embedded as a library for engineering sessions.
 
-**One backend, for sign-in only.** Since U-01.3 the shell signs in to the
+**One backend: sign-in and the stored chat.** Since U-01.3 the shell signs in to the
 Integration process ([`integrations/ownerhost`](../../integrations/ownerhost/README.md))
-on `http://127.0.0.1:13310`; that is the only request it makes, and only when
-the Owner signs in or a stored sign-in is checked. There is still no chat model,
-conversation thread, objective source, Work system or Agent Server behind it,
-and every surface says so instead of showing sample data.
+on `http://127.0.0.1:13310`, its only backend. Since U-02.1, once signed in, the
+chat's threads and messages are kept in the Owner conversation store through it
+(below). There is still no chat model (every reply is a fixed acknowledgement),
+objective source, Work system or Agent Server behind it, and every surface says
+so instead of showing sample data.
 
 Commands, prerequisites and verification status: [Owner host](../../docs/development.md#owner-host)
 in the development reference.
@@ -21,7 +22,7 @@ in the development reference.
 | Path | Area | Renders |
 |---|---|---|
 | `/` | (none) | Redirects to `/chat`. |
-| `/chat` | Chat | assistant-ui's headless primitives over `useLocalRuntime` with a model-free adapter: an empty in-memory thread and a disabled composer. |
+| `/chat` | Chat | assistant-ui's headless primitives. Signed out: `useLocalRuntime` with a model-free adapter, an empty in-memory thread and a disabled composer. Signed in (U-02.1): the stored chat, its thread list and the thread, with an Edit action that keeps the earlier version (branch picker). |
 | `/work` | Work | The Objectives and Work items surfaces, each with an empty state that says no source is connected. |
 | `/engineering` | Engineering | A "No Agent Server is connected" notice, then Agent Canvas's providers and scoped root, loaded lazily. |
 | `/sign-in` | (none) | The login view (U-01.3): paste the Owner UI session credential; once signed in, the session and "Sign out". Not an area, so not in the navigation; the header links to it. |
@@ -42,7 +43,9 @@ mounted while the area changes.
 | `SessionIdentity` | `src/identity/SessionIdentity.tsx` | Shows "Owner", the local session's short id and "Not signed in" or "Signed in"; compact in the narrow layout. |
 | `OwnerSessionProvider` | `src/identity/OwnerSessionContext.tsx` | The sign-in state: checks a stored credential once when the shell opens, `signIn` (verify, then keep), `signOut` (remove), and the Integration process client of the signed-in session. |
 | `SignIn`, `SessionControl` | `src/identity/SignIn.tsx`, `src/identity/SessionControl.tsx` | The login view, and the header's "Sign in" link or "Sign out" button. |
-| `ChatArea` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`. |
+| `ChatArea`, `StoredChat` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`; signed in, `useRemoteThreadListRuntime` over `useLocalRuntime` with `ThreadListPrimitive`, `ActionBarPrimitive.Edit` and `BranchPickerPrimitive`. |
+| `createThreadListAdapter`, `createHistoryAdapter` | `src/areas/conversation-adapters.ts` | The `RemoteThreadListAdapter` and the per-thread `ThreadHistoryAdapter` (through `unstable_useAdapters`) over the Integration process's thread and history routes (U-02.1). |
+| `acknowledgingChatAdapter`, `modelFreeChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
 | `CanvasMount` | `src/engineering/CanvasMount.tsx` | `AgentServerUIProviders` (analytics off, host i18n). Its `children` prop is the seam where U-01.2 places the selected session. |
@@ -148,6 +151,43 @@ vendored (decision 0005): `node_modules/` and `dist/` are ignored.
 The lock holds five packages that declare install scripts, and none of them is run:
 `@openhands/agent-canvas` (a `postinstall` that only prints a banner on global
 installs), `@heroui/shared-utils`, `@openrouter/sdk`, `core-js` and `fsevents`.
+
+## Threads and messages (U-02.1)
+
+[Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md),
+point 6. Signed in, the chat is assistant-ui's `LocalRuntime` under
+`useRemoteThreadListRuntime` ([`src/areas/ChatArea.tsx`](src/areas/ChatArea.tsx)), with
+two thin adapters ([`src/areas/conversation-adapters.ts`](src/areas/conversation-adapters.ts))
+over the Integration process's thread and history routes:
+
+- the `RemoteThreadListAdapter`: `initialize` sends the runtime's local thread id
+  and gets back the id the Owner conversation store mints; `list`, `fetch`,
+  `rename`, `archive` and `unarchive` read and write the store's thread events;
+  `delete` is always refused (`THREAD_DELETE_REFUSED`: nothing is deleted);
+  `generateTitle` returns a stream that closes at once (no model titles a thread);
+- the `ThreadHistoryAdapter`, per thread through `unstable_useAdapters` (it
+  resolves the thread at each call): `load` reads the thread's messages in the
+  store's order, with no head, so the newest branch is shown; `append` and
+  `update` send each message under assistant-ui's own id. One thread's writes are
+  sent one after another in call order: the runtime does not order writes of
+  different messages, and the store refuses a reply whose statement it does not
+  hold yet (`MESSAGE_PARENT_NOT_FOUND`).
+
+The store keeps an Owner message's text exactly as typed (its UTF-8 bytes) and
+never changes it; Edit sends a new message under the same parent and the
+branch picker shows both versions. The reply is
+[`acknowledgingChatAdapter`](src/areas/chat-adapter.ts)'s fixed text, the same
+every time: no model is called.
+
+What the pinned runtime does, which the adapters rely on, is gate G2's test
+([`src/areas/g2-runtime-gate.test.tsx`](src/areas/g2-runtime-gate.test.tsx), jsdom,
+no network): the history append of a message, with its id, before the model
+adapter runs; `load()` without a head; a run paused by a tool in
+`unstable_humanToolNames` appended at the pause, restored by a reload and
+completed by an update; per-thread history; a title stream with no model.
+[`src/areas/stored-chat.test.tsx`](src/areas/stored-chat.test.tsx) runs the
+stored chat against a fake Integration process. A real browser and the Owner's
+own session are **not yet verified**.
 
 ## Agent Canvas and assistant-ui in one React app
 

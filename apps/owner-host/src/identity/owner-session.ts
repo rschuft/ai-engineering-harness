@@ -33,8 +33,22 @@ export const CREDENTIAL_CODES = [
   "SESSION_CREDENTIAL_EXPIRED",
   "SESSION_CREDENTIAL_REVOKED",
 ] as const;
+/** The refusals of the thread and history routes (U-02.1; decision 0025, point 6). */
+export const CONVERSATION_CODES = [
+  "REQUEST_INVALID",
+  "REQUEST_TOO_LARGE",
+  "THREAD_INVALID",
+  "THREAD_NOT_FOUND",
+  "THREAD_DELETE_REFUSED",
+  "MESSAGE_INVALID",
+  "MESSAGE_PARENT_NOT_FOUND",
+  "MESSAGE_ID_CONFLICT",
+  "MESSAGE_IMMUTABLE",
+  "MESSAGE_NOT_FOUND",
+] as const;
 export type RefusalCode =
   | (typeof CREDENTIAL_CODES)[number]
+  | (typeof CONVERSATION_CODES)[number]
   | "HOST_NOT_ALLOWED"
   | "ORIGIN_NOT_ALLOWED"
   | "NOT_SHAPED"
@@ -51,6 +65,16 @@ export const REFUSAL_TEXT: Record<RefusalCode, string> = {
   NOT_SHAPED: "That is not an Owner UI session credential (aieh-oui- and 52 characters).",
   UNREACHABLE: "The Integration process is not reachable at 127.0.0.1:13310.",
   ANSWER_INVALID: "The Integration process gave an answer the shell does not understand.",
+  REQUEST_INVALID: "The Integration process refused a request the shell sent.",
+  REQUEST_TOO_LARGE: "The message is too large for the Owner conversation store.",
+  THREAD_INVALID: "The Owner conversation store refused that thread or title.",
+  THREAD_NOT_FOUND: "The Owner conversation store has no such thread.",
+  THREAD_DELETE_REFUSED: "Threads are never deleted from the Owner conversation store; archive it instead.",
+  MESSAGE_INVALID: "The Owner conversation store refused the message's form.",
+  MESSAGE_PARENT_NOT_FOUND: "The message answers a message the store does not hold.",
+  MESSAGE_ID_CONFLICT: "The thread already holds another message under this id.",
+  MESSAGE_IMMUTABLE: "A statement is never changed; an edit is kept as a new message.",
+  MESSAGE_NOT_FOUND: "The Owner conversation store has no such message.",
 };
 
 export interface OwnerSession {

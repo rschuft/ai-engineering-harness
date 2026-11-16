@@ -22,7 +22,9 @@ function fakeIntegration(enrolled: string) {
   const fetchImpl: FetchLike = async (url, init) => {
     const header = (init.headers as Record<string, string>)[SESSION_HEADER];
     seen.push({ url, header });
-    const body = header === enrolled ? SESSION : { code: header ? "SESSION_CREDENTIAL_FOREIGN" : "SESSION_CREDENTIAL_MISSING" };
+    // The stored chat (U-02.1) reads the thread list once the Owner is signed in: none yet.
+    const answer = url.endsWith("/threads") ? { threads: [] } : SESSION;
+    const body = header === enrolled ? answer : { code: header ? "SESSION_CREDENTIAL_FOREIGN" : "SESSION_CREDENTIAL_MISSING" };
     return new Response(JSON.stringify(body), { status: header === enrolled ? 200 : 401 });
   };
   return { fetchImpl, seen };
@@ -60,7 +62,10 @@ describe("signing in", () => {
     const router = renderApp("/sign-in", fetchImpl);
     const field = await paste(`  ${credential}\n`);
     await waitFor(() => expect(router.state.location.pathname).toBe("/chat"));
-    expect(seen).toEqual([{ url: "http://127.0.0.1:13310/session", header: credential }]);
+    expect(seen[0]).toEqual({ url: "http://127.0.0.1:13310/session", header: credential });
+    // The chat it opens is the stored chat (U-02.1): its only other requests read the thread list, with the header.
+    await screen.findByTestId("chat-stored");
+    expect(seen.slice(1).every((s) => s.url === "http://127.0.0.1:13310/threads" && s.header === credential)).toBe(true);
     expect(field.value).toBe("");
     expect(screen.getByTestId("session-identity").textContent).toContain("Signed in");
     expect(JSON.parse(window.localStorage.getItem(CREDENTIAL_STORAGE_KEY)!)).toEqual({ v: 1, credential, ...SESSION });

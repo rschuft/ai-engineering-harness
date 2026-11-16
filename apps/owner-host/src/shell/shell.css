@@ -260,6 +260,45 @@ body {
   background: var(--owner-surface);
 }
 
+/* The stored chat (U-02.1): the thread list beside the thread on wide layouts, above it on narrow ones. */
+.owner-chat__layout {
+  display: grid;
+  gap: 1rem;
+}
+
+.owner-shell[data-layout="wide"] .owner-chat__layout {
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+}
+
+.owner-chat__threads {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.owner-chat__new-thread,
+.owner-chat__thread-trigger,
+.owner-chat__edit,
+.owner-chat__cancel,
+.owner-chat__branches button {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  font: inherit;
+  background: var(--owner-surface);
+  color: inherit;
+  text-align: start;
+}
+
+.owner-chat__actions,
+.owner-chat__branches {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+}
+
 .owner-canvas-frame {
   border: 1px solid var(--owner-border);
   border-radius: 8px;
