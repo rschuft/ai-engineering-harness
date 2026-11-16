@@ -64,6 +64,7 @@ class Outcome:
 class Verified:
     def __init__(self, status='0'):
         self.tests = {'status': status}
+        self.excluded = ()
 
     def to_json(self):
         return {'format': 'test', 'commit': 'c' * 40, 'bundle': {'sha256': 'b' * 64}}
@@ -558,6 +559,135 @@ class ReviewOfBAndC(D1Harness):
         self.assertEqual(out['disposition'], 'published')
         [clause] = [c for c in out['clauses'] if c['clause'].startswith('the agent edits the demo repository')]
         self.assertEqual(clause['verdict'], 'FAIL')
+
+
+HALF = len(TOKEN) // 2
+SPLIT = TOKEN[:HALF] + '\x07' + TOKEN[HALF:]          # the reviewer's case: the token split by a control character
+
+
+class SplitGuest(EchoGuest):
+    """GET answers carry SPLIT in a stderr field while ``split`` is set (never the token whole: the guest-side seal
+    does not see it)."""
+    split = False
+
+    def answer(self, method, path, body):
+        status, out = super().answer(method, path, body)
+        if self.split and method == 'GET' and isinstance(out, dict):
+            out = dict(out, stderr=SPLIT)
+        return status, out
+
+
+class EndCallsGuest(FakeDispatcher):
+    """The end reads the runtime through the dispatcher's transport, as attempt_end does."""
+
+    def end(self, key, transport, records, trigger):
+        transport('GET', f'/api/conversations/{CID}/runtime', None)
+        return super().end(key, transport, records, trigger)
+
+
+class TokenFoundAtPublish(FakeDispatcher):
+    def publish(self, key, verified, native, observations, extra_texts, report_dir):
+        self.acts.append('publish')
+        raise guest.Refused('OUTBOUND_TOKEN_FOUND', 'the outbound search found the native token in the bundle')
+
+
+class SplitOutput(FakeDispatcher):
+    """RESULT's test output, as the intake decodes it (_data_text removed the control character): the token whole."""
+
+    def run(self, key, transport, inspect, pull, observe):
+        outcome = super().run(key, transport, inspect, pull, observe)
+        if outcome.result is not None:
+            outcome.result.tests['output'] = d1_test_output()
+        return outcome
+
+
+def d1_test_output():
+    return 'FAIL: test_x\n' + guest.d1_data_text(SPLIT) + '\n'
+
+
+class DeltaCheck(D1Harness):
+    """The delta check of the review of B and C: its probes P4 and P5, the root cause at (11), NIT 1, NIT 2."""
+
+    def setUp(self):
+        super().setUp()
+        self.guest = SplitGuest(self)
+        self.tunnel = nqd.FakeTunnel(self.guest)
+        self.dispatcher = FakeDispatcher(self, self.guest)
+
+    def test_p5_the_token_found_at_publish_is_a_stop_that_ends_the_attempt(self):
+        self.dispatcher = TokenFoundAtPublish(self, self.guest)
+        out = self.run_driver()
+        self.assertEqual([(r['kind'], r['code']) for r in self.dispatcher.stop_records],
+                         [('credential-stop', 'OUTBOUND_TOKEN_FOUND')])
+        trigger, records = self.dispatcher.ends[0]
+        self.assertEqual((trigger, records[0]['ref']), ('attempt-stopped', f'attempt:{ATTEMPT}#publish'))
+        self.assertEqual((out['disposition'], out['result'], out['guest_may_be_destroyed']), ('ended', 'FAIL', True))
+        # the plan's D4: nothing resumes afterwards
+        stops, ends = list(self.dispatcher.stop_records), list(self.dispatcher.ends)
+        self.dispatcher = FakeDispatcher(self, self.guest)
+        self.dispatcher.stop_records, self.dispatcher.ends, self.dispatcher.journal = stops, ends, 'reserved'
+        self.guest.created = True
+        self.tunnel = nqd.FakeTunnel(self.guest)
+        out = self.run_driver(resume=OPERATION)
+        self.assertFalse({'read-native', 'resume', 'recorded', 'publish'} & set(self.dispatcher.acts))
+
+    def test_11_finds_the_split_token_in_the_decoded_test_output(self):
+        self.dispatcher = SplitOutput(self, self.guest)
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '11')['verdict'], 'FAIL')
+        self.assertNotIn('publish', self.dispatcher.acts)
+        self.assertEqual(self.dispatcher.stop_records[0]['code'], 'OUTBOUND_TOKEN_FOUND')
+        self.assertEqual(self.dispatcher.ends[0][0], 'attempt-stopped')
+        self.assertNotIn(TOKEN, json.dumps(out, default=str))
+
+    def test_11_finds_the_split_token_in_an_answer_s_stderr(self):
+        class SplitAnswer(FakeDispatcher):
+            def run(self_, key, transport, inspect, pull, observe):
+                outcome = FakeDispatcher.run(self_, key, transport, inspect, pull, observe)
+                self.guest.split = True
+                transport('GET', f'/api/conversations/{CID}', None)     # as a RESULT answer's stderr would carry it
+                self.guest.split = False
+                return outcome
+        self.dispatcher = SplitAnswer(self, self.guest)
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '11')['verdict'], 'FAIL')
+        self.assertNotIn('publish', self.dispatcher.acts)
+        self.assertEqual(out['disposition'], 'ended')
+
+    def test_p4_every_call_of_a_resumed_run_is_sealed_with_a_nonce_its_end_s_included(self):
+        for journal in ('dispatched', None):
+            with self.subTest(journal=journal):
+                self.setUp()
+                self.dispatcher = EndCallsGuest(self, self.guest)
+                self.dispatcher.journal = journal
+                self.guest.created = self.guest.echo_token = True
+                out = self.run_driver(resume=OPERATION)
+                self.assertEqual(self.dispatcher.ends[0][1][0]['code'], 'TOKEN_ECHOED')
+                self.assertIn(('GET', f'/api/conversations/{CID}/runtime'), self.guest.calls)
+                self.assertEqual([s for s in self.guest.seals if s[2]], [])
+                self.assertEqual(out['disposition'], 'ended')
+
+    def test_nit_1_a_deferred_end_that_fails_deletes_nothing(self):
+        self.dispatcher.status = 'error'
+        self.dispatcher.fail_end = True
+        out = self.run_driver()
+        self.assertNotIn('delete', self.dispatcher.acts)
+        self.assertEqual((out['disposition'], out['guest_may_be_destroyed']), ('held-for-engineering-manager', False))
+
+    def test_nit_2_the_re_read_is_its_own_step_and_judged(self):
+        self.dispatcher.status = 'error'
+        self.tunnel.late_lines = [nqd.log_line(event='connection', conn=9, target='example.org:443',
+                                               decision='admitted', reason=None, end='client-closed')]
+        out = self.run_driver()
+        self.assertEqual(self.step(out, '10a')['verdict'], 'PASS')
+        self.assertEqual(self.step(out, '10c')['verdict'], 'FAIL')
+        [clause] = [c for c in out['clauses'] if c['clause'].startswith('every provider connection')]
+        self.assertEqual((clause['verdict'], clause['steps']['(10c)']), ('FAIL', 'FAIL'))
+        self.setUp()
+        out = self.run_driver()                                       # no deferred end: no (10c), not judged
+        [clause] = [c for c in out['clauses'] if c['clause'].startswith('every provider connection')]
+        self.assertEqual(clause['verdict'], 'PASS')
+        self.assertNotIn('(10c)', clause['steps'])
 
 
 class StopRecords(unittest.TestCase):

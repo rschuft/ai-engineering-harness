@@ -38,8 +38,6 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 ACTOR = 'd1-run'
 ARG_LIMIT = 131072        # Linux MAX_ARG_STRLEN: one argument of /bin/sh -c (step 0, live: 139264 bytes refused, errno 7)
-STOP_KEY = 'dispatch/attempt/{attempt_id}/stop/{kind}/{code}'
-STOP_FORMAT = 'ai-engineering-harness/dispatch/attempt-stop/v1'
 
 
 def _load(name, path):
@@ -189,26 +187,15 @@ class D1Dispatcher:
                               read_artifact=self.read_artifact, defer_interruption_end=True, **self.run_kwargs)
 
     def record_stop(self, key, records) -> list:
-        """Each observed stop's dispatcher record kept durably as it is observed (the review of B and C, B1):
-        ``dispatch/attempt/<attempt id>/stop/<kind>/<code>``, its intent the attempt, kind and code (no text), the
-        first ref in its confirmed detail. A repeat of the same kind and code is the same receipt."""
-        attempt, written = store.attempt_id_for(key), []
-        for record in AE.check_records(list(records)):
-            stop_key = STOP_KEY.format(attempt_id=attempt, kind=record['kind'], code=record['code'])
-            intent = {'format': STOP_FORMAT, 'attemptId': attempt, 'kind': record['kind'], 'code': record['code']}
-            held = self.store.reserve(stop_key, intent, actor=ACTOR).reservation
-            if held.state == 'reserved':
-                di._mark(self.store, stop_key, 'reserved', 'dispatched', ACTOR, 'stop-observed', None)
-                di._mark(self.store, stop_key, 'dispatched', 'confirmed', ACTOR, 'stop-observed',
-                         {'ref': record['ref']})
-            written.append(stop_key)
-        return written
+        """Each observed stop's dispatcher record kept durably as it is observed (the review of B and C, B1; the
+        library's ``attempt_end.record_stop`` since the delta check, S-b, so that a new attempt's admission reads
+        it)."""
+        return AE.record_stop(self.store, key, records, actor=ACTOR)
 
     def stops(self, key) -> list:
         """The attempt's recorded stops (kind, code), oldest first."""
-        prefix = STOP_KEY.format(attempt_id=store.attempt_id_for(key), kind='', code='').rstrip('/')
-        return [{'kind': json.loads(r.intent_json)['kind'], 'code': json.loads(r.intent_json)['code']}
-                for r in self.store.attempts() if r.operation_key.startswith(prefix + '/')]
+        return [{'kind': s['kind'], 'code': s['code']} for s in AE.stops_of(self.store,
+                                                                           attempt_id=store.attempt_id_for(key))]
 
     def _no_stop(self, key):
         found = self.stops(key)
@@ -374,6 +361,8 @@ def main(argv=None):
                                           'attempt', 'conversation', 'interruption', 'out', 'record')}
     summary['steps'] = [(s['step'].split(' ', 1)[0], s.get('verdict')) for s in result.get('steps') or []]
     summary['stop_conditions'] = [s.get('stop') for s in result.get('stop_conditions') or []]
+    summary['end_escalation_needed'] = result.get('end_escalation_needed')
+    summary['stops_recorded'] = result.get('stops_recorded')
     summary['native_entry_reads'] = dispatcher.native_reads
     summary['bot_entry_reads'] = dispatcher.bot_reads
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))

@@ -17983,7 +17983,8 @@ class NativeObserver:
 
 def native_observer(ctx, name, record, cid, *, prompt=None, owner_act=None, owner_values=None, owner_value_act=None,
                     channels=None, provider=None, forward=None, tunnel=None, host_vantage=None, wait=None,
-                    turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None, log_label='native-qualification'):
+                    turn_ceiling_s=ACP_TURN_CEILING_S, start_wait=None, log_label='native-qualification',
+                    seal_with_token=True):
     """E-05.11's verifier vantage on one native conversation CID of the running provisioned instance NAME (RECORD its
     launch record), as ``native_qualification_run`` built it, unchanged in behaviour (D1 slice C extracted it so the D1
     run reuses it): the sealed API channel (every call sealed with the native token once it is held, before that
@@ -18032,7 +18033,9 @@ def native_observer(ctx, name, record, cid, *, prompt=None, owner_act=None, owne
     def sealed(requests, timeout=900, secret=None):
         # every call is sealed: with the native token once it is held (its occurrences are counted and removed in the
         # guest), before that with a fresh nonce (review S1: no token is read before the census passes)
-        seal = token() if held is not None and held.open else secrets.token_urlsafe(32)
+        # SEAL_WITH_TOKEN false (a resumed D1 run, the delta check S-a): always a fresh nonce; the held token is then
+        # used only for the in-memory searches
+        seal = token() if seal_with_token and held is not None and held.open else secrets.token_urlsafe(32)
         data = api(requests, timeout=timeout, secret=seal)
         if isinstance(data, dict):
             count = data.get('sealed_occurrences')
@@ -18604,7 +18607,7 @@ def native_observer(ctx, name, record, cid, *, prompt=None, owner_act=None, owne
         return out
 
     def outbound_step(out, not_covered,
-                      step="(13) E-05.9's outbound search over the record and every answer of this run"):
+                      step="(13) E-05.9's outbound search over the record and every answer of this run", extra=()):
         """E-05.9's outbound search over the (redacted) record OUT and every Agent Server answer and container output
         of this run, with its positive controls; its step is appended to OUT, a FAIL is a stop. The step's verdict."""
         steps_, stop_conditions_ = out['steps'], out['stop_conditions']
@@ -18614,6 +18617,8 @@ def native_observer(ctx, name, record, cid, *, prompt=None, owner_act=None, owne
             search.capture('the record', json.dumps(out, sort_keys=True, default=str).encode('utf-8'))
             for i, (where, blob) in enumerate(memo['surfaces']):
                 search.capture(f'run surface {i}', blob)
+            for label_, blob in extra:          # the caller's decoded texts (the D1 run's (11))
+                search.capture(label_, blob)
             try:
                 report = ns.report(search, token())
                 verdict = 'PASS' if report['verdict'] == 'not-found' else \
@@ -18810,6 +18815,7 @@ D1_STEPS = {
     '10': '(10) teardown: the conversation deleted by the dispatcher, its container gone, no outer conversation left',
     '10a': '(10a) the tunnel\'s log of the whole run, after the teardown',
     '10b': '(10b) the container guard\'s counters from the preconditions to the teardown',
+    '10c': '(10c) the tunnel\'s log of the whole run read again after the delete (an end the driver wrote first)',
     '11': '(11) E-05.9\'s outbound search over the record and every answer of this run (the gate)',
     '12': '(12) the result path: the builder bot\'s push of work/<attempt>, one draft pull request, the read-back, the '
           'receipt and the Owner report',
@@ -18874,11 +18880,19 @@ D1_RUN_RULE = (
     'dispatcher record D1_STOP_RECORDS maps it to, a stop no entry names a containment-stop) and ends the attempt '
     'through E-05.8\'s mechanism (attempt_end.end_interrupted_attempt, trigger attempt-stopped, with that record), on '
     'every path, a dispatcher refusal\'s included, before the result journal is dispatched: nothing reaches Gitea, '
-    'and no resume and no result path runs past a recorded stop. Before a stop ends the attempt while its container '
+    'and no resume and no result path runs past a recorded stop; a new attempt of the work item is refused '
+    '(PRIOR_ATTEMPT_STOP_UNRESOLVED) while an earlier attempt has a recorded stop and an end that is not a security '
+    'stop. The result path\'s own refusal OUTBOUND_TOKEN_FOUND at (12) is such a stop (a credential-stop, the attempt '
+    'ended: its search runs before the result journal is dispatched). Before a stop ends the attempt while its container '
     'runs, (7e) and (7h) run. A turn that ends error, stuck or paused runs no RESULT, and a run that did not start '
     '(the message saved, the run not started) ends nothing at once: after (10a) and (10b), and before the delete, the '
     'attempt is ended through E-05.8, with a stop\'s record when one was observed (a security stop), else as the '
-    'interruption it is (trigger conversation-ended, classified from its events; or the run-not-started record). The '
+    'interruption it is (trigger conversation-ended, classified from its events; or the run-not-started record); an '
+    'end that cannot be written deletes nothing (held for the engineering manager); (10c) reads the whole-run log '
+    'again after the delete, judged as (10a) when present, a stop seen only there recorded and flagged for the end\'s '
+    'escalation (end_escalation_needed). (11) searches, besides the record\'s draft and every answer as received, '
+    'the texts the result path searches decoded as it decodes them (the verified test output and excluded paths; '
+    'every answer\'s strings with control characters removed; RESULT\'s hex fields decoded). The '
     'result path (12) runs only when no stop occurred and (11) passes; its own outbound search (the bundle, every '
     'text, the run record\'s draft) must find nothing with valid controls; a failing test run proceeds marked FAILED '
     'and E-05.5\'s verified result is then not met (R1). Run rules: nothing here destroys the guest; a dispatcher '
@@ -18888,8 +18902,9 @@ D1_RUN_RULE = (
     'the result journal is confirmed or the attempt has an end record (guest_may_be_destroyed). A resumed run first '
     'refuses an attempt with an end record or a recorded stop; it then reads the native entry once more, in its own '
     'process, only to search with it (its fingerprint must be the attempt\'s); it never sends the token into the '
-    'guest: every call of a resumed run is sealed with a fresh nonce, and only after its last call is the token held '
-    'and every answer of the run searched for it in memory, before anything is recorded (a hit is a stop). A resumed '
+    'guest: every call of a resumed run, its end\'s and its teardown\'s included, is sealed with a fresh nonce, and '
+    'only after its last guest call is the token held, used only to search every answer of the run in memory before '
+    'anything is recorded (a hit is a stop, which ends the attempt, again with nonce seals). A resumed '
     'run\'s evidence is its record together with the first run\'s. RESULT: PASS iff every step passes; FAIL when a '
     'step fails or a stop occurred; otherwise UNKNOWN. Each proof clause (D1_CLAUSES) is PASS when every step that '
     'decides it passes, FAIL when one fails, otherwise UNKNOWN; a clause the run does not decide names its offline '
@@ -18907,7 +18922,8 @@ D1_CLAUSES = (
     ('E-05.4', 'from a reserved attempt\'s result in the exchange, the dispatcher, as the stage\'s bot, pushes '
                'work/<attempt> and opens a pull request naming the repository, base, exact SHA and task',
      ('8', '9', '12')),
-    ('E-05.4', 'untrusted code has no network path to Gitea, as observed', ('5b', '7a', '8a', '7c', '10a', '10b')),
+    ('E-05.4', 'untrusted code has no network path to Gitea, as observed',
+     ('5b', '7a', '8a', '7c', '10a', '10b', '10c')),
     ('E-05.4', 'no bot can merge it', 'offline: the result path has no merge route (attempt_tokens.ResultSession), '
                'the Gitea fake refuses a bot\'s merge (test_result_path), the demo\'s protection; the read-back of (12) '
                'shows the pull request open, unmerged, a draft'),
@@ -18920,7 +18936,7 @@ D1_CLAUSES = (
     ('E-05.5', 'exactly one contained conversation per attempt in a disposable guest, never two at once',
      ('1', '3', '7a')),
     ('E-05.5', 'one coding agent through the qualified ACP provider on the native profile, model access only through '
-               'the tunnel to the provider\'s one origin', ('5a', '7c', '7d', '10a')),
+               'the tunnel to the provider\'s one origin', ('5a', '7c', '7d', '10a', '10c')),
     ('E-05.5', 'no credential other than the native secret set enters the attempt (no other Owner credential, no host '
                'Claude configuration, no other unrestricted credential)', ('5c', '7e', '7h')),
     ('E-05.5', 'every containment boundary E-05.11 qualified holds', ('4', '5a', '5b', '5c', '6', '7a', '7b', '7c',
@@ -18934,7 +18950,7 @@ D1_CLAUSES = (
                'Owner-authorized protected merge; no bot merges', ('12',)),
     ('E-05.5', 'the Owner receives a report with the diff and the test output, without a Gitea sign-in', ('12',)),
     ('E-05.5', 'every provider connection went through the tunnel to the provider\'s one origin, as the tunnel\'s log '
-               'shows', ('7c', '10a')),
+               'shows', ('7c', '10a', '10c')),
     ('E-05.5', 'the model identifiers used are those the Owner approved: the conversation\'s selected model (3) and '
                'the CLI\'s transcript (7f) (the events\' mentions are recorded as data)', ('3', '7f')),
     ('E-05.5', 'lineage from the task to the branch is recorded', ('12',)),
@@ -18943,6 +18959,7 @@ D1_CLAUSES = (
                'stopped, its end record written, no result returned) and the record names the attempt and how it '
                'ended', 'judged:interruption-ended'),
 )
+D1_OPTIONAL_STEPS = ('10c',)
 D1_INTERRUPTION_OFFLINE = ('offline: no interruption occurred, so the interruption path stands on E-05.8\'s offline '
                            'evidence (integrations/dispatch/tests/test_attempt_end.py; attempt_end.py)')
 
@@ -18982,13 +18999,15 @@ def d1_clause_verdicts(steps, facts=None):
     verdicts = {s['step'].split(' ', 1)[0].strip('()'): s.get('verdict') for s in steps}
 
     def from_steps(deciding):
-        seen = [verdicts.get(k) for k in deciding]
+        # (10c) is read only after an end the driver wrote itself: judged when present (the delta check, NIT 2)
+        seen = [verdicts.get(k) for k in deciding if k not in D1_OPTIONAL_STEPS or k in verdicts]
         return 'FAIL' if 'FAIL' in seen else 'PASS' if all(v == 'PASS' for v in seen) else 'UNKNOWN'
     out = []
     for leaf, clause, deciding in D1_CLAUSES:
         entry = {'leaf': leaf, 'clause': clause}
         if isinstance(deciding, tuple):
-            entry.update(verdict=from_steps(deciding), steps={f'({k})': verdicts.get(k) for k in deciding})
+            entry.update(verdict=from_steps(deciding), steps={f'({k})': verdicts.get(k) for k in deciding
+                                                              if k not in D1_OPTIONAL_STEPS or k in verdicts})
         elif deciding == 'judged:agent-tests':
             status, ran = facts.get('tests_status'), facts.get('agent_ran_its_tests')
             base = from_steps(('6', '8'))
@@ -19040,6 +19059,59 @@ def d1_event_facts(events):
 
 
 
+# The result path's refusals that are security stops (dispatch_inputs.REFUSALS: "a security stop"), as stop texts
+# D1_STOP_RECORDS maps (the delta check, B1 on the publish path).
+D1_PUBLISH_STOPS = {
+    'OUTBOUND_TOKEN_FOUND': 'a credential found in a recorded surface (the outbound search)',
+}
+D1_HEX_LINES = re.compile(r'AIEH-RESULT (?:test-output|failed [a-z-]{1,32}|excluded [0-9]{1,9} [0-9a-f]{64}) '
+                          r'([0-9a-f]+)')
+
+
+def d1_data_text(text):
+    """attempt_run._data_text: control characters but newline and tab removed (as the result path renders text)."""
+    return ''.join(c for c in text if c in '\n\t' or c.isprintable())
+
+
+def d1_decoded_texts(verified, surfaces):
+    """The texts the result path searches, decoded as it decodes them, for step (11) (the delta check's root cause:
+    a token split by a control character is whole once the character is removed): the verified result's test output
+    and excluded paths; and from every answer of the run, each string with a control character removed, and the
+    hex-encoded fields of RESULT's lines (the test output, a failed step's stderr, the excluded list) decoded the
+    same way. (label, bytes) pairs."""
+    out = []
+    tests = getattr(verified, 'tests', None) or {}
+    if isinstance(tests.get('output'), str):
+        out.append(('the verified test output', tests['output'].encode('utf-8', 'surrogatepass')))
+    excluded = getattr(verified, 'excluded', None)
+    if excluded:
+        out.append(('the verified excluded paths', json.dumps(list(excluded), sort_keys=True).encode('utf-8')))
+    for i, (where, blob) in enumerate(surfaces):
+        try:
+            value = json.loads(blob)
+        except (ValueError, TypeError):
+            continue
+        pending, texts = [value], []
+        while pending:
+            item = pending.pop()
+            if isinstance(item, dict):
+                pending.extend(item.values())
+            elif isinstance(item, list):
+                pending.extend(item)
+            elif isinstance(item, str):
+                cleaned = d1_data_text(item)
+                if cleaned != item:
+                    texts.append(cleaned)
+                for match in D1_HEX_LINES.finditer(item):
+                    try:
+                        texts.append(d1_data_text(bytes.fromhex(match.group(1)).decode('utf-8', 'replace')))
+                    except ValueError:
+                        continue
+        if texts:
+            out.append((f'run surface {i}, decoded', '\n'.join(texts).encode('utf-8', 'surrogatepass')))
+    return out
+
+
 def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tunnel=None, host_vantage=None,
            wait=None, start_wait=None, resume=None):
     """The D1 run (D1 slice C; PREPARED, NOT RUN) under D1_RUN_RULE, fixed before any run, on the running instance
@@ -19088,7 +19160,7 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
         return out_record
     obs = native_observer(ctx, name, record, cid, owner_act='OA-31 (b) (f)', channels=channels, forward=forward,
                           tunnel=tunnel, host_vantage=host_vantage, wait=wait, start_wait=start_wait,
-                          log_label='d1-run')
+                          log_label='d1-run', seal_with_token=resume is None)
     run, memo, steps = obs.run, obs.memo, obs.steps
     state = {'key': resume, 'attempt': None if current is None else current.get('attempt_id'), 'outcome': None,
              'verified': None, 'end': None, 'disposition': 'not-dispatched', 'refusal': None, 'phase': 'preflight',
@@ -19305,11 +19377,12 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                 memo.pop('guard_end', None)
             teardown_observations()
             end(pending[0], 'teardown', pending[1])
+            if state['end'] is None:      # the end was not written: nothing is deleted (the delta check, NIT 1)
+                return
             run(D1_STEPS['10'], delete, always=True, needs=('create_sent',))
             # the whole-run log read again after the delete (the end stopped the runtime first, so nothing of the
             # attempt runs by then); a stop seen only here is recorded durably, the end already written
-            run(D1_STEPS['10a'] + ' (read again after the delete)', obs.tunnel_whole_run_step, always=True,
-                needs=('create_sent', 'log_name', 'sent'))
+            run(D1_STEPS['10c'], obs.tunnel_whole_run_step, always=True, needs=('create_sent', 'log_name', 'sent'))
             persist('teardown')
             return
         run(D1_STEPS['10'], delete, always=True, needs=('create_sent',))
@@ -19461,7 +19534,7 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                 merged(draft, None)
                 if not obs.stop_conditions:
                     obs.outbound_step(draft, 'the result bundle and the report: searched by the result path (12)',
-                                      step=D1_STEPS['11'])
+                                      step=D1_STEPS['11'], extra=d1_decoded_texts(state['verified'], memo['surfaces']))
                     merged(draft, '11')
                 if obs.stop_conditions:
                     end('attempt-stopped', 'gate')
@@ -19494,6 +19567,9 @@ def d1_run(ctx, name, dispatcher, out_dir=None, channels=None, forward=None, tun
                 code = getattr(exc, 'code', type(exc).__name__)
                 state['refusal'] = {'at': 'publish', 'code': code}
                 step('12', 'FAIL', {'refused': code})
+                if code in D1_PUBLISH_STOPS:      # the delta check, B1: the search ran before the journal's dispatch
+                    obs.stop(D1_PUBLISH_STOPS[code], refused=code, phase='publish')
+                    end('attempt-stopped', 'publish')
         out_record = dict(record_now(), events=facts_, observations=observations,
                           interruption=observations['interruption'],
                           guest_may_be_destroyed=state['disposition'] in ('published', 'ended', 'not-dispatched'),
