@@ -214,9 +214,9 @@
         },
         {
           "credential": "cred-owner-ui-session",
-          "issuer": "external:undefined",
+          "issuer": "owner",
           "delivered_by": null,
-          "delivery": "A separate Owner session credential to the Owner-host/Integration process, not shaped like an Agent Server key (decision 0013, point 5); issued only by an Owner act. Which leaf builds it is unsettled (fd-owner-ui-session-plan-silence)."
+          "delivery": "A separate Owner session credential to the Owner-host/Integration process, not shaped like an Agent Server key (decision 0013, point 5); issued only by an Owner act. Planned (U-01.3; Proposed decision 0025, point 3): the Owner mints it himself with the enroll command, which refuses unless standard input and output are console handles and shows it once (aieh-oui- and 52 lower-case base32 characters); the Owner enters it at the Integration process's login; the store keeps only its verifier. Not built yet."
         },
         {
           "credential": "cred-conversation-runtime-access",
@@ -255,7 +255,7 @@
             "owner-direction"
           ],
           "revoker": "owner",
-          "method": "Not defined until a leaf builds the Owner's UI session to the Integration process (plan silence); the Owner ends the session.",
+          "method": "Planned (U-01.3; Proposed decision 0025): a new enrollment supersedes the current session (refused afterwards as SESSION_CREDENTIAL_REVOKED); the expiry chosen at enrollment ends it (SESSION_CREDENTIAL_EXPIRED); Sign out removes the shell's copy; the Owner ends the session.",
           "rotation_owner": "owner",
           "findings": [
             "fd-owner-ui-session-plan-silence"

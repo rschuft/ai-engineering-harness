@@ -222,7 +222,7 @@
       "owner_authority": false,
       "independently_isolated": true,
       "identity": {
-        "planned": "One lightweight local process for ordinary adapters, with its own identity; custody of integration.sqlite moves to it. It cannot write effect receipts.",
+        "planned": "One lightweight local process for ordinary adapters, with its own identity; custody of integration.sqlite moves to it. It cannot write effect receipts. In bootstrap (U-01.3; Proposed decision 0025) the Integration process runs from the checkout under the tools interpreter as the Owner's OS account, inside decision 0010 point 1's same-account limit, and is custodian of no credential (a verifier only); a separate identity is not decided. The shared identity is recorded when it is built.",
         "observed": null
       },
       "status": "planned",
@@ -967,13 +967,13 @@
       "id": "cred-owner-ui-session",
       "name": "The Owner's UI session credential to the Owner host and Integration process",
       "authority": "owner",
-      "issuer": "external:undefined",
+      "issuer": "owner",
       "holder": "owner",
       "manager": "owner",
       "readable_by": [],
-      "storage": "Not defined: a separate Owner session credential, not shaped like an Agent Server key (decision 0013, point 5). Never in an agent workspace, CI runner, record, log or repository.",
-      "scope": "The Owner UI's session to the Owner-host/Integration process on host loopback.",
-      "lifetime": "The Owner's session (not defined further).",
+      "storage": "Planned (U-01.3; Proposed decision 0025, points 3 and 4): a separate Owner session credential, not shaped like an Agent Server key (decision 0013, point 5): aieh-oui- followed by 52 lower-case base32 characters, a random secret the Owner mints himself with the enroll command at a console, which shows it once. The Owner conversation store keeps only a verifier (sha256 of a fixed domain line and the credential), the session's public id and its expiry; the Owner UI shell keeps its copy in its own origin's localStorage (scheme, host and port), removed by Sign out. Sent in a request header, never a cookie. Never in an agent workspace, CI runner, record, log or repository.",
+      "scope": "The Owner UI's session to the Owner-host/Integration process on host 127.0.0.1:13310.",
+      "lifetime": "Planned: chosen at enrollment (default 12 hours, ceiling 7 days); one session is current, and a new enrollment supersedes it.",
       "rotation_revocation_owner": "owner",
       "status": "planned",
       "sources": [
@@ -981,7 +981,7 @@
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
       ],
       "findings": ["fd-owner-ui-session-plan-silence"],
-      "notes": "No plan leaf named the Integration process's Owner login or this credential (plan silence); fd-owner-ui-session-plan-silence is carried to U-03.1, which builds them (plan reconciliation of 2026-11-08, row O-027)."
+      "notes": "No plan leaf named the Integration process's Owner login or this credential (plan silence). U-01.3 builds them (commitment I1, 2026-11-16; Proposed decision 0025), corrected from U-03.1 (plan reconciliation of 2026-11-08, row O-027); fd-owner-ui-session-plan-silence is carried to U-01.3. Issued only by an Owner act (OA-32 (a) for I1's run). A process of the Owner's account that reads the browser profile can read the shell's copy: inside decision 0010 point 1's disclosed same-account limit. Not built yet."
     },
     {
       "id": "cred-conversation-runtime-access",
@@ -1305,6 +1305,16 @@
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
+      "id": "store-owner-conversation",
+      "name": "The Owner conversation store (conversation.sqlite)",
+      "kind": "store",
+      "custodian": "owner-os-account",
+      "location": "Planned (U-01.3 creates it with its session table, U-02.1 adds threads and messages; Proposed decision 0025, point 6): <state>/owner-host/conversation.sqlite of the managed data root (decision 0009), a store kind of its own on integrations/storecore, not tables in integration.sqlite. The lineage authority for the conversation and message kinds: a user message's bytes are kept as received and are the durable source of every quote; nothing is deleted. Written only by the Integration process and, for sessions, by the Owner's enroll command; it holds the cred-owner-ui-session verifier, never the credential. Owner-session custody during bootstrap.",
+      "status": "planned",
+      "sources": ["decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md", "decisions/0009-managed-data-root-and-configuration-contract.md", "integrations/lineage/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "repo-owner-local",
       "name": "The Owner's local repositories",
       "kind": "repository",
@@ -1330,7 +1340,7 @@
       "name": "Owner host (the Owner UI shell)",
       "kind": "service",
       "custodian": "owner-os-account",
-      "location": "apps/owner-host (U-01.1): the React shell with assistant-ui and Agent Canvas, built to static files; its Vite dev and preview servers bind 127.0.0.1 only with strictPort (5173 and 4173). It holds no credential and connects to no backend yet; it is the Owner UI of decision 0013, in td-owner.",
+      "location": "apps/owner-host (U-01.1): the React shell with assistant-ui and Agent Canvas, built to static files; its Vite dev and preview servers bind 127.0.0.1 only with strictPort (5173 and 4173). It holds no credential and connects to no backend yet; it is the Owner UI of decision 0013, in td-owner. Planned: U-01.3 connects it to the Integration process with cred-owner-ui-session (Proposed decision 0025).",
       "status": "observed",
       "evidence": ["evidence/bootstrap-log.md", "apps/owner-host/vite.config.ts", "evidence/S-01.4-network-matrix.md"],
       "findings": ["fd-owner-ui-access", "fd-owner-ui-session-plan-silence"]
@@ -1340,11 +1350,12 @@
       "name": "The Integration process's host-loopback API for the Owner UI",
       "kind": "api",
       "custodian": "integration-service",
-      "location": "Planned: the Owner-host/Integration process (td-management) on host loopback, reached by the Owner UI with cred-owner-ui-session (decision 0013, point 5). Not built; no plan leaf names its Owner login.",
+      "location": "Planned (U-01.3; Proposed decision 0025): the Owner-host/Integration process (td-management), integrations/ownerhost, Starlette on uvicorn under the tools interpreter, bound to host 127.0.0.1:13310 only and reached by the Owner UI with cred-owner-ui-session (decision 0013, point 5); no route answers without it but the CORS preflight. It opens no outbound connection and has no path to an Agent Server. Not built yet.",
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
-        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md"
       ],
       "findings": ["fd-owner-ui-session-plan-silence"]
     },
@@ -2341,14 +2352,14 @@
       "id": "fd-owner-ui-session-plan-silence",
       "kind": "unknown",
       "title": "No plan leaf names the Integration process's Owner login or the UI session credential",
-      "detail": "Decision 0013 (point 5) makes the Owner UI's credential to the Owner-host/Integration process a separate Owner session credential, not shaped like an Agent Server key. No plan leaf names that login or builds the credential: U-01.1 built the shell with no backend and no credential, U-01.2 wires navigation to engineering detail, and P-04.2 builds the Owner authorization recorder. Recorded as plan silence (S-01.4 ruling R8), not settled here.",
+      "detail": "Decision 0013 (point 5) makes the Owner UI's credential to the Owner-host/Integration process a separate Owner session credential, not shaped like an Agent Server key. No plan leaf names that login or builds the credential: U-01.1 built the shell with no backend and no credential, U-01.2 wires navigation to engineering detail, and P-04.2 builds the Owner authorization recorder. Recorded as plan silence (S-01.4 ruling R8), not settled here. Answered in planning: the I1 commitment (2026-11-16) has U-01.3 build the login and the credential (corrected from U-03.1, plan reconciliation row O-027; Proposed decision 0025); the finding states its answer at U-01.3's verdict.",
       "refs": ["cred-owner-ui-session", "api-integration-service", "integration-service", "app-owner-host"],
       "citations": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
         "evidence/bootstrap-log.md"
       ],
-      "carried_to": ["U-03.1"]
+      "carried_to": ["U-01.3"]
     },
     {
       "id": "fd-owner-credential-custody",

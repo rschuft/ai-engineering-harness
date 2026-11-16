@@ -55,6 +55,7 @@
     "store-effects": "management",
     "store-integration": "management",
     "store-approved-inputs": "management",
+    "store-owner-conversation": "management",
     "repo-owner-local": "repository",
     "repo-github-public": "credential",
     "app-owner-host": "service",
@@ -149,7 +150,7 @@
       "from": "td-owner",
       "to": "td-management",
       "verdict": "allow",
-      "protocol": "http on host loopback",
+      "protocol": "http on host 127.0.0.1:13310 (the Integration process's one fixed port; a busy port is a refusal, never another port)",
       "endpoint": "api-integration-service",
       "credentials": [
         "cred-owner-ui-session"
@@ -164,23 +165,29 @@
           "mechanism": "the Owner UI session credential (cred-owner-ui-session), never shaped like an Agent Server key",
           "kind": "prevention",
           "where": "host"
+        },
+        {
+          "mechanism": "the credential in a request header (X-AIEH-Owner-Session) on every request, never a cookie; Host must be the literal 127.0.0.1:13310 and Origin, when present, one of the shell's two origins (http://127.0.0.1:4173, http://127.0.0.1:5173)",
+          "kind": "prevention",
+          "where": "host"
         }
       ],
       "status": "planned",
       "evidence": [],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"
       ],
-      "verify_at": "U-01.2",
+      "verify_at": "U-01.3",
       "owner_act": false,
       "findings": [
         "fd-owner-ui-session-plan-silence"
       ],
       "inspection": [
-        "planned: U-01.2 (plan silence on its login)"
+        "planned: U-01.3 (guest.py host-census by port 13310: bound to 127.0.0.1 only; every route refuses a request without cred-owner-ui-session)"
       ],
-      "notes": "Decision 0013, point 5. Which leaf builds the credential is unsettled (S-01.4 ruling R8)."
+      "notes": "Decision 0013, point 5. U-01.3 builds the Integration process and its Owner login (commitment I1, 2026-11-16; Proposed decision 0025), corrected from U-01.2: S-01.4 ruling R8's open question is answered by the I1 commitment. Not built yet. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (Proposed decision 0025, point 7)."
     },
     {
       "id": "nm-owner-management-same-account",

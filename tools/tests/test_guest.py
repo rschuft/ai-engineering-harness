@@ -5504,6 +5504,17 @@ class HostCensus(unittest.TestCase):
         self.assertLess(script.index('Where-Object { $ex -notcontains $_.OwningProcess }'),
                         script.index('Get-Process -Id'))
 
+    def test_the_integration_process_port_is_censused_by_port(self):
+        # U-01.3 (Proposed decision 0025): the Integration process's one fixed port, 13310; its
+        # process is only python, so the census finds it by port, beside Gitea's and the Vite servers'.
+        _, script = self.census(self.answer())
+        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort 13300,13310,5173,4173 |', script)
+        out, _ = self.census(self.answer(tcp_by_port=[
+            {'LocalAddress': '0.0.0.0', 'LocalPort': 13310, 'OwningProcess': 6100,
+             'Process': 'python'}]))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['problems'][0]['problem'], 'not bound to 127.0.0.1')
+
     def test_non_loopback_listener_fails(self):
         out, _ = self.census(self.answer(tcp_by_port=[
             {'LocalAddress': '0.0.0.0', 'LocalPort': 4173, 'OwningProcess': 6000,
