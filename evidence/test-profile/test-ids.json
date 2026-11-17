@@ -2749,6 +2749,7 @@
     "test_read_binding.ServedReadBinding.test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it",
     "test_read_binding.ServedReadBinding.test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served",
     "test_read_binding.ServedReadBinding.test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses",
+    "test_read_binding.ServedReadBinding.test_the_failed_scenarios_run_fails_on_its_refused_creates",
     "test_restart_matrix.Rows.test_a_dies_before_the_reservation",
     "test_restart_matrix.Rows.test_b_dies_reserved",
     "test_restart_matrix.Rows.test_c_dies_dispatched_its_create_not_received",
@@ -2816,7 +2817,8 @@
    "skipped": [
     "test_read_binding.ServedReadBinding.test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it",
     "test_read_binding.ServedReadBinding.test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served",
-    "test_read_binding.ServedReadBinding.test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses"
+    "test_read_binding.ServedReadBinding.test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses",
+    "test_read_binding.ServedReadBinding.test_the_failed_scenarios_run_fails_on_its_refused_creates"
    ]
   },
   "repository": {
@@ -3356,6 +3358,7 @@
     "test_process.Process.test_it_listens_on_127_0_0_1_only_and_on_nothing_else",
     "test_process.Process.test_it_loads_no_client_and_no_dispatch_module",
     "test_process.Process.test_it_stops_on_its_stop_request",
+    "test_process.ProcessWithTheDocument.test_the_real_process_validates_a_create_with_the_document_it_was_given",
     "test_process.Transport.test_a_delivery_or_the_ui_face_is_refused_before_anything_is_sent",
     "test_process.Transport.test_an_answer_without_the_label_is_refused",
     "test_process.Transport.test_it_targets_the_literal_loopback_address_and_declares_fixture",
@@ -3369,6 +3372,9 @@
     "test_result.Refused.test_a_result_with_an_exchange_delivery_is_refused_as_before",
     "test_result.Refused.test_a_script_or_a_constant_not_the_builders_is_refused_without_running",
     "test_result.Refused.test_result_before_seed_before_the_turn_or_twice_is_refused",
+    "test_scenarios.LostAcknowledgement.test_the_lost_acknowledgement_is_settled_confirmed_on_its_reserved_conversation",
+    "test_scenarios.Pending.test_the_message_never_arrives_and_the_attempt_is_held_on_its_idle_conversation",
+    "test_scenarios.Unknown.test_the_attempt_stays_unknown_through_reconcile_and_recover",
     "test_served.Authority.test_no_answer_of_the_fixture_can_be_taken_as_live",
     "test_served.CallLog.test_the_call_log_names_face_method_path_and_answer_never_a_body",
     "test_served.Faces.test_each_faces_access_value_is_refused_on_the_other_face",
@@ -3395,6 +3401,10 @@
    "skipped": [
     "test_catalog.Answers.test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served",
     "test_catalog.Routes.test_g4_each_routes_presence_in_the_locked_document_is_as_recorded",
+    "test_process.ProcessWithTheDocument.test_the_real_process_validates_a_create_with_the_document_it_was_given",
+    "test_scenarios.LostAcknowledgement.test_the_lost_acknowledgement_is_settled_confirmed_on_its_reserved_conversation",
+    "test_scenarios.Pending.test_the_message_never_arrives_and_the_attempt_is_held_on_its_idle_conversation",
+    "test_scenarios.Unknown.test_the_attempt_stays_unknown_through_reconcile_and_recover",
     "test_served.LostAcknowledgement.test_the_create_reaches_the_core_its_answer_is_withheld_and_the_lookup_answered",
     "test_served.Unknown.test_the_create_and_every_lookup_reach_the_core_and_are_withheld",
     "test_served.Validated.test_a_valid_create_is_answered_201_and_an_invalid_one_never"
