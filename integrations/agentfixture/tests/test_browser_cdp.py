@@ -77,6 +77,9 @@ class Lines(unittest.TestCase):
                          'DevTools listening on ws://127.0.0.1:1/x')
         with self.assertRaises(EOFError):
             reader.wait_for(lambda l: l.startswith('never'), 30)
+        # a ceiling already passed is a timeout even when a line is there to read
+        with self.assertRaises(TimeoutError):
+            B.LineReader(io.BytesIO(b'ready\n')).wait_for(lambda l: True, 0)
         read, write = os.pipe()
         self.addCleanup(os.close, write)
         with self.assertRaises(TimeoutError):
@@ -115,16 +118,24 @@ class StartFailures(unittest.TestCase):
     def browser(self, script, ceiling=30):
         tmp = Path(tempfile.mkdtemp(prefix='aieh-cdp-'))
         self.addCleanup(lambda: __import__('shutil').rmtree(tmp, ignore_errors=True))
-        launched = {}
+        launched = {'pidfile': tmp / 'pid'}
 
         def launcher(exe, profile, port):
             launched['port'] = port
-            return [str(exe), '-I', '-c', script]
+            # the stand-in records its own pid: the interpreter may be a child of a launcher (a venv's python.exe),
+            # so only the whole tree's end shows that nothing is left behind
+            record = f"import os; open({str(launched['pidfile'])!r}, 'w').write(str(os.getpid())); "
+            return [str(exe), '-I', '-c', record + script]
         b = B.Browser(tmp / 'profile', browser=sys.executable, launcher=launcher, start_ceiling_s=ceiling)
         return b, tmp / 'profile', launched
 
     def assertLeftNothing(self, b, profile, launched):
         self.assertIsNotNone(b.process.poll(), 'the stand-in browser was ended')
+        if launched['pidfile'].exists():
+            pid = launched['pidfile'].read_text(encoding='utf-8')
+            listed = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH', '/FO', 'CSV'], capture_output=True,
+                                    text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).stdout
+            self.assertNotIn(f'"{pid}"', listed, 'the stand-in\'s own interpreter process was ended (the tree)')
         self.assertFalse(profile.exists(), 'the profile was removed')
         with self.assertRaises(OSError):
             socket.create_connection(('127.0.0.1', launched['port']), timeout=5).close()

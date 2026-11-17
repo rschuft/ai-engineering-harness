@@ -233,6 +233,8 @@ describe("the static server's arguments and environment", () => {
       "  TCP    0.0.0.0:13330          0.0.0.0:0              LISTENING       100",
       "  TCP    127.0.0.1:13331        0.0.0.0:0              LISTENING       101",
       "  TCP    127.0.0.1:50000        127.0.0.1:13330        ESTABLISHED     102",
+      "  TCP    127.0.0.1:13330            127.0.0.1:50001        ESTABLISHED     105",
+      "  TCP    127.0.0.1:13330            127.0.0.1:50002        TIME_WAIT       0",
       "  TCP    [::1]:13330            [::]:0                 LISTENING       103",
       "  TCP    192.0.2.7:113330       0.0.0.0:0              LISTENING       104",
     ].join("\r\n");
