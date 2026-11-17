@@ -180,12 +180,13 @@ class Cors(Listener):
         self.assertEqual(self.cors_headers(other), {})
 
     def test_only_a_loopback_http_origin_can_be_configured(self):
-        """Review round 2: localhost, 127.0.0.1 or [::1], http, any port; anything else is refused at start, with a
-        stable code, by the fixture and by the command line."""
-        for origin in ('http://localhost', 'http://127.0.0.1:4173', 'http://[::1]:13330'):
+        """Review round 2: http on localhost or 127.0.0.1, any port, the origins the pinned CORS middleware allows
+        (middleware.py:52-60); anything else, [::1] included, is refused at start, with a stable code, by the
+        fixture and by the command line."""
+        for origin in ('http://localhost', 'http://127.0.0.1:4173', 'http://localhost:13330'):
             SERVER.Fixture('finished', ui_origins=(origin,)).core.close()
         for origin in ('https://127.0.0.1:4173', 'http://evil.example', 'http://127.0.0.2', 'http://localhost.evil',
-                       'http://127.0.0.1:4173/', 'null', 'http://0.0.0.0:80'):
+                       'http://127.0.0.1:4173/', 'null', 'http://0.0.0.0:80', 'http://[::1]:4173'):
             with self.subTest(origin=origin):
                 with self.assertRaises(SERVER.OriginRefused) as caught:
                     SERVER.Fixture('finished', ui_origins=(origin,))

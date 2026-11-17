@@ -388,7 +388,8 @@ own 400, before the application runs) carries no label: no application code sees
 **CORS** (the engineering manager's ruling 2 of E-01.7's review). The dispatcher's face has none: no browser drives
 it, so a preflight there is the labelled 501 and no answer carries an `Access-Control-*` header. The UI face answers a
 browser only from origins configured explicitly (`--ui-origin`; none by default; loopback `http` origins only,
-`localhost`, `127.0.0.1` or `[::1]`, another refused at start with `UI_ORIGIN_NOT_LOOPBACK`), only for `GET` of a route its
+`localhost` or `127.0.0.1`, the origins the pinned CORS middleware allows (`as:openhands/agent_server/middleware.py:52-60`;
+`[::1]` is not one), another refused at start with `UI_ORIGIN_NOT_LOOPBACK`), only for `GET` of a route its
 catalog serves, asking for no header but `X-Session-API-Key`, and never with credentials: the preflight is the
 labelled `ui-preflight` (its status source-derived from the pinned server's own preflight through Starlette's
 `CORSMiddleware`, `as:openhands/agent_server/middleware.py:34-50`), with `Access-Control-Allow-Origin` (that origin),

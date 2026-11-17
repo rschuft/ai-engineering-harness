@@ -74,7 +74,9 @@ KEY_HEADER = 'x-session-api-key'
 SCENARIOS = ('finished', 'running', 'pending', 'failed', 'lost-create-acknowledgement', 'unknown')
 RUNNING_READS = 7                  # the running scenario's UI window: D1's wait read the conversation seven times
 MAX_BODY_DEPTH = 64                # a body nested deeper is malformed: the core copies and walks bodies recursively
-LOOPBACK_ORIGIN = re.compile(r'http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?')
+# the origins the pinned CORS middleware always allows: host localhost or 127.0.0.1
+# (as:openhands/agent_server/middleware.py:52-60); http only, any port
+LOOPBACK_ORIGIN = re.compile(r'http://(localhost|127\.0\.0\.1)(:[0-9]{1,5})?')
 
 
 class OriginRefused(ValueError):
@@ -150,12 +152,11 @@ class Fixture:
         self.ui_origins = tuple(ui_origins)
         refused = [o for o in self.ui_origins if not isinstance(o, str) or LOOPBACK_ORIGIN.fullmatch(o) is None]
         if refused:
-            # a loopback origin only (review round 2), so that ui-preflight's 200 stays the pinned CORS
-            # middleware's: it allows an origin whose host is localhost or 127.0.0.1
-            # (as:openhands/agent_server/middleware.py:52-60); [::1] is admitted as the ruling names it, though
-            # that rule does not list it
-            raise OriginRefused(f'{OriginRefused.code}: {refused!r}: a UI origin must be http on localhost, '
-                                '127.0.0.1 or [::1]')
+            # only an origin the pinned CORS middleware allows (host localhost or 127.0.0.1:
+            # as:openhands/agent_server/middleware.py:52-60), so that ui-preflight's 200 stays derivable from it
+            # (criterion 8; review round 2); [::1] is not one, so it is refused
+            raise OriginRefused(f'{OriginRefused.code}: {refused!r}: a UI origin must be http on localhost or '
+                                '127.0.0.1')
         self._lock = None
         self.core = core if core is not None else core_module().AgentServerCore(
             scratch=scratch, ui_running_reads=RUNNING_READS if scenario == 'running' else 0)
@@ -585,7 +586,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     bad = [o for o in args.ui_origin if LOOPBACK_ORIGIN.fullmatch(o) is None]
     if bad:
-        print(f'{OriginRefused.code}: {bad!r}: a UI origin must be http on localhost, 127.0.0.1 or [::1]',
+        print(f'{OriginRefused.code}: {bad!r}: a UI origin must be http on localhost or 127.0.0.1',
               file=sys.stderr)
         return 2
     return serve(port=args.port, scenario=args.scenario, log=args.log, openapi=args.openapi, state_dir=args.state_dir,
