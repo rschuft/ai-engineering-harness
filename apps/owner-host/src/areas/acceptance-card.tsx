@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAui, type ToolCallMessagePartComponent, type ToolCallMessagePartProps } from "@assistant-ui/react";
+import { useAui, useAuiState, type ToolCallMessagePartComponent, type ToolCallMessagePartProps } from "@assistant-ui/react";
 import { formatAcceptance, type AcceptanceChallenge, type AcceptanceRecord } from "./chat-adapter";
 
 // The acceptance cards (plan leaf P-04.4; integrations/ownerhost/acceptance.py).
@@ -10,7 +10,10 @@ import { formatAcceptance, type AcceptanceChallenge, type AcceptanceRecord } fro
 // criteria that cite it, its authority and outcome, and the expiry), and an
 // Accept form. The form sends, as the Owner's own message, exactly the text
 // its preview shows: "Accept O<n> of <change>" and, when he writes any, his
-// own words. Nothing here decides or records: the service records the
+// own words, appended directly under this card (whatever came after it),
+// so that the run answers it on this card's own challenge: the adapter takes
+// the nonce of the card the acceptance follows, never a later card's.
+// Nothing here decides or records: the service records the
 // acceptance on that message, bound to this session, and answers on the
 // recorded card (ACCEPTANCE_RECORD_TOOL). No text on either card is a
 // model's.
@@ -34,11 +37,12 @@ function isRecord(value: unknown): value is AcceptanceRecord {
 
 function AcceptForm({ change, item }: { change: string; item: string }) {
   const aui = useAui();
+  const card = useAuiState((state) => state.message.id);
   const [words, setWords] = useState("");
   const text = formatAcceptance(change, item, words);
 
   function accept() {
-    aui.thread().append({ role: "user", content: [{ type: "text", text }] });
+    aui.thread().append({ parentId: card, role: "user", content: [{ type: "text", text }] });
     setWords("");
   }
 

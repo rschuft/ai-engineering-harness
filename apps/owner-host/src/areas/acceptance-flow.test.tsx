@@ -37,6 +37,7 @@ const ACCEPT = "Accept O1 of add-slugify\nI accept it — as stated.";
 // hashlib.sha256(ACCEPT.encode('utf-8')).hexdigest(), computed by Python.
 const ACCEPT_SHA256 = "8e82fc30025ef2733b048729e506ca53c7a46d4a4a79ff6edc685e527f3e67ac";
 const NONCE = "c1".repeat(16);
+const SECOND_NONCE = "d2".repeat(16);
 const COMMIT = "89abcdef0123456789abcdef0123456789abcdef";
 const OUTCOME = "6a1f0c2e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
 const SUMMARY = "Owner decision: accept an objective (accept-objective).\nObjective O1: Titles become URL slugs.";
@@ -88,9 +89,11 @@ class FakeIntegration {
       if (!stored) return [404, { code: "MESSAGE_NOT_FOUND" }];
       if (this.refusal) return [this.refusal.status, { code: this.refusal.code, detail: this.refusal.detail }];
       if ((await sha256Hex(stored.message.content[0].text)) !== body.sha256) return [409, { code: "ACCEPTANCE_MESSAGE_MISMATCH" }];
-      this.cards.set(NONCE, body.card);
-      return [200, { nonce: NONCE, change: "add-slugify", item: "O1", revision: "0".repeat(40), proposal: "1".repeat(64),
-                     summary: SUMMARY, expiresAt: "2026-11-17T13:00:00Z", card: body.card, request: stored.message.id }];
+      const nonce = this.cards.size === 0 ? NONCE : SECOND_NONCE;     // a challenge per review
+      this.cards.set(nonce, body.card);
+      return [200, { nonce, change: "add-slugify", item: "O1", revision: "0".repeat(40), proposal: "1".repeat(64),
+                     summary: `${SUMMARY} (${nonce})`, expiresAt: "2026-11-17T13:00:00Z", card: body.card,
+                     request: stored.message.id }];
     }
     if ((m = path.match(/^\/threads\/[^/]+\/messages\/([^/]+)\/acceptance$/))) {
       const stored = this.stored(decodeURIComponent(m[1]));
@@ -147,7 +150,7 @@ describe("the acceptance cards (P-04.4)", () => {
     await send(REVIEW);
     const card = await screen.findByTestId("acceptance-card");
     await waitFor(() => expect(card.getAttribute("data-state")).toBe("shown"));
-    expect(within(card).getByTestId("acceptance-summary").textContent).toBe(SUMMARY);
+    expect(within(card).getByTestId("acceptance-summary").textContent).toBe(`${SUMMARY} (${NONCE})`);
     // the challenge named the review message, its digest, and the card: the assistant message the run wrote
     const [challenge] = fake.calls("acceptance-challenge");
     const review = fake.messages[0].message;
@@ -197,6 +200,30 @@ describe("the acceptance cards (P-04.4)", () => {
     expect(fake.messages[2].message.role).toBe("user");
     expect(fake.messages[2].message.content).toEqual([{ type: "text", text: REVIEW }]);
     expect(fake.calls("acceptance-challenge")[0].body.sha256).toBe(REVIEW_SHA256);
+  });
+
+  it("accepts from an older card on that card's own challenge, under that card", async () => {
+    // The review's probe: two cards for the same item; the FIRST card's Accept form must send the first nonce.
+    const fake = new FakeIntegration(throwawayCredential());
+    renderChat(fake);
+    await send(REVIEW);
+    await waitFor(() => expect(fake.messages).toHaveLength(2));
+    await send(REVIEW);
+    await waitFor(() => expect(screen.getAllByTestId("acceptance-card")).toHaveLength(2));
+    await waitFor(() => expect(fake.messages).toHaveLength(4));
+    const [first] = screen.getAllByTestId("acceptance-card");
+    await waitFor(() => expect(first.getAttribute("data-state")).toBe("shown"));
+    expect(within(first).getByTestId("acceptance-summary").textContent).toBe(`${SUMMARY} (${NONCE})`);
+    await act(async () => {
+      fireEvent.click(within(first).getByRole("button", { name: "Accept O1 of add-slugify" }));
+    });
+    await waitFor(() => expect(fake.calls("acceptance")).toHaveLength(1));
+    const firstCard = fake.messages[1].message.id;
+    const acceptance = fake.messages[4];
+    expect(acceptance.message.role).toBe("user");
+    expect(acceptance.parentId).toBe(firstCard);
+    expect(fake.calls("acceptance")[0].body.nonce).toBe(NONCE);
+    expect(fake.calls("acceptance")[0].status).toBe(200);
   });
 
   it("shows a refused challenge with its stable code and detail, and no Accept form", async () => {
