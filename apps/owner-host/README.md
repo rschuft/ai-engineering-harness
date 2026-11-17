@@ -144,8 +144,9 @@ owns; never a raw projection string, URL or path. The one place that does it is
 `/conversations/<id>`), and the only elements that use it are the outcome card's
 session-detail link and the engineering route's frame
 ([`src/engineering/SessionLinks.tsx`](src/engineering/SessionLinks.tsx)). The
-static test holds every other source to no `href`, `src`, `to=`, `a`, `Link` or
-`iframe`, and holds `SessionLinks.tsx` to exactly three address attributes, each
+static test holds four sources, `outcome-card.tsx`, `outcome-projection.ts`,
+`EngineeringSession.tsx` and `session-detail.ts`, to no `href`, `src`, `to=`, `a`,
+`Link` or `iframe`, and holds `SessionLinks.tsx` to exactly three address attributes, each
 a variable assigned only from the builder; a hostile conversation id (not a
 lower-case UUID: a path, a URL, upper case) yields no link and no frame
 (`outcome-card.test.tsx`, `src/engineering/session-detail.test.ts`,
@@ -405,9 +406,10 @@ and no frame.
   any attribute, the shell sends the frame nothing, and every request the shell makes is to the Integration process
   with the session header, none to the Canvas origin (`engineering-session.test.tsx`).
 - `sandbox="allow-scripts allow-same-origin allow-forms"`: the minimum the standalone application needs (its scripts;
-  its own origin, for its storage and its same-origin requests through upstream's proxy; forms, for its composer and
-  dialogs). No popups, top-level navigation, modals or downloads. Scripts and its own origin together let a framed
-  page lift its own sandbox, but it is another origin than the shell's, so the sandbox is defence in depth.
+  its own origin, for its storage and its same-origin requests through upstream's proxy; forms, accepted by the
+  engineering manager because Canvas's composer and dialogs are forms). No popups, top-level navigation, modals or
+  downloads. A framed page can lift its own sandbox only when it is on its embedder's origin; this frame is
+  cross-origin to the shell (another port), so it cannot.
 - `referrerPolicy="no-referrer"` (the shell's address is not sent), `allow=""` (no permission is delegated).
 
 **Not yet verified:** the frame in a real browser. Gate G5 stopped (its egress and the consent write are with
@@ -423,10 +425,14 @@ standalone application, served by upstream's own `scripts/static-server.mjs` on 
 (the I1 design, R14 and R15; decision 0026 points 8 and 9, Proposed). Its edges and asset were recorded first
 (`nm-owner-ui-canvas`, `nm-canvas-agentfixture-ui`, `app-agent-canvas`; census port 13330).
 
+**Do not open `npm run canvas:serve` in a normal browser** until planning has disposed of the open question (the I1 blocker recorded on TASK-10): with the default derived copy, Canvas's onboarding and home view load MCP-catalog logos from `https://cdn.simpleicons.org`, a request off loopback (gate G5, below). The `--csp` option, off by default and not adopted, prevents it.
+
 **The start command** is `npm run canvas:serve` ([`scripts/canvas-standalone.mjs`](scripts/canvas-standalone.mjs),
 its tests beside it): it checks the installed package against `package-lock.json`, derives the copy of `build/`
 (the two font imports removed, checked byte for byte; `--csp` adds the content-security policy, off by default),
-and runs upstream's server with G6's command line below; `npm run canvas:derive` only derives. The font rule both
+and runs upstream's server with G6's command line below; `npm run canvas:derive` only derives. It refuses an
+output directory inside the package or around it, replaces only its own earlier copy (its `derived.json` beside it),
+and refuses a port in use on any address (`PORT_IN_USE`). The font rule both
 it and the library build plugin apply is one module, [`scripts/remote-imports.mjs`](scripts/remote-imports.mjs).
 
 The two gates' decision rules below were written and committed **before** the Canvas server first listened and

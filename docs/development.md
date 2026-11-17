@@ -1837,7 +1837,11 @@ the component lock's versions for every package they share. Install it with
 `npm run dev` and `npm run preview` serve the app on 127.0.0.1 only. Neither has a
 Task target.
 
-**The standalone Agent Canvas server (U-01.2, built; its gate G5 not passed).** `npm run canvas:serve`
+**The standalone Agent Canvas server (U-01.2, built; its gate G5 not passed).** **Do not open `npm run
+canvas:serve` in a normal browser** until planning has disposed of the open question (the I1 blocker recorded on
+TASK-10): with the default derived copy, Canvas's onboarding and home view load MCP-catalog logos from
+`https://cdn.simpleicons.org`, a request off loopback; the `--csp` option (off by default, not adopted) prevents it.
+`npm run canvas:serve`
 (`node scripts/canvas-standalone.mjs serve [--build-dir DIR] [--port 13330] [--fixture-port 13320]`, in
 `apps/owner-host`) derives a copy of the pinned Canvas package's standalone `build/` with its two remote Google
 Fonts `@import` rules removed (checked byte for byte: nothing else differs), then runs upstream's own

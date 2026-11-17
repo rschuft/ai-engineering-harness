@@ -259,8 +259,13 @@
           "where": "host"
         },
         {
-          "mechanism": "no request beyond loopback by configuration: upstream's --disable-telemetry, and a derived copy of the pinned build/ whose only difference is the two remote Google Fonts @import rules removed (the U-01.1 ruling; no JavaScript file changed)",
+          "mechanism": "telemetry disabled by upstream's --disable-telemetry, and Canvas's two remote Google Fonts @import rules removed in a derived copy of the pinned build/ (the U-01.1 ruling; no JavaScript file changed): these two remote sources only",
           "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "not prevented by default: the default derived copy is not egress-free: gate G5 (2026-11-17, apps/owner-host/README.md) observed Canvas's onboarding and home view load MCP-catalog logos from https://cdn.simpleicons.org (14 requests answered in the first run; every later run blocked them at the browser). The matter is open with planning. The derive step's --csp option, off by default and not adopted (evidence for planning), prevents it (img-src 'self' data:). Until planning disposes of it, npm run canvas:serve must not be opened in a normal browser.",
+          "kind": "disclosure",
           "where": "host"
         }
       ],
@@ -278,7 +283,7 @@
       "inspection": [
         "planned: U-01.2 (gate G6: guest.py host-census by port 13330, the one listener on 127.0.0.1; gate G5: the page's own network log in a real browser, every request to 127.0.0.1)"
       ],
-      "notes": "The I1 design (evidence/I1-integration-design-2026-11-16.md), R7, R14 and section 5 N7, recorded at U-01.2 (slice 13) before the Canvas server first listens. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection beyond its proxy route to the fixture's UI face (nm-canvas-agentfixture-ui) and holds no credential: its access value is the fixture's public labelled constant (decision 0026 point 9; the I1 design R15)."
+      "notes": "The I1 design (evidence/I1-integration-design-2026-11-16.md), R7, R14 and section 5 N7, recorded at U-01.2 (slice 13) before the Canvas server first listens. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection beyond its proxy route to the fixture's UI face (nm-canvas-agentfixture-ui) and holds no credential: its access value is the fixture's public labelled constant (decision 0026 point 9; the I1 design R15). Correction (U-01.2 review S1): the default derived copy is not egress-free: gate G5 (2026-11-17, apps/owner-host/README.md) observed Canvas's onboarding and home view load MCP-catalog logos from https://cdn.simpleicons.org (14 requests answered in the first run; every later run blocked them at the browser). The matter is open with planning. The derive step's --csp option, off by default and not adopted (evidence for planning), prevents it (img-src 'self' data:). Until planning disposes of it, npm run canvas:serve must not be opened in a normal browser."
     },
     {
       "id": "nm-canvas-agentfixture-ui",

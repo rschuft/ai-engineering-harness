@@ -33,11 +33,11 @@ export function SessionDetailLink({ outcome, conversation }: { outcome: unknown;
  * - `sandbox="allow-scripts allow-same-origin allow-forms"`, the minimum the standalone application needs: its
  *   scripts; its own origin (its storage holds the backend registry and its onboarding state, and its requests go
  *   to its own origin through upstream's proxy; without it the frame's origin would be opaque and those requests
- *   cross-origin, which the server does not allow); and forms (its composer and dialogs are forms). Not granted:
- *   popups, top-level navigation, modals, downloads, pointer lock, presentation. Scripts and its own origin together
- *   let a framed page lift its own sandbox, but it is another origin than the shell's, so it can reach nothing of
- *   the shell's; the sandbox is defence in depth, and the shell's own content-security policy frames this origin
- *   only (`frame-src http://127.0.0.1:13330`).
+ *   cross-origin, which the server does not allow); and forms (accepted by the engineering manager: Canvas's
+ *   composer and dialogs are forms). Not granted: popups, top-level navigation, modals, downloads, pointer lock,
+ *   presentation. A framed page can lift its own sandbox only when it is on its embedder's origin; this frame is
+ *   cross-origin to the shell (127.0.0.1:13330, not the shell's port), so it cannot, and it can reach nothing of the
+ *   shell's. The shell's own content-security policy frames this origin only (`frame-src http://127.0.0.1:13330`).
  * - `referrerPolicy="no-referrer"`: the frame's request carries no Referer (the shell's address).
  * - `allow=""`: no permission-policy feature (camera, microphone, geolocation, clipboard ...) is delegated.
  *
