@@ -1,0 +1,16 @@
+{
+ "scenario": "refused-outcome-invalid",
+ "source": "a path that names no outcome (test_projection.Route)",
+ "generatedBy": "integrations/ownerhost/tests/outcome_card_fixtures.py",
+ "route": "GET /outcomes/{outcome_id}",
+ "answers": [
+  {
+   "status": 400,
+   "body": {
+    "code": "OUTCOME_INVALID",
+    "detail": "the path does not name an outcome id",
+    "remedy": "name the outcome by its id: GET /outcomes/<uuid> (the id of outcome:<uuid>)"
+   }
+  }
+ ]
+}

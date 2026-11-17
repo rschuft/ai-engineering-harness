@@ -16,7 +16,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts", "scripts/**/*.test.mjs"],
+    include: ["src/**/*.test.{ts,tsx,mjs}", "build/**/*.test.ts", "scripts/**/*.test.mjs"],
     restoreMocks: true,
     // Vitest blanks CSS by default. The stylesheet tests read the Canvas and
     // shell stylesheets as text (?raw); stylesheets imported for their effect

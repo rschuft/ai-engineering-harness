@@ -106,11 +106,20 @@ export const ACCEPTANCE_CODES = [
   "SESSION_BINDING_REQUIRED",
   "SESSION_BINDING_REFUSED",
 ] as const;
+/** The refusals of the outcome projection's route (plan leaf U-04.1; integrations/ownerhost/projection.py STATUS). */
+export const PROJECTION_CODES = [
+  "OUTCOME_INVALID",
+  "PROJECTION_PROJECT_UNCONFIGURED",
+  "PROJECTION_CONFIG_INVALID",
+  "PROJECTION_STORE_UNCONFIGURED",
+  "PROJECTION_BACKLOG_UNAVAILABLE",
+] as const;
 export type RefusalCode =
   | (typeof CREDENTIAL_CODES)[number]
   | (typeof CONVERSATION_CODES)[number]
   | (typeof CAPTURE_CODES)[number]
   | (typeof ACCEPTANCE_CODES)[number]
+  | (typeof PROJECTION_CODES)[number]
   | "ACCEPTANCE_NO_CARD"
   | "HOST_NOT_ALLOWED"
   | "ORIGIN_NOT_ALLOWED"
@@ -189,6 +198,11 @@ export const REFUSAL_TEXT: Record<RefusalCode, string> = {
   COMMIT_REFUSED: "The project repository refused the commit; nothing was written. The receipt stays reserved: accept again once repaired.",
   SESSION_BINDING_REQUIRED: "The acceptance must be bound to your Owner UI session.",
   SESSION_BINDING_REFUSED: "The acceptance is not bound to the session that sent it.",
+  OUTCOME_INVALID: "The card does not name an outcome id the Integration process accepts.",
+  PROJECTION_PROJECT_UNCONFIGURED: "No project repository is configured for the Owner host (components.owner_host), so no outcome can be shown.",
+  PROJECTION_CONFIG_INVALID: "The Owner host's project configuration (components.owner_host) is not valid, so no outcome can be shown.",
+  PROJECTION_STORE_UNCONFIGURED: "The Integration process was started without its integration store, so no outcome can be shown.",
+  PROJECTION_BACKLOG_UNAVAILABLE: "The configured Backlog.md command cannot be run, so no outcome can be shown.",
 };
 
 export interface OwnerSession {

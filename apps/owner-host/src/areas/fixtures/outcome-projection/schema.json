@@ -1,0 +1,63 @@
+{
+ "generatedBy": "integrations/ownerhost/tests/outcome_card_fixtures.py",
+ "format": "outcome-projection/v1",
+ "statuses": [
+  "pending",
+  "running",
+  "failed",
+  "unknown",
+  "succeeded"
+ ],
+ "codes": [
+  "ATTEMPT_AUTHORITY_UNBOUND",
+  "ATTEMPT_LABEL_MISSING",
+  "ATTEMPT_LABEL_MISMATCH",
+  "ATTEMPT_LABEL_ON_LIVE",
+  "RECORD_UNREADABLE",
+  "ATTEMPT_RESERVED",
+  "CREATE_SENT",
+  "CREATE_OUTCOME_UNKNOWN",
+  "ATTEMPT_FAILED",
+  "LAUNCH_NOT_LAUNCHED",
+  "ATTEMPT_STOPPED",
+  "ATTEMPT_ENDED",
+  "ATTEMPT_END_UNSETTLED",
+  "ATTEMPT_ENDING",
+  "RESULT_PUBLISHED",
+  "RESULT_FAILED",
+  "RESULT_WRITE_UNSETTLED",
+  "RESULT_PUBLISHING",
+  "RESULT_VERIFIED",
+  "RESULT_DELIVERED",
+  "TURN_OUTCOME_UNKNOWN",
+  "TURN_FAILED",
+  "TURN_SENT",
+  "MESSAGE_SENDING",
+  "MESSAGE_RESERVED",
+  "LAUNCHED",
+  "CREATED",
+  "NO_ATTEMPT",
+  "STORE_UNAVAILABLE",
+  "RESULT_RECEIPT_UNSETTLED"
+ ],
+ "unprovenSuffix": "_UNPROVEN",
+ "noAttemptCodes": [
+  "NO_ATTEMPT",
+  "NO_ATTEMPT_UNPROVEN",
+  "STORE_UNAVAILABLE"
+ ],
+ "fixtureAuthority": "FIXTURE_AUTHORITY",
+ "coverage": {
+  "archivedTasksEnumerable": false,
+  "code": "ARCHIVED_TASKS_NOT_ENUMERABLE",
+  "basis": "Backlog.md 1.55.3 task list --json",
+  "detail": "task list --json does not list an archived task, and no read command enumerates one; task view <id> --json reads it. A task is reached when Backlog.md lists it (its references cite the outcome or its design) or when an attempt reservation cites it and the outcome, archived or not: a task archived with no attempt citing the outcome is not shown."
+ },
+ "refusals": {
+  "OUTCOME_INVALID": 400,
+  "PROJECTION_PROJECT_UNCONFIGURED": 503,
+  "PROJECTION_CONFIG_INVALID": 503,
+  "PROJECTION_STORE_UNCONFIGURED": 503,
+  "PROJECTION_BACKLOG_UNAVAILABLE": 503
+ }
+}

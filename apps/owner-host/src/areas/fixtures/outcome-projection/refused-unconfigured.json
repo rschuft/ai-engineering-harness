@@ -1,0 +1,16 @@
+{
+ "scenario": "refused-unconfigured",
+ "source": "no project configured (test_projection.Route)",
+ "generatedBy": "integrations/ownerhost/tests/outcome_card_fixtures.py",
+ "route": "GET /outcomes/{outcome_id}",
+ "answers": [
+  {
+   "status": 503,
+   "body": {
+    "code": "PROJECTION_PROJECT_UNCONFIGURED",
+    "detail": "components.owner_host is not set",
+    "remedy": "set components.owner_host (project_repository, project_repository_id, backlog_command) in config.yml and restart the Integration process"
+   }
+  }
+ ]
+}

@@ -470,6 +470,32 @@ that cites the outcome. A known hazard of the pin, shown by a test and not fixed
 task's id and the next task takes it, so a reference to the deleted task resolves to the later one (a work reference
 carries no digest).
 
+### The outcome card (U-04.2)
+
+The Owner host shows the projection as an outcome card in the chat
+([`apps/owner-host/README.md`](../../apps/owner-host/README.md#the-outcome-card-u-042)); the card only reads this route.
+No route changed and the projection's behaviour did not change. The card's tests run against real answers of this
+route, committed beside the card (`apps/owner-host/src/areas/fixtures/outcome-projection/`, one file per scenario and
+`schema.json`, the projection's constants). `tests/outcome_card_fixtures.py` makes them: each scenario's attempt is
+written by the dispatcher's own writers on a throwaway store through `test_projection.Base`, its project, conversation
+store and Backlog.md output are `test_projection.Outcome`'s, and its answer is the route's own status and body, through
+the session, Host and Origin guards. `tests/test_outcome_card_fixtures.py` pins them: every scenario is made again and
+must have the committed answers' shape (every key at every depth, with its value's type) and decisive values (statuses,
+codes, authorities, failures, uncertainties, coverage), and `schema.json` must equal the projection's constants. A
+change of the projection's schema fails that test until the fixtures are exported again:
+
+```
+<tools python> -I -B integrations/ownerhost/tests/outcome_card_fixtures.py
+```
+
+The digests and commits in the fixtures differ from export to export (the published attempts' commits carry their
+time); the shape and the decisive values do not. `tests/test_outcome_card_http.py` is the card end to end over HTTP:
+this application, in the test's process, serves the real projection of a published fixture attempt on a free loopback
+port (never 13310, 13320 or 13330), and the Owner host's own card and Integration client render it under the pinned
+Vitest (`apps/owner-host/src/areas/outcome-card.http.test.mjs`), twice, with a teardown between (a reload); the
+application decides exactly those two GETs. It runs when Node.js is on PATH and `apps/owner-host/node_modules` is
+installed, and is skipped otherwise (a clean clone without `npm ci` there).
+
 ## What it never does
 
 Decision 0025 point 2, each with its test: it opens no outbound connection, and the server process holds itself to
@@ -549,5 +575,8 @@ rather than skip, when the port is already held. `test_pending_decision.py` uses
 - U-04.1's verdict (built 2026-11-17; its tests PASS offline with throwaway stores, repositories and Backlog.md's
   recorded output): no projection of a real project repository, the live Backlog.md, a live attempt or a real
   browser; the coverage limit of archived tasks and the reuse of a deleted task's id are the pin's, not fixed.
+- U-04.2's verdict (built 2026-11-17; the outcome card's tests PASS offline over the projection's committed answers and
+  end to end over HTTP against this application in a test process): no real browser has rendered the card, and no
+  projection of a real project or a live attempt has been shown in it.
 - Linux and macOS (the platform contract's adapters, F-06.4 and F-06.5).
 - Ending with the Owner's session or a reboot (the job's declared behaviour, as for Gitea).

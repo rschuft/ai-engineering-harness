@@ -45,9 +45,10 @@ mounted while the area changes.
 | `SignIn`, `SessionControl` | `src/identity/SignIn.tsx`, `src/identity/SessionControl.tsx` | The login view, and the header's "Sign in" link or "Sign out" button. |
 | `ChatArea`, `StoredChat` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`; signed in, `useRemoteThreadListRuntime` over `useLocalRuntime` with `ThreadListPrimitive`, `ActionBarPrimitive.Edit` and `BranchPickerPrimitive`. |
 | `createThreadListAdapter`, `createHistoryAdapter` | `src/areas/conversation-adapters.ts` | The `RemoteThreadListAdapter` and the per-thread `ThreadHistoryAdapter` (through `unstable_useAdapters`) over the Integration process's thread and history routes (U-02.1). |
-| `acknowledgingChatAdapter`, `modelFreeChatAdapter`, `createCapturingChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run; since P-01.3 the signed-in chat's adapter, which asks the Integration process to capture a message in the request layout and replies with its card; since P-04.4 it also answers a `Review acceptance: O<n> of <change>` message with the acceptance card (the challenge, asked for the card the run writes) and an `Accept O<n> of <change>` message with the recorded card (on the nonce of the card it follows); any other message gets the acknowledgement. |
+| `acknowledgingChatAdapter`, `modelFreeChatAdapter`, `createCapturingChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run; since P-01.3 the signed-in chat's adapter, which asks the Integration process to capture a message in the request layout and replies with its card; since P-04.4 it also answers a `Review acceptance: O<n> of <change>` message with the acceptance card (the challenge, asked for the card the run writes) and an `Accept O<n> of <change>` message with the recorded card (on the nonce of the card it follows), and since U-04.2, once the acceptance is recorded, the accepted outcome's card beside it; any other message gets the acknowledgement. |
 | `RequestForm`, `CaptureCard` | `src/areas/RequestForm.tsx`, `src/areas/capture-card.tsx` | The request form (P-01.3): the change's name, its objective, its acceptance criteria and suggestions as labelled one-line fields, sent as one message in the fixed layout shown in its preview; and the card that shows the capture's answer (the change and its commit) or its refusal with the stable code. |
 | `AcceptanceCard`, `AcceptanceRecordCard` | `src/areas/acceptance-card.tsx` | The acceptance cards (P-04.4), assistant-ui tool UIs: the recorder's summary as the Integration process answered it, its expiry and an Accept form whose preview is exactly the message it sends, appended under its own card; and the recorded acceptance (the outcome id, minted or kept, the commit, the statement's reference) or the refusal with its stable code. The capture card offers the review of its change's objective. |
+| `OutcomeCard`, `OutcomeProjectionCard`, `OutcomeClientContext` | `src/areas/outcome-card.tsx`, `src/areas/outcome-projection.ts` | The outcome card (U-04.2), an assistant-ui tool UI after a recorded acceptance: the Integration process's outcome projection read afresh whenever it is shown (why, the approach, the linked Work, each attempt's status and authority, observed and asserted evidence, blockers and missing sources, uncertainties and coverage), read-only and rendered as text. |
 | `DecisionToolUI`, `UnknownToolUI`, `HUMAN_TOOL_NAMES` | `src/areas/decision-tool.tsx` | The tool UI for a pending Owner decision (U-02.2): the `owner_decision` human tool's question and one button per option while it is pending, the answer once given; any other tool call is named, never run. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
@@ -276,6 +277,66 @@ the card the message follows and the message's sha256, and replies with the reco
 ([the Integration process's acceptance](../../integrations/ownerhost/README.md#objective-acceptance-p-044)).
 [`src/areas/acceptance-flow.test.tsx`](src/areas/acceptance-flow.test.tsx) shows it against a fake
 Integration process. A real browser is **not yet verified**.
+
+## The outcome card (U-04.2)
+
+Once the Owner's acceptance is recorded, the recorded card's reply also holds the accepted
+outcome's card ([`src/areas/outcome-card.tsx`](src/areas/outcome-card.tsx)), an `outcome_card`
+tool call whose args and result name only the outcome id. The card reads the Integration
+process's read-only outcome projection, `GET /outcomes/{outcome_id}`
+([U-04.1](../../integrations/ownerhost/README.md#outcome-projection-u-041)), through the chat's
+Integration client with the session header, each time it is shown: on a reload, a reconnect or a
+replay of the thread it reads the projection again, and the thread keeps no copy of it. "Read
+again" reads it once more. That GET is its only request: it writes nothing, never sets a Work
+item's status, and calls no Agent Server, Gitea or Backlog.md. For the outcome it shows:
+
+- **why**: the objective's statement, its item and change, and the Owner statements it cites;
+- **the accepted approach**: the design references, each with its resolution and freshness;
+- **the linked Work**: each task's reference, whether it resolves, how it was reached and its
+  latest attempt's status. A task's own Backlog.md status is not part of the projection, and the
+  card neither shows an inferred one nor sets one;
+- **the current stage**: each attempt's Work item, stage and ordinal, its `executionStatus` as one
+  of pending, running, failed, unknown or succeeded, its code and the code's meaning in plain
+  words, the projection's detail and the record that shows it. `succeeded` reads "Result published,
+  verified at publication", never done or complete; `unknown` is shown as unknown, and so is any
+  status value the card does not know; an `_UNPROVEN` code says why (the records crossed a restore,
+  the row it would have been and the epochs); the records `disclosed` beside a published result are
+  listed;
+- **the authority** of each attempt: live, `FIXTURE` (on the card and on each fixture-bound
+  attempt, whenever the projection says the authority is `fixture`, R11), or unknown with its code;
+- **evidence**: what the host verified (the commit, the diff with the Owner report's digests, the
+  draft pull request, the host's intake, the result receipt and its bundle), kept apart from what
+  the attempt asserted (its report and its own tests, the test output's digest), by the basis the
+  projection states; each reference and digest is shown as such, with a Copy button. The "session
+  detail" source action is a disabled placeholder, "Session detail: not available yet": it belongs
+  to U-01.2;
+- **blockers and missing sources**, none hidden: each unresolved reference (a `failed` lineage),
+  an integration store that was not read, a task whose latest status is failed or unknown, an
+  attempt whose authority is not shown, an open restore epoch, a missing objective, design or
+  coverage note; then every lineage uncertainty and the `coverage` note (archived tasks not
+  enumerable);
+- a refused projection with its stable code, its text and the service's detail.
+
+Every value is rendered as text (R14): no markup, link or HTML is made from the projection's
+strings, and the projection already withholds the pull request's title and message text. The card
+lays its sections out in two columns at and above the shell's 900 px breakpoint and stacks them
+below (its own `data-layout`, from `layout.ts`).
+
+Its tests run against real answers of the route, committed in
+[`src/areas/fixtures/outcome-projection/`](src/areas/fixtures/outcome-projection/) and made by
+`integrations/ownerhost/tests/outcome_card_fixtures.py` from records the dispatcher's own writers
+made; `test_outcome_card_fixtures.py` there pins them to the projection's schema.
+[`src/areas/outcome-card.test.tsx`](src/areas/outcome-card.test.tsx) renders every fixture: each
+status, `_UNPROVEN`, `disclosed`, the lineage verdicts `failed` and `incomplete`, the coverage
+note, an unreadable store, the refusals, fixture, live and unknown authority, the evidence's two
+bases, inert text, the requests, and the layout at the breakpoint.
+[`src/areas/outcome-reconnect.test.tsx`](src/areas/outcome-reconnect.test.tsx) is the reconnect
+acceptance fixture: the card appears after an acceptance, the shell is torn down and made again,
+and the same card is shown from a fresh read with nothing written again; a projection that changed
+in between (running, then published) is shown as its new state.
+[`src/areas/outcome-card.http.test.mjs`](src/areas/outcome-card.http.test.mjs) is the card end to
+end over HTTP, run only by `integrations/ownerhost/tests/test_outcome_card_http.py` (skipped in
+this suite). A real browser is **not yet verified**.
 
 ## The standalone Agent Canvas (U-01.2): gates G6 and G5
 
@@ -528,3 +589,7 @@ and npm 11.17.0 on Windows 11 x86_64, in jsdom and in the production build.
 - The sign-in against the running Integration process in a real browser, the
   content-security policy as a browser enforces it, and the Owner's own
   credential (OA-32 (a)). The tests use a fake Integration process.
+- The outcome card (U-04.2) in a real browser, its two-column and stacked layouts as CSS lays them
+  out, and a projection of a real project or a live attempt. Its jsdom tests use the projection's
+  committed answers, and its end-to-end test renders it in jsdom from the Integration process's
+  application serving a fixture attempt's projection on a loopback port.

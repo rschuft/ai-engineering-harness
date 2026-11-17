@@ -117,6 +117,12 @@ export type CaptureResult =
 export const ACCEPTANCE_TOOL = "objective_acceptance";
 /** The recorded acceptance's card. */
 export const ACCEPTANCE_RECORD_TOOL = "objective_acceptance_recorded";
+/**
+ * The outcome card (plan leaf U-04.2; outcome-card.tsx), the second part of a recorded acceptance's
+ * reply: its args and its result name only the outcome id the acceptance answered. The card reads
+ * the outcome projection whenever it is shown, so the thread keeps no copy of it.
+ */
+export const OUTCOME_TOOL = "outcome_card";
 
 const ITEM = "O[1-9][0-9]*";
 const CHANGE = "[a-z0-9]+(?:-[a-z0-9]+)*";
@@ -326,7 +332,24 @@ export function createCapturingChatAdapter(client: IntegrationClient, thread: ()
             result = { recorded: false, ...refused(error) };
           }
         }
-        return toolReply(`accepted-${last.id}`, ACCEPTANCE_RECORD_TOOL, args, result);
+        const reply = toolReply(`accepted-${last.id}`, ACCEPTANCE_RECORD_TOOL, args, result);
+        if (!result.recorded) return reply;
+        // U-04.2: the accepted outcome's card, read from the projection whenever it is shown.
+        const outcome = { outcome: result.outcome };
+        return {
+          ...reply,
+          content: [
+            ...reply.content,
+            {
+              type: "tool-call" as const,
+              toolCallId: `outcome-${last.id}`,
+              toolName: OUTCOME_TOOL,
+              args: outcome,
+              argsText: JSON.stringify(outcome),
+              result: outcome,
+            },
+          ],
+        };
       }
       if (last === undefined || text === null || !isCaptureRequest(text)) {
         return { content: [{ type: "text", text: ACKNOWLEDGEMENT }] };

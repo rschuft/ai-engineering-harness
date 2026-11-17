@@ -18,11 +18,13 @@ import {
   ACCEPTANCE_RECORD_TOOL,
   ACCEPTANCE_TOOL,
   CAPTURE_TOOL,
+  OUTCOME_TOOL,
   createCapturingChatAdapter,
   modelFreeChatAdapter,
 } from "./chat-adapter";
 import { CaptureCard } from "./capture-card";
 import { AcceptanceCard, AcceptanceRecordCard } from "./acceptance-card";
+import { OutcomeCard, OutcomeClientContext } from "./outcome-card";
 import { RequestForm } from "./RequestForm";
 import { createThreadListAdapter } from "./conversation-adapters";
 import { HUMAN_TOOL_NAMES, TOOL_COMPONENTS } from "./decision-tool";
@@ -47,7 +49,7 @@ function UserMessage() {
 
 /**
  * The tool UIs of the chat: a pending decision (U-02.2), a captured request's card (P-01.3), and the acceptance
- * challenge and recorded acceptance cards (P-04.4).
+ * challenge and recorded acceptance cards (P-04.4), and the accepted outcome's card (U-04.2).
  */
 const CHAT_TOOLS = {
   ...TOOL_COMPONENTS,
@@ -56,6 +58,7 @@ const CHAT_TOOLS = {
     [CAPTURE_TOOL]: CaptureCard,
     [ACCEPTANCE_TOOL]: AcceptanceCard,
     [ACCEPTANCE_RECORD_TOOL]: AcceptanceRecordCard,
+    [OUTCOME_TOOL]: OutcomeCard,
   },
 };
 
@@ -141,7 +144,12 @@ function UnconnectedChat() {
  * P-04.4: a "Review acceptance: O<n> of <change>" message (the capture card's
  * review button sends one) is answered with the acceptance card, whose Accept
  * form sends the Owner's acceptance as his own message; the reply to that is
- * the recorded acceptance's card. CHAT_MODEL is the
+ * the recorded acceptance's card.
+ *
+ * U-04.2: a recorded acceptance's reply also holds the accepted outcome's
+ * card, which reads the Integration process's outcome projection through
+ * this chat's CLIENT each time it is shown (a reload or a replay of the
+ * thread reads it again). CHAT_MODEL is the
  * run's model adapter: unless one is given, the capturing adapter, which
  * answers any other message with the fixed acknowledgement.
  */
@@ -166,30 +174,32 @@ export function StoredChat({ client, chatModel }: { client: IntegrationClient; c
   const runtime = useRemoteThreadListRuntime({ runtimeHook, adapter });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="owner-chat__layout" data-testid="chat-stored">
-        <ThreadListPrimitive.Root className="owner-chat__threads" aria-label="Threads" data-testid="chat-threads">
-          <ThreadListPrimitive.New className="owner-chat__new-thread">New thread</ThreadListPrimitive.New>
-          <ThreadListPrimitive.Items components={{ ThreadListItem }} />
-        </ThreadListPrimitive.Root>
-        <ThreadPrimitive.Root className="owner-chat" data-testid="chat-thread">
-          <ThreadPrimitive.Viewport className="owner-chat__viewport">
-            <ThreadPrimitive.Empty>
-              <EmptyState title="No messages in this thread" testId="chat-empty">
-                <p>
-                  Messages are kept in the Owner conversation store. No chat model is connected: each reply is a fixed
-                  acknowledgement.
-                </p>
-              </EmptyState>
-            </ThreadPrimitive.Empty>
-            <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, EditComposer }} />
-          </ThreadPrimitive.Viewport>
-          <ComposerPrimitive.Root className="owner-chat__composer">
-            <ComposerPrimitive.Input className="owner-chat__input" aria-label="Message" placeholder="Write to the Owner host" />
-            <ComposerPrimitive.Send className="owner-chat__send">Send</ComposerPrimitive.Send>
-          </ComposerPrimitive.Root>
-          <RequestForm />
-        </ThreadPrimitive.Root>
-      </div>
+      <OutcomeClientContext.Provider value={client}>
+        <div className="owner-chat__layout" data-testid="chat-stored">
+          <ThreadListPrimitive.Root className="owner-chat__threads" aria-label="Threads" data-testid="chat-threads">
+            <ThreadListPrimitive.New className="owner-chat__new-thread">New thread</ThreadListPrimitive.New>
+            <ThreadListPrimitive.Items components={{ ThreadListItem }} />
+          </ThreadListPrimitive.Root>
+          <ThreadPrimitive.Root className="owner-chat" data-testid="chat-thread">
+            <ThreadPrimitive.Viewport className="owner-chat__viewport">
+              <ThreadPrimitive.Empty>
+                <EmptyState title="No messages in this thread" testId="chat-empty">
+                  <p>
+                    Messages are kept in the Owner conversation store. No chat model is connected: each reply is a fixed
+                    acknowledgement.
+                  </p>
+                </EmptyState>
+              </ThreadPrimitive.Empty>
+              <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, EditComposer }} />
+            </ThreadPrimitive.Viewport>
+            <ComposerPrimitive.Root className="owner-chat__composer">
+              <ComposerPrimitive.Input className="owner-chat__input" aria-label="Message" placeholder="Write to the Owner host" />
+              <ComposerPrimitive.Send className="owner-chat__send">Send</ComposerPrimitive.Send>
+            </ComposerPrimitive.Root>
+            <RequestForm />
+          </ThreadPrimitive.Root>
+        </div>
+      </OutcomeClientContext.Provider>
     </AssistantRuntimeProvider>
   );
 }

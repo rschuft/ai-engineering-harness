@@ -1,0 +1,853 @@
+{
+ "scenario": "store-unavailable",
+ "source": "the integration store unreadable (test_projection.Outcome)",
+ "generatedBy": "integrations/ownerhost/tests/outcome_card_fixtures.py",
+ "route": "GET /outcomes/{outcome_id}",
+ "answers": [
+  {
+   "status": 200,
+   "body": {
+    "format": "outcome-projection/v1",
+    "outcome": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+    "lineageVerdict": "incomplete",
+    "objective": {
+     "reference": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+     "kind": "objective",
+     "role": "objective",
+     "authority": "OpenSpec",
+     "authority_mode": "authoritative",
+     "pinned": false,
+     "resolution": {
+      "query": "reference",
+      "outcome": "resolved",
+      "code": null,
+      "detail": "O1 of openspec/changes/qual-02-search-freshness",
+      "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+      "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+     },
+     "current": {
+      "query": "current",
+      "outcome": "resolved",
+      "code": null,
+      "detail": "O1 of openspec/changes/qual-02-search-freshness",
+      "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+      "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+     },
+     "freshness": "current",
+     "facts": {
+      "change": "openspec/changes/qual-02-search-freshness",
+      "item": "O1",
+      "statement": "A product added to the catalogue appears in search results within 5 minutes of being added, so customers can find new stock.",
+      "acceptance": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+      "source": [
+       "Q1",
+       "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2"
+      ],
+      "acceptance_criteria": [
+       "AC1"
+      ]
+     }
+    },
+    "statements": [
+     {
+      "reference": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg1",
+      "kind": "message",
+      "role": "statement",
+      "authority": "Owner conversation store",
+      "authority_mode": "authoritative",
+      "pinned": false,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "Owner statement Q02msg1 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 1)",
+       "observed_revision": null,
+       "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "Owner statement Q02msg1 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 1)",
+       "observed_revision": null,
+       "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+      },
+      "freshness": "current",
+      "quotes": [
+       {
+        "item": "Q1",
+        "span": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg1#span:0+198:sha256:30f890af4ef45e4e91312448b518529ab7cbf40e0656e3f36b2d7164dafa48f4",
+        "outcome": "resolved"
+       }
+      ]
+     },
+     {
+      "reference": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+      "kind": "message",
+      "role": "statement",
+      "authority": "Owner conversation store",
+      "authority_mode": "authoritative",
+      "pinned": false,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "Owner statement Q02msg2 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 2)",
+       "observed_revision": null,
+       "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "Owner statement Q02msg2 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 2)",
+       "observed_revision": null,
+       "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+      },
+      "freshness": "current"
+     }
+    ],
+    "designs": [
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+       "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "freshness": "current"
+     },
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/design.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "freshness": "current"
+     },
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+       "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+      },
+      "freshness": "superseded"
+     },
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/proposal.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+      },
+      "freshness": "current"
+     },
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+       "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "freshness": "current"
+     },
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+       "query": "reference",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "current": {
+       "query": "current",
+       "outcome": "resolved",
+       "code": null,
+       "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+       "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "freshness": "current"
+     }
+    ],
+    "tasks": [
+     {
+      "reference": "backlog:TASK-1",
+      "resolution": "resolved",
+      "code": null,
+      "reachedThrough": "listing",
+      "attempts": [],
+      "execution": {
+       "status": "unknown",
+       "code": "STORE_UNAVAILABLE",
+       "attempt": null,
+       "detail": "StoreError: no integration store file: integration.sqlite"
+      }
+     },
+     {
+      "reference": "backlog:TASK-2",
+      "resolution": "resolved",
+      "code": null,
+      "reachedThrough": "listing",
+      "attempts": [],
+      "execution": {
+       "status": "unknown",
+       "code": "STORE_UNAVAILABLE",
+       "attempt": null,
+       "detail": "StoreError: no integration store file: integration.sqlite"
+      }
+     }
+    ],
+    "attempts": [],
+    "failures": [],
+    "lineageUncertainties": [
+     {
+      "reference": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "reason": "superseded",
+      "code": "SUPERSEDED",
+      "detail": "the reading as written has digest 456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba; the current revision f47275169ddb2953bffb934530b7d706f1eede10 has 4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+      "outcome": "resolved"
+     },
+     {
+      "reference": "backlog:TASK-1",
+      "reason": "missing-link",
+      "code": "NO_ATTEMPT_FOR_TASK",
+      "detail": "no attempt reservation in the integration store cites this task"
+     },
+     {
+      "reference": "backlog:TASK-2",
+      "reason": "missing-link",
+      "code": "NO_ATTEMPT_FOR_TASK",
+      "detail": "no attempt reservation in the integration store cites this task"
+     },
+     {
+      "reference": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+      "reason": "enumeration-unavailable",
+      "code": "STORE_UNAVAILABLE",
+      "detail": "StoreError: no integration store file: integration.sqlite"
+     }
+    ],
+    "coverage": {
+     "archivedTasksEnumerable": false,
+     "code": "ARCHIVED_TASKS_NOT_ENUMERABLE",
+     "basis": "Backlog.md 1.55.3 task list --json",
+     "detail": "task list --json does not list an archived task, and no read command enumerates one; task view <id> --json reads it. A task is reached when Backlog.md lists it (its references cite the outcome or its design) or when an attempt reservation cites it and the outcome, archived or not: a task archived with no attempt citing the outcome is not shown."
+    },
+    "sources": {
+     "project_head": "f47275169ddb2953bffb934530b7d706f1eede10",
+     "backlog": "task list --json (working tree)",
+     "store_schema_version": null,
+     "integrationStore": "StoreError: no integration store file: integration.sqlite",
+     "restoreEpochOpen": false,
+     "restoreEpochs": 0
+    },
+    "lineage": {
+     "format": "lineage-projection/v1",
+     "root": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+     "verdict": "incomplete",
+     "sources": {
+      "project_head": "f47275169ddb2953bffb934530b7d706f1eede10",
+      "backlog": "task list --json (working tree)",
+      "store_schema_version": null
+     },
+     "authority_modes": {
+      "authoritative": 11,
+      "fixture": 0,
+      "sample": 0,
+      "unavailable": 0
+     },
+     "nodes": [
+      {
+       "reference": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg1",
+       "kind": "message",
+       "role": "statement",
+       "authority": "Owner conversation store",
+       "authority_mode": "authoritative",
+       "pinned": false,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Owner statement Q02msg1 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 1)",
+        "observed_revision": null,
+        "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Owner statement Q02msg1 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 1)",
+        "observed_revision": null,
+        "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+       },
+       "freshness": "current",
+       "quotes": [
+        {
+         "item": "Q1",
+         "span": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg1#span:0+198:sha256:30f890af4ef45e4e91312448b518529ab7cbf40e0656e3f36b2d7164dafa48f4",
+         "outcome": "resolved"
+        }
+       ]
+      },
+      {
+       "reference": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+       "kind": "message",
+       "role": "statement",
+       "authority": "Owner conversation store",
+       "authority_mode": "authoritative",
+       "pinned": false,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Owner statement Q02msg2 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 2)",
+        "observed_revision": null,
+        "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Owner statement Q02msg2 of thread 0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c (seq 2)",
+        "observed_revision": null,
+        "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "kind": "objective",
+       "role": "objective",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": false,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "O1 of openspec/changes/qual-02-search-freshness",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "O1 of openspec/changes/qual-02-search-freshness",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+       },
+       "freshness": "current",
+       "facts": {
+        "change": "openspec/changes/qual-02-search-freshness",
+        "item": "O1",
+        "statement": "A product added to the catalogue appears in search results within 5 minutes of being added, so customers can find new stock.",
+        "acceptance": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+        "source": [
+         "Q1",
+         "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2"
+        ],
+        "acceptance_criteria": [
+         "AC1"
+        ]
+       }
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/design.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+       },
+       "freshness": "superseded"
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/proposal.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+       "kind": "design",
+       "role": "design",
+       "authority": "OpenSpec",
+       "authority_mode": "authoritative",
+       "pinned": true,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "backlog:TASK-1",
+       "kind": "work",
+       "role": "work",
+       "authority": "Backlog.md",
+       "authority_mode": "authoritative",
+       "pinned": false,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-1",
+        "observed_revision": null,
+        "observed_digest": null
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-1",
+        "observed_revision": null,
+        "observed_digest": null
+       },
+       "freshness": "current"
+      },
+      {
+       "reference": "backlog:TASK-2",
+       "kind": "work",
+       "role": "work",
+       "authority": "Backlog.md",
+       "authority_mode": "authoritative",
+       "pinned": false,
+       "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-2",
+        "observed_revision": null,
+        "observed_digest": null
+       },
+       "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-2",
+        "observed_revision": null,
+        "observed_digest": null
+       },
+       "freshness": "current"
+      }
+     ],
+     "edges": [
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+       "relation": "accepted_by",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+         "digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+         "item": "O1",
+         "field": "acceptance",
+         "declaration": "openspec/changes/qual-02-search-freshness/.openspec.yaml x-outcomes (decision 0008)"
+        }
+       ]
+      },
+      {
+       "from": "backlog:TASK-1",
+       "to": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+       "relation": "cites",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-1 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "backlog:TASK-1",
+       "to": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+       "relation": "cites",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-1 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "backlog:TASK-2",
+       "to": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+       "relation": "cites",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-2 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "backlog:TASK-2",
+       "to": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+       "relation": "cites",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-2 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "backlog:TASK-1",
+       "relation": "fulfilled_by",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-1 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+          "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "backlog:TASK-2",
+       "relation": "fulfilled_by",
+       "provenance": [
+        {
+         "record": "Backlog.md task TASK-2 references",
+         "authority": "Backlog.md",
+         "revision": null,
+         "via": [
+          "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+          "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+         ]
+        }
+       ]
+      },
+      {
+       "from": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg1",
+       "to": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "relation": "originates",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+         "digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+         "item": "O1",
+         "field": "source",
+         "via": "Q1"
+        }
+       ]
+      },
+      {
+       "from": "conversation:0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c/Q02msg2",
+       "to": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "relation": "originates",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10",
+         "digest": "4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+         "item": "O1",
+         "field": "source"
+        }
+       ]
+      },
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "openspec:changes/qual-02-search-freshness/design.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+       "relation": "shaped_by",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10"
+        }
+       ]
+      },
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "openspec:changes/qual-02-search-freshness/proposal.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+       "relation": "shaped_by",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10"
+        }
+       ]
+      },
+      {
+       "from": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "to": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@f47275169ddb2953bffb934530b7d706f1eede10#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+       "relation": "shaped_by",
+       "provenance": [
+        {
+         "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+         "authority": "OpenSpec",
+         "revision": "f47275169ddb2953bffb934530b7d706f1eede10"
+        }
+       ]
+      }
+     ],
+     "uncertainties": [
+      {
+       "reference": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+       "reason": "superseded",
+       "code": "SUPERSEDED",
+       "detail": "the reading as written has digest 456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba; the current revision f47275169ddb2953bffb934530b7d706f1eede10 has 4e3087074153c04526b3237410e61d65ac4a72fdfd1920f4dfc0d54ca727f59c",
+       "outcome": "resolved"
+      },
+      {
+       "reference": "backlog:TASK-1",
+       "reason": "missing-link",
+       "code": "NO_ATTEMPT_FOR_TASK",
+       "detail": "no attempt reservation in the integration store cites this task"
+      },
+      {
+       "reference": "backlog:TASK-2",
+       "reason": "missing-link",
+       "code": "NO_ATTEMPT_FOR_TASK",
+       "detail": "no attempt reservation in the integration store cites this task"
+      },
+      {
+       "reference": "outcome:3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63",
+       "reason": "enumeration-unavailable",
+       "code": "STORE_UNAVAILABLE",
+       "detail": "StoreError: no integration store file: integration.sqlite"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
