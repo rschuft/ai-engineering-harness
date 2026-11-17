@@ -71,17 +71,19 @@ components:
     # selection: envelope or delegation. It carries no spending limit (retired by S-03.6): limit,
     # amount, currency, enforced_by and cap are refused. serve starts such a family only on the
     # Owner's recorded authorization of it.
-  # The Integration process's capture (integrations/ownerhost/README.md, "Capture (P-01.3)"). Not
-  # set by default: the service starts, and every capture is refused CAPTURE_PROJECT_UNCONFIGURED.
-  # service.py reads this block and passes it to the server; the server reads no config.yml.
-  #owner_host:
-    #project_repository:          # no default; the absolute path of the project work tree's root
-    #project_repository_id:       # no default; the project repository's id, e.g. aieh-d1-demo
-    #backlog_command:             # no default; Backlog.md's command or its cli.js (for the projection)
-    #git_identities:              # no default; per principal, the commissioning user's own git
-                                  # identity, the author and committer of the commits made on the
-                                  # user's behalf (never read from git config or the environment)
-      # The value below is a placeholder that the capture refuses (COMMIT_IDENTITY_INVALID): it
-      # must be replaced with your own "Name <email>". An invented placeholder domain (localhost,
-      # .invalid, .localhost, .example, .test) is refused too; a GitHub no-reply address is accepted.
-      #owner: "<Your Name> <<id>+<login>@users.noreply.github.com>"
+  # The Integration process's capture (integrations/ownerhost/README.md, "Capture (P-01.3)"). It has
+  # no shipped default: not set, the service starts and every capture is refused
+  # CAPTURE_PROJECT_UNCONFIGURED. service.py reads this block and passes it to the server; the server
+  # reads no config.yml. An example, to adapt (every key is required but git_identities, without
+  # which every capture is refused COMMIT_IDENTITY_UNAVAILABLE):
+  # owner_host:
+  #   project_repository: /absolute/path/to/the/project/work/tree   # the work tree's root
+  #   project_repository_id: aieh-d1-demo                           # the project repository's id
+  #   backlog_command: /absolute/path/to/backlog.md/cli.js          # for the projection (U-04.1)
+  #   git_identities:              # per principal, the commissioning user's own git identity, the
+  #                                # author and committer of the commits made on the user's behalf
+  #                                # (never read from git config or the environment)
+  #     # The value below is a placeholder that the capture refuses (COMMIT_IDENTITY_INVALID): it
+  #     # must be replaced with your own "Name <email>". An invented placeholder domain (localhost,
+  #     # .invalid, .localhost, .example, .test) is refused too; a GitHub no-reply address is accepted.
+  #     owner: "<Your Name> <<id>+<login>@users.noreply.github.com>"

@@ -474,7 +474,7 @@ class Records(unittest.TestCase):
     def test_the_example_configuration_s_identity_is_a_placeholder_the_capture_refuses(self):
         import re
         text = (T.REPO / 'example_config.yml').read_text(encoding='utf-8')
-        (value,) = re.findall(r'^ *#owner: "(.*)"$', text, re.M)
+        (value,) = re.findall(r'^ *#\s+owner: "(.*)"$', text, re.M)
         with self.assertRaises(C.CaptureRefused) as caught:
             C.check_git_identity(value)
         self.assertEqual(caught.exception.code, 'COMMIT_IDENTITY_INVALID')
