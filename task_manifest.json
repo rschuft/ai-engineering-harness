@@ -1,5 +1,5 @@
 {
-  "task_count": 190,
+  "task_count": 191,
   "tasks": [
     {
       "id": "F-01.1",
@@ -433,7 +433,7 @@
         "E-01.7"
       ],
       "path": "task_prompts/U-01.2.md",
-      "sha256": "b526529a1f4b16c9828ef8d1314bddd41dd0755038751c18985a69487c3701b0"
+      "sha256": "bf25910e93fc592e76412258b11a8516d5cfac732610f43c286e9eda9ffb64cf"
     },
     {
       "id": "U-02.1",
@@ -876,10 +876,11 @@
       "title": "Requalify dispatch recovery and the launch gate against the pinned Agent Server, with no model call",
       "phase": 1,
       "deps": [
-        "E-01.5"
+        "E-01.5",
+        "E-01.9"
       ],
       "path": "task_prompts/E-01.6.md",
-      "sha256": "1c1173dc490614c19a5b1f032883fc2ece3921e56ae179c3f2ac2a4c1e9244bc"
+      "sha256": "c8d51d4648cbd1ad7ac7beddc72b4ed7dd469db46ce1ceed98e366071e0e5b31"
     },
     {
       "id": "E-01.7",
@@ -890,7 +891,7 @@
         "U-01.1"
       ],
       "path": "task_prompts/E-01.7.md",
-      "sha256": "738c84cff3f9f8d92b5bc43412533f1dd42d77be8736864c3d6c4fb17965c59e"
+      "sha256": "f726abc20bb648eafc2d9e369340ab1ffa33ba8975033f52a61213f1e74b9f65"
     },
     {
       "id": "E-01.8",
@@ -903,6 +904,16 @@
       ],
       "path": "task_prompts/E-01.8.md",
       "sha256": "b29a94839a5b3c3f93e1e7ba25a407ade670f576013a1398351ae389c4903e63"
+    },
+    {
+      "id": "E-01.9",
+      "title": "Bound the live create-in-flight 404 window and give a surviving earlier conversation a recorded exit",
+      "phase": 1,
+      "deps": [
+        "E-01.5"
+      ],
+      "path": "task_prompts/E-01.9.md",
+      "sha256": "3a26ccd6df1bb62fd646a13d30f5d7cdab918ef6642bd966eb6c8ceae5a253df"
     },
     {
       "id": "E-02.1",

@@ -4,7 +4,7 @@ title: 'E-01.7: Serve a deterministic Agent Server fixture on host loopback'
 status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-updated_date: '2026-11-17T07:13:00Z'
+updated_date: '2026-11-17T21:30:00Z'
 labels: []
 milestone: m-0
 dependencies: []
@@ -22,11 +22,11 @@ Plan contract: leaf E-01.7 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [x] #1 The fixture has two faces: the dispatcher's, and the UI face, a read-only face that only the Owner UI and Agent Canvas call; the dispatcher never calls the UI face, and no value it serves reaches a record of the dispatch path.
+- [ ] #1 The fixture has two faces: the dispatcher's, and the UI face, a face that only the Owner UI and Agent Canvas call and that is read-only but for the one write U-01.2's proof admits (the analytics-consent preference, held in the fixture process's memory); the dispatcher never calls the UI face, and no value it serves or holds reaches a record of the dispatch path.
 - [x] #2 Every route served, matched by method and path template with the UI face's path prefix removed, is in the locked OpenAPI or in the pinned route inventory of the profile D1 ran (profiles/strong-windows-qemu-whpx/agent-server/routes.json at sha256 919d67e2ee49823d0b4d0034f92ab190d95a64abfd9e07bb698680f9edabbc09, profile b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7), with that route's recorded source named; a route in neither is a failure.
 - [x] #3 Each response validates against the locked OpenAPI's schema where that document defines the route for the runtime of the face that serves it, and otherwise against the response model of the pinned upstream source that serves the route at the locked release, named in the provenance table; each observed field is also checked against its citation.
 - [x] #4 On the dispatcher's face, a property that the validating schema or response model requires is not served when no provenance class of this proof admits a value for it and the dispatch path does not read it; it is listed with its answer in the provenance table as not served, and its absence alone is not a validation failure, while every served field still validates against its property.
-- [x] #5 In every scenario, each field of each scripted answer is, in the provenance table, one of: a recorded observation it reproduces, cited, and cited only when the inputs that determine it equal the observed request's (the result's test output only for D1's test command); a value echoed from the request; a value derived by a rule pinned in an accepted decision, or in harness code outside the fixture that the production path itself runs, named (the finished result's commit by decision 0024 point 4.4's rule over D1's recorded file changes, D1's commit id being a citation only); or the fixture's label; a field derived only from the fixture's own code is a failure.
+- [ ] #5 In every scenario, each field of each scripted answer is, in the provenance table, one of: a recorded observation it reproduces, cited, and cited only when the inputs that determine it equal the observed request's (the result's test output only for D1's test command); a value echoed from the request; on the UI face only, the value of the one write U-01.2's proof admits, held from an earlier request and marked held in memory; a value derived by a rule pinned in an accepted decision, or in harness code outside the fixture that the production path itself runs, named (the finished result's commit by decision 0024 point 4.4's rule over D1's recorded file changes, D1's commit id being a citation only); or the fixture's label; a field derived only from the fixture's own code is a failure.
 - [x] #6 A clock-valued field (a creation, update or event time, an uptime or an idle time) is a recorded observation that reproduces its cited value unchanged, whatever the request's time, and is marked clock-valued.
 - [x] #7 A test, recording at the answer boundary over the restart matrix and the dispatch suites, binds the fields the dispatch path reads to the catalog's fields marked read, and none of them is clock-valued or not served.
 - [x] #8 Only on the UI face, only for a field the committed evidence does not observe, and only in a conversation status a live run reaches without fault injection (idle, running, finished), may a value be derived from the pinned upstream source or the locked OpenAPI, marked source-derived, not observed, in the provenance table and in the answer's label header; any other field, on either face, is a failure, and a request outside the fixture's catalog, or one whose answer needs an observed field that no cited observation's determining inputs match, other than a property listed not served under the dispatcher's-face clause above, is refused with the fixture's label.
@@ -41,6 +41,8 @@ Plan contract: leaf E-01.7 of AI_Engineering_Implementation_Project_Plan_Oversee
 Disposed of by planning (2026-11-16): PB-1, PB-2, PB-4 and PB-6, by the plan amendment of 2026-11-16 (I1 blockers): the proof, action and artifact are amended, and the criteria above are the amended proof. No blocker remains for planning. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
 
 Amended again by planning (2026-11-16), on PB-12 and the rules PB-10 shares with E-01.4.2, by the plan amendment of 2026-11-16 (I1 recovery): the proof and action are amended, and the criteria above are the amended proof. No blocker remains for planning. See evidence/bootstrap-log.md#i1-recovery-disposed-2026-11-16
+
+Amended by planning (2026-11-17), on PB-15 and PB-14, by the plan amendment of 2026-11-17 (I1 final): criteria #1 and #5 are the amended proof (the UI face's one write, which U-01.2's proof bounds and proves, and the held value's provenance class), and the Canvas reading in the plan notes admits one content-security-policy element. This leaf's verdict of 2026-11-16 stands; criteria #1 and #5 stay unchecked until U-01.2's verdict proves the write. See evidence/bootstrap-log.md#i1-final-planning-2026-11-17
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

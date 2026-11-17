@@ -4,7 +4,7 @@ title: 'U-06.1: Demonstrate I1: one Owner request through the Owner UI to an'
 status: To Do
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-updated_date: '2026-11-16T15:44:00Z'
+updated_date: '2026-11-17T21:45:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -37,4 +37,6 @@ Plan contract: leaf U-06.1 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 <!-- SECTION:NOTES:BEGIN -->
 Disposed of by planning (2026-11-16): the PB-5 reading of item (8), and PB-3, PB-7 and PB-8, are recorded in this leaf's plan notes. Criteria unchanged. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
+
+Readings of 2026-11-17, recorded in this leaf's plan notes by the plan amendment of 2026-11-17 (I1 final): planning's readings 2 and 3, confirmed on the Owner's direction of 2026-11-17 ('owner-direction-i1-final-2026-11-17'), which states them: "U-06.1's lineage acceptance is judged against authoritative dispatcher records, while the Owner-facing outcome must accurately represent those same records." and "Archived Backlog.md tasks that the pinned version cannot enumerate are disclosed as unexamined, never represented as complete."; the pause (the browser's reopening and the Integration process's restart), nonduplication, the analytics consent and the Owner's git identity. Criteria unchanged; item (4) and the PB-3, PB-5 and PB-7 notes wait on the Owner's answer to OA-33 (b) and (c). See evidence/bootstrap-log.md#i1-final-planning-2026-11-17
 <!-- SECTION:NOTES:END -->

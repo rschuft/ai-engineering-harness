@@ -4,7 +4,7 @@ title: 'E-01.8: Dispatch a ready task through the existing resolver and dispatch
 status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
-updated_date: '2026-11-17T12:48:00Z'
+updated_date: '2026-11-17T21:45:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -31,6 +31,8 @@ Plan contract: leaf E-01.8 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 <!-- SECTION:NOTES:BEGIN -->
 Disposed of by planning (2026-11-16): the PB-3 reading is confirmed and PB-7 decided (the result path's admitted set is not changed); both are recorded in this leaf's plan notes. Criteria unchanged. See evidence/bootstrap-log.md#i1-blockers-disposed-2026-11-16
+
+Planning's reading 1, confirmed on the Owner's direction of 2026-11-17 ('owner-direction-i1-final-2026-11-17'), which states it: "E-01.8 meets its credential boundary when a credential-capable module is imported but its provider is never constructed, invoked, or read." It is recorded in this leaf's plan notes as a dated correction beside the reading of 2026-11-16, by the plan amendment of 2026-11-17 (I1 final). Criteria unchanged. The changes that wait on OA-33 (b) and (c) (the action's result destination and the admitted set) are not applied. See evidence/bootstrap-log.md#i1-final-planning-2026-11-17
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

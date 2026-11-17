@@ -676,6 +676,8 @@ Lifecycle, in order:
    Live-verified on 2026-11-07 ([F-06.1 section 8](../evidence/F-06.1-gitea-loopback.md)).
 
 `task gitea:status` and `task gitea:verify` report the state and the proof set at any time.
+Run gitea_host commands one at a time: its run record is replaced without a lock (the plan's 26th
+deferral).
 
 **The host-service lifecycle contract (F-06.2).** `gitea_host.py` composes the contract and the Windows adapter of [`integrations/platform/`](../integrations/platform/README.md) (draft decision 0011): the verbs install, up, down, restart, status, inspect and verify; credential provision, rotate and retire; upgrade, recover and uninstall; the records `aieh-platform/1`, `aieh-service-run/1` (it generalises `aieh-gitea-run/1`, still read), `aieh-readiness/1` and `aieh-service-transition/1`; and the refusal codes `PLATFORM_UNSUPPORTED`, `PLATFORM_MISMATCH`, `SUPERVISION_UNAVAILABLE`, `NO_CREDENTIAL_PROVIDER`, `CREDENTIAL_PROVIDER_LOCKED`, `VERSION_MISMATCH`, `DOWNGRADE_REFUSED`, `TRANSITION_PENDING` and `UNINSTALL_RUNNING`, each with its remedy. Every act ends with the I7 no-exposure scan of what it shows. Credentials are reached through the harness's credential provider ([`integrations/credentials/`](../integrations/credentials/README.md), F-06.3), which the adapter supplies through a fail-closed factory: Credential Manager on Windows, keyring with an explicitly instantiated backend on Linux and macOS; every rotate or retire act (`finalize-credentials` per account, `gitea:roles -- rotate` and `retire`) writes an integration-store receipt, fingerprints only, into `persistent/state/integration/integration.sqlite` of the managed root and reads it back. How each verb maps onto Gitea: [integrations/gitea/README.md](../integrations/gitea/README.md#the-lifecycle-contracts-verbs). Windows record: [`evidence/F-06.2-platform-windows.md`](../evidence/F-06.2-platform-windows.md). Linux and macOS are **not yet verified** (F-06.4, F-06.5).
 
@@ -1619,6 +1621,11 @@ The plan keeps the acceptance contracts; each task links to one:
   hyphen-delimited token (`oa-32` for OA-32);
 - a leaf's task is `Done` only when every plan dependency has passed and every act task it depends
   on is `Done`.
+
+No task of this repository is deleted; one that should not stand is archived. Backlog.md 1.55.3's
+`task delete` releases an archived task's id, which the next task created takes (observed), and a
+`backlog:` reference carries no digest, so it would then resolve to the later task (the plan's 28th
+deferral, from the plan amendment of 2026-11-17).
 
 A leaf's status has exactly one source: its Leaves-table row if it has one, else its task's
 status, else not started. The Leaves table is closed and gains no rows: the log records the
