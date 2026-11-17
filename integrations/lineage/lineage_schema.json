@@ -253,7 +253,7 @@
       },
       "validation_rule": "Use native IDs, preserve chronological evidence and correlation to Work. (#authority, link 'Execution') The conversation is the dispatched attempt's: the integration store (opened read-only) holds the dispatcher's confirmed record of the typed attempt whose reserved conversation id it is, and the Agent Server, asked GET /api/conversations/{id} once through the route-checked client over the attempt's pinned route allowlist, answers it. The authority mode is the attempt's: its bound declaration (the pinned allowlist's transport authority, live when absent; the I1 integration design, R8 point 2) and the answering transport's (an answer's fixture label, live when absent) must agree, else authority-unavailable; a fixture's answer carries lineage.fixture_authority as its label, never a caller's flag. A pinned event is not resolved while the native event id's form is not observed.",
       "status": "implemented",
-      "resolver": "lineage_resolve.AttemptResolver (the integration store opened read-only and the dispatcher's record readers; one GET of the conversation through dispatch_inputs.AgentServerClient over the attempt's pinned route allowlist)",
+      "resolver": "lineage_attempt.AttemptResolver (the integration store opened read-only and the dispatcher's record readers; one GET of the conversation through dispatch_inputs.AgentServerClient over the attempt's pinned route allowlist)",
       "outcomes": ["resolved", "missing", "authority-unavailable"],
       "outcome_codes": {
         "missing": "ATTEMPT_MISSING (no attempt has the conversation), ATTEMPT_NOT_CONFIRMED (its create was not answered with it), ATTEMPT_CONVERSATION_MISSING (the server answers 404)",

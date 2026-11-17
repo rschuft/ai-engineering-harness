@@ -1735,7 +1735,7 @@ explicit uncertainty list covers anything missing, changed, moved, gone, unavail
 fixture-answered or sample-backed. The verdict is `complete` only when that list is empty. Since
 U-02.2 the statements are read from the Owner conversation store (`--conversations`); the
 statement sample is retired, the planned end of that sample. Since E-01.5 the attempt kind is
-implemented (`lineage_resolve.AttemptResolver`): the dispatcher's confirmed record of the
+implemented (`lineage_attempt.AttemptResolver`): the dispatcher's confirmed record of the
 attempt, read-only, and one `GET` of its conversation through the route-checked client over the
 attempt's pinned allowlist; its mode is the attempt's bound declaration and the answering
 transport's, which must agree (a fixture's answer is mode `fixture`, labelled `FIXTURE`, with

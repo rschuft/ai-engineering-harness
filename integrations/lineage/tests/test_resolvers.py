@@ -46,6 +46,7 @@ def _load(name, path, fresh=False):
 # resolver then uses, so fixtures and resolver share one module.
 effects_tests = _load('aieh_lineage_effects_helpers', EFFECTS_TESTS / 'test_effects_store.py')
 R = _load('lineage_resolve', LINEAGE_DIR / 'lineage_resolve.py')
+RA = _load('lineage_attempt', LINEAGE_DIR / 'lineage_attempt.py')
 L = R.lineage
 planning = R.planning
 sys.path.insert(0, str(PLANNING_TESTS))
@@ -1071,7 +1072,7 @@ class AttemptResolution(unittest.TestCase):
         return attempts, key, cid
 
     def ask(self, text, attempts, transport=None, method='resolve'):
-        registry = R.build_registry(attempts=R.AttemptResolver(self.path, transport or self.core,
+        registry = R.build_registry(attempts=RA.AttemptResolver(self.path, transport or self.core,
                                                                 attempts.read_artifact))
         return getattr(registry, method)(L.parse(text))
 
@@ -1177,7 +1178,7 @@ class AttemptResolution(unittest.TestCase):
         routes = attempts.root / 'profiles' / self.FA.PROFILE / 'agent-server' / 'routes.json'
         routes.write_bytes(routes.read_bytes() + b' ')
         self.assertEqual(self.ask(text, attempts).code, 'ATTEMPT_ALLOWLIST_UNREADABLE')
-        result = R.AttemptResolver(self.tmp / 'nowhere.sqlite', self.core, attempts.read_artifact).resolve(
+        result = RA.AttemptResolver(self.tmp / 'nowhere.sqlite', self.core, attempts.read_artifact).resolve(
             L.parse(text))
         self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'INTEGRATION_STORE_UNAVAILABLE'))
 

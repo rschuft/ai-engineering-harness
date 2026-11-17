@@ -198,7 +198,7 @@ authority for both. `build_registry(conversations=<path>)`, and `--conversations
 ## Attempts (E-01.5)
 
 The `attempt` kind resolves the conversation of an attempt the dispatcher dispatched
-(`lineage_resolve.AttemptResolver`; the I1 integration design, R11). `build_registry(attempts=
+(`lineage_attempt.AttemptResolver`; the I1 integration design, R11). `build_registry(attempts=
 AttemptResolver(<integration store>, <Agent Server transport>, read_artifact))` configures it;
 without it the kind answers `authority-unavailable` (`RESOLVER_NOT_CONFIGURED`), as on the
 command line, which has no transport (a live Agent Server is E-01.6's).

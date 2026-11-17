@@ -69,6 +69,7 @@ def _load(name, path):
 T = _load('lineage_trace', LINEAGE_DIR / 'lineage_trace.py')
 S = _load('lineage_samples', LINEAGE_DIR / 'lineage_samples.py')
 R = T.resolve_mod
+RA = _load('lineage_attempt', LINEAGE_DIR / 'lineage_attempt.py')
 L = T.L
 sys.path.insert(0, str(PLANNING_TESTS))
 import two_task_fixture as fx  # noqa: E402
@@ -299,7 +300,7 @@ def build_dispatched(work, repo, declared):
         for task in ('TASK-1', 'TASK-2'):
             attempts.attempt(dispatched, core, task, change=CHANGE, design_commit=design,
                              outcome_ref=f'outcome:{OUTCOME}')
-    return path, R.AttemptResolver(path, core, attempts.read_artifact)
+    return path, RA.AttemptResolver(path, core, attempts.read_artifact)
 
 
 def example_sources(work):

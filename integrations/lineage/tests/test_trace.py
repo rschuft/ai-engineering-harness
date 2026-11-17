@@ -35,6 +35,7 @@ import lineage_example as E  # noqa: E402
 import fixture_attempts as FA  # noqa: E402
 
 T, S, R, L, fx = E.T, E.S, E.R, E.L, E.fx
+RA = E.RA
 planning = R.planning
 OUTCOME, CHANGE, CHANGE_DIR = E.OUTCOME, E.CHANGE, E.CHANGE_DIR
 ARCHIVED_DIR = f'openspec/changes/archive/2026-11-07-{CHANGE}'
@@ -545,7 +546,7 @@ class MissingNode(Case):
         attempts = FA.FixtureAttempts(self.tmp / 'fixture-root')
         auth = T.Authorities(R.build_registry(project=self.repo, backlog=E.FAKE_BACKLOG,
                                               conversations=E.conversations_path(self.repo),
-                                              attempts=R.AttemptResolver(self.store, core, attempts.read_artifact)))
+                                              attempts=RA.AttemptResolver(self.store, core, attempts.read_artifact)))
         projection = E.run_trace(f'outcome:{OUTCOME}@{self.declared}', auth, self.repo, self.store)
         conversation = E.store_module().conversation_id_for('work-TASK-2/implement/revision-2')
         reference = f'openhands:conversation/{conversation}'
@@ -1008,7 +1009,7 @@ class Contract(Case):
                                  outcome_ref=f'outcome:{OUTCOME}')
         finally:
             store.close()
-        return core, R.AttemptResolver(self.store, core, attempts.read_artifact)
+        return core, RA.AttemptResolver(self.store, core, attempts.read_artifact)
 
     def test_complete_only_when_every_node_is_authoritative_resolved_and_current(self):
         class Trusted(T.Authorities):

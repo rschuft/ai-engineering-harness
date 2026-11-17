@@ -10,7 +10,7 @@ as an uncertainty, so a projection that used one is never ``complete``. No kind 
   conversation store's own resolvers (I1 work design, R5);
 - the attempt sample (``SampleAttemptRecords``, over a committed file shaped like F-04.2's
   conversation info) is retired at plan leaf E-01.5: the ``attempt`` kind is implemented by
-  ``lineage_resolve.AttemptResolver``, which asks the Agent Server, and against the Agent Server
+  ``lineage_attempt.AttemptResolver``, which asks the Agent Server, and against the Agent Server
   fixture's cited core states its mode ``fixture`` (I1 integration design, R11).
 
 That is the planned end of the samples, not a regression.
