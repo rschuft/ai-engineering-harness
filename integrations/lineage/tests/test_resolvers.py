@@ -1072,7 +1072,7 @@ class AttemptResolution(unittest.TestCase):
         return attempts, key, cid
 
     def ask(self, text, attempts, transport=None, method='resolve'):
-        registry = R.build_registry(attempts=RA.AttemptResolver(self.path, transport or self.core,
+        registry = R.build_registry(attempts=RA.AttemptResolver(self.path, attempts.seam(transport or self.core),
                                                                 attempts.read_artifact))
         return getattr(registry, method)(L.parse(text))
 

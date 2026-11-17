@@ -2023,6 +2023,8 @@ def check_admission(report, profile, root, conf, server):
             report.fail(f'{label}.routes: {problem}')
         if isinstance(data, dict) and data.get('version') != server.get('version'):
             report.fail(f'{label}.routes: version must be the Agent Server version')
+        if isinstance(data, dict) and 'transport' in data:   # E-01.8, R8 point 2: the two declarations agree
+            report.fail(f'{label}.routes: declares a transport the profile does not (only a fixture profile does)')
     key = adm.get('session_key') or {}
     if key.get('header') != 'X-Session-API-Key' or \
             not str(key.get('start_check', '')).startswith('/usr/local/sbin/'):
@@ -2827,8 +2829,131 @@ def check_incus(report, profile, ceilings, root):
 
 # --- driver ---------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Fixture profiles (plan leaf E-01.8; the I1 integration design, R8 point 2 and R9; decision 0026 point 5)
+
+FIXTURE_PREFIX = 'fixture-'
+FIXTURE_TRANSPORT = {'authority': 'fixture', 'kind': 'loopback-fixture'}
+FIXTURE_TOP_KEYS = {'schema', 'name', 'plan_leaf', 'contract', 'decision', 'purpose', 'status', 'replays',
+                    'ceilings', 'provider', 'provisioning', 'network'}
+FIXTURE_SERVER_KEYS = {'version', 'config', 'fixture', 'stage_create_template', 'conversations', 'admission',
+                       'transport'}
+FIXTURE_CONTENT_KEYS = ('conversation_runtime', 'conversation_runtime_selectable', 'conversation_container_memory',
+                        'conversation_container_cpus', 'conversation_container_pids_limit', 'max_concurrent_runs')
+FIXTURE_CONVERSATION_KEYS = ('source_root', 'mounts', 'forbidden_sources')
+FIXTURE_TEMPLATES = ('fixture', 'stage_create_template')
+
+
+def _server(profile):
+    provisioning = profile.get('provisioning') if isinstance(profile, dict) else None
+    server = provisioning.get('agent_server') if isinstance(provisioning, dict) else None
+    return server if isinstance(server, dict) else {}
+
+
+def declares_fixture(profile):
+    """Whether PROFILE is a fixture profile: its name has the fixture prefix, or it declares a transport (the only
+    transport a profile declares is the fixture's; absent is live)."""
+    return str(profile.get('name', '')).startswith(FIXTURE_PREFIX) or 'transport' in _server(profile)
+
+
+def _json_file(root, entry):
+    try:
+        return json.loads((root / entry['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def check_fixture(report, profile, root=REPO):
+    """A fixture profile (profiles/README.md section 13): its name has the fixture prefix exactly when it declares
+    the fixture authority, in its declaration and in its pinned route allowlist alike (R8 point 2); it holds only
+    what resolution, admission and the launch gate read, and nothing that launches (no tier label, boot input, state
+    directory, lifecycle, launch, or provider but the image pin); it is operational only with its conformance
+    evidence; and every admission-relevant value is the replayed profile's at its digest (R9): the Agent Server
+    version, config.content's runtime and caps, the conversation mounts, the ceilings, the provider-tunnel endpoint,
+    the provision lock's pin, the two create templates (byte copies) and the route allowlist (the replayed one with
+    the transport declaration added). The dispatcher's own rules (admission_policy, stage_create_template and the
+    transport declarations' equality) are called, never mirrored."""
+    name = str(profile.get('name', ''))
+    server = _server(profile)
+    if not name.startswith(FIXTURE_PREFIX):
+        report.fail(f'name: a profile that declares a transport is a fixture profile, named {FIXTURE_PREFIX}...')
+    if server.get('transport') != FIXTURE_TRANSPORT:
+        report.fail(f'provisioning.agent_server.transport: a fixture profile declares exactly {FIXTURE_TRANSPORT}')
+    extra = sorted(set(profile) - FIXTURE_TOP_KEYS)
+    if extra:
+        report.fail(f'{extra}: a fixture profile holds only {sorted(FIXTURE_TOP_KEYS)} (it is never launched)')
+    if sorted(set(server) - FIXTURE_SERVER_KEYS):
+        report.fail(f'provisioning.agent_server: only {sorted(FIXTURE_SERVER_KEYS)}')
+    if set(profile.get('provisioning') or {}) != {'agent_server'}:
+        report.fail('provisioning: only agent_server')
+    provider = profile.get('provider') or {}
+    if set(provider) - {'provision_lock', 'note'} or 'provision_lock' not in provider:
+        report.fail('provider: only the image pin the launch gate reads (provision_lock)')
+    status = profile.get('status') or {}
+    if status.get('operational') is True and not status.get('operational_evidence'):
+        report.fail('status: a fixture profile is operational only with its conformance evidence')
+    replays = profile.get('replays') or {}
+    replayed = root / 'profiles' / str(replays.get('profile')) / 'profile.json'
+    if not isinstance(replays.get('profile'), str) or not replayed.is_file() \
+            or sha256_file(replayed) != replays.get('sha256'):
+        report.fail('replays: names a checked-in profile by the sha256 of its profile.json')
+        return
+    native = json.loads(replayed.read_text(encoding='utf-8'))
+    other = _server(native)
+    same = [('provisioning.agent_server.version', server.get('version'), other.get('version')),
+            ('ceilings', {k: (profile.get('ceilings') or {}).get(k) for k in ('vcpu', 'memory_mib')},
+             {k: (native.get('ceilings') or {}).get(k) for k in ('vcpu', 'memory_mib')}),
+            ('provider.provision_lock', provider.get('provision_lock'), (native.get('provider') or {}).get(
+                'provision_lock')),
+            ('network.endpoints', (profile.get('network') or {}).get('endpoints'),
+             [e for e in (native.get('network') or {}).get('endpoints') or [] if e.get('class') == 'provider-tunnel'])]
+    content, theirs = (server.get('config') or {}).get('content') or {}, (other.get('config') or {}).get('content') or {}
+    same.append(('provisioning.agent_server.config.content', content,
+                 {k: theirs.get(k) for k in FIXTURE_CONTENT_KEYS}))
+    same.append(('provisioning.agent_server.conversations', server.get('conversations'),
+                 {k: (other.get('conversations') or {}).get(k) for k in FIXTURE_CONVERSATION_KEYS}))
+    for key in FIXTURE_TEMPLATES:
+        mine, theirs_pin = server.get(key) or {}, other.get(key) or {}
+        same.append((f'provisioning.agent_server.{key}', {'sha256': mine.get('sha256'),
+                                                          'execution_profile': mine.get('execution_profile'),
+                                                          'stage': mine.get('stage')},
+                     {'sha256': theirs_pin.get('sha256'), 'execution_profile': theirs_pin.get('execution_profile'),
+                      'stage': theirs_pin.get('stage')}))
+        check_repo_file(report, root, f'provisioning.agent_server.{key}', mine)
+        if not str(mine.get('path', '')).startswith(f'profiles/{name}/'):
+            report.fail(f'provisioning.agent_server.{key}: a file under profiles/{name}/')
+    for label, mine, theirs_value in same:
+        if mine != theirs_value:
+            report.fail(f'{label}: not the replayed profile\'s value (R9)')
+    routes_pin = (server.get('admission') or {}).get('routes') or {}
+    check_repo_file(report, root, 'provisioning.agent_server.admission.routes', routes_pin)
+    if not str(routes_pin.get('path', '')).startswith(f'profiles/{name}/'):
+        report.fail(f'provisioning.agent_server.admission.routes: a file under profiles/{name}/')
+    routes, their_routes = _json_file(root, routes_pin), _json_file(root, (other.get('admission') or {}).get('routes'))
+    if not isinstance(routes, dict) or {k: v for k, v in routes.items() if k != 'transport'} != their_routes:
+        report.fail('provisioning.agent_server.admission.routes: the replayed allowlist with the transport added')
+    else:
+        for problem in route_problems(routes):
+            report.fail(f'provisioning.agent_server.admission.routes: {problem}')
+    di = load_dispatch_inputs()
+    try:
+        di.admission_policy(profile, name, D1_STAGE)
+        di.stage_create_template(profile, name)
+        if isinstance(routes, dict):
+            di.check_transport_declarations(profile, routes)
+    except di.DispatchRefused as exc:
+        report.fail(f'the dispatcher refuses it ({exc.code}: {exc.detail})')
+    return report
+
+
 def check(profile, root=REPO):
     """Check one parsed profile against the contract. Returns a Report."""
+    if isinstance(profile, dict) and declares_fixture(profile):
+        report = Report(profile.get('name', '<unnamed>'))
+        if profile.get('schema') != SCHEMA:
+            report.fail(f'schema: expected {SCHEMA}')
+        check_fixture(report, profile, root)
+        return report
     report = Report(profile.get('name', '<unnamed>'))
     properties = json.loads((root / 'profiles' / 'properties.json').read_text(encoding='utf-8'))
     if profile.get('schema') != SCHEMA:

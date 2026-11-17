@@ -8,7 +8,14 @@ The base fixture is the restart matrix's (``integrations/dispatch/tests/test_res
 D1 attempt on a throwaway store), with its wire replaced by the fixture transport. A create goes through the
 listener's validation, which needs the locked release openapi.json (never committed: decision 0005): these tests run
 when ``AIEH_LOCKED_OPENAPI`` names it and are skipped otherwise, saying so.
+
+Since E-01.8 (the I1 integration design, R8; the engineering manager's ruling A) the dispatcher refuses a seam whose
+declared authority is not the attempt's bound one, so the matrix's attempts are bound to the fixture authority here
+(``fixture_bound``: its synthetic profile and its pinned route allowlist both declare the fixture transport) and its
+credential provider and observers declare it too; the fixture transport declares it already.
 """
+import hashlib
+import json
 import unittest
 
 import fixture_support as S
@@ -22,6 +29,18 @@ RC = RR.RC
 OPENAPI = S.locked_openapi_path()
 LOCKED = None if OPENAPI is None else SERVER.locked_document(OPENAPI)
 CEILING_S = 3            # the transport's ceiling on one request: a withheld answer ends there
+FIXTURE_TRANSPORT = {'authority': 'fixture', 'kind': 'loopback-fixture'}      # R8 point 2
+
+
+class Declared:
+    """An observer declaring the fixture authority (R8 point 5): it calls CALL as it is."""
+    authority = 'fixture'
+
+    def __init__(self, call):
+        self.call = call
+
+    def __call__(self, *args, **kwargs):
+        return self.call(*args, **kwargs)
 
 
 def setUpModule():
@@ -39,11 +58,34 @@ class OverTheListener(TRM.Matrix):
 
     def setUp(self):
         super().setUp()
+        self.fixture.manifest = self.fixture.approve_native(change=self.fixture_bound)
+        self.fixture.provider.authority = 'fixture'
         self.listener = SERVER.Fixture(self.scenario, core=self.core, openapi=LOCKED)
         self.served = S.InThread(self.listener).start()
         self.addCleanup(self.served.stop)
         self.wire = self.served.transport(timeout=CEILING_S)
         self.fixture.server = self.wire
+
+    def fixture_bound(self, declared):
+        """The matrix's synthetic profile bound to the fixture authority: its pinned route allowlist and its
+        declaration both declare the fixture transport (R8 point 2), the allowlist's pin moved to its new digest."""
+        server = declared['provisioning']['agent_server']
+        pin = server['admission']['routes']
+        path = self.fixture.tmp / pin['path']
+        routes = json.loads(path.read_text(encoding='utf-8'))
+        routes['transport'] = dict(FIXTURE_TRANSPORT)
+        raw = (json.dumps(routes, indent=2) + '\n').encode('utf-8')
+        path.write_bytes(raw)
+        pin['sha256'] = hashlib.sha256(raw).hexdigest()
+        server['transport'] = dict(FIXTURE_TRANSPORT)
+
+    def run_attempt(self, key):
+        def observe(phase, **facts):
+            return self.observe(phase) if self.observe else ()
+        return AR.run_attempt(self.store, key, transport=self.wire, base=self.base, actor=TRM.ACTOR,
+                              inspect=Declared(lambda cid: ()),
+                              pull=Declared(lambda name: self.fail('no pull expected')), observe=observe, ceiling_s=0, clock=lambda: 0.0,
+                              wait=lambda s: self.fail('no wait expected'), read_artifact=self.fixture.read_artifact)
 
     def recover(self):
         before = len(self.wire.calls)

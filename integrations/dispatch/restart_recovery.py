@@ -136,6 +136,10 @@ class _ReadOnly:
 
     def __init__(self, transport):
         self.transport = transport
+        # E-01.8: the caller's transport's declared authority, carried, so that the client's equality (R8 point 4)
+        # compares the transport recover was given, not this wrapper (absent on the transport: absent here, live)
+        if hasattr(transport, 'authority'):
+            self.authority = transport.authority
 
     def __call__(self, method, path, body=None, **kwargs):
         if method != 'GET' or body is not None or kwargs:

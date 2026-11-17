@@ -140,8 +140,11 @@ BASE_BRANCH = 'refs/heads/main'
 HEX40 = re.compile(r'[0-9a-f]{40}')
 ATTEMPT_ID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')   # store.attempt_id_for
 
-# R5: the result commit's identity and message.
+# R5: the result commit's identity and message. The identity is an input of the result rule (E-01.7; E-01.8 under
+# decision 0028 point 2: a composition passes the commissioning user's configured identity, validated by its own
+# reader); without one it is decision 0024 point 4's bot identity, so the native path's bytes are unchanged.
 BOT_NAME, BOT_EMAIL = 'aieh-bot-builder', 'aieh-bot-builder@localhost.invalid'
+BOT_IDENTITY = (BOT_NAME, BOT_EMAIL)
 TITLE_MAX = 200
 # G5: the accepted design's test command (the change add-slugify's acceptance criterion, E-05.1's command), run by
 # the RESULT command on an export of the committed tree.
@@ -554,14 +557,29 @@ def result_ref(attempt_id: str) -> str:
     return f'refs/heads/work/{attempt_id}'
 
 
+def commit_identity(identity=None) -> tuple[str, str]:
+    """The result commit's (name, email): IDENTITY, a (name, email) pair of non-empty strings that its caller has
+    validated (the composition reads it with its own checker), or BOT_IDENTITY when None; TAIL_BODY_INVALID for any
+    other value (a line break or an angle bracket would change the commit object's header)."""
+    if identity is None:
+        return BOT_IDENTITY
+    if not (isinstance(identity, tuple) and len(identity) == 2 and all(isinstance(v, str) and v for v in identity)) \
+            or any(c in v for v in identity for c in '<>\n\r\x00') or identity[0] != identity[0].strip() \
+            or any(c.isspace() for c in identity[1]):
+        raise _refused('TAIL_BODY_INVALID', 'the result commit\'s identity is not a (name, email) pair')
+    return identity
+
+
 @di.command_builder('d1-result')
-def build_result(base: Base, *, attempt_id: str, message: str, when: int, deliver: bool = True) -> dict:
+def build_result(base: Base, *, attempt_id: str, message: str, when: int, deliver: bool = True,
+                 identity=None) -> dict:
     """RESULT: one commit of ``/workspace/<repository>`` on a fresh git directory the command brings (from the base
     bundle in its text), under EXCLUSION_RULE, bundled and, with DELIVER, delivered into the guest exchange as
     ``work-<attempt id>.bundle``; the accepted design's test command on an export of the committed tree. Without
     DELIVER (a resumed result step whose bundle is already in the exchange) no frame is printed. Every value in the
     command's text is hex-encoded JSON, from the base, the reserved record (``commit_message``) and the store's time
-    (``attempt_time``)."""
+    (``attempt_time``); the identity is IDENTITY's (``commit_identity``: the bot's when None)."""
+    name, email = commit_identity(identity)
     if not isinstance(attempt_id, str) or ATTEMPT_ID_RE.fullmatch(attempt_id) is None:
         raise _refused('TAIL_BODY_INVALID', 'not an attempt id')
     if type(when) is not int or when <= 0:
@@ -569,7 +587,7 @@ def build_result(base: Base, *, attempt_id: str, message: str, when: int, delive
     if type(deliver) is not bool:
         raise _refused('TAIL_BODY_INVALID', 'deliver is a bool')
     params = {'base': base.commit, 'base_ref': base.ref, 'bundle': base.bundle.hex(), 'ref': result_ref(attempt_id),
-              'name': BOT_NAME, 'email': BOT_EMAIL, 'date': f'{when} +0000', 'message': message,
+              'name': name, 'email': email, 'date': f'{when} +0000', 'message': message,
               'test_timeout': TEST_TIMEOUT_S, 'output_limit': TEST_OUTPUT_BYTES, 'part': PART,
               'part_begin': PART_BEGIN, 'part_end': PART_END, 'frame': deliver,
               'forbidden': sorted(FORBIDDEN_NAMES), 'protected': list(PROTECTED_DIRS),
@@ -679,13 +697,16 @@ class Prepared:
     when: int
     seed: object
     result: object
+    identity: tuple = BOT_IDENTITY
 
 
-def prepare(resolved, base: Base, attempt_id: str, when: int, *, deliver: bool = True) -> Prepared:
+def prepare(resolved, base: Base, attempt_id: str, when: int, *, deliver: bool = True, identity=None) -> Prepared:
     text = build_message(resolved, base)
     message = commit_message(resolved, base, attempt_id)
     return Prepared(text=text, message=message, when=when, seed=build_seed(base),
-                    result=build_result(base, attempt_id=attempt_id, message=message, when=when, deliver=deliver))
+                    result=build_result(base, attempt_id=attempt_id, message=message, when=when, deliver=deliver,
+                                        identity=identity),
+                    identity=commit_identity(identity))
 
 
 # ---------------------------------------------------------------------------
@@ -705,12 +726,13 @@ def message_received(client, conversation_id: str, message_sha256: str) -> bool:
                for e in events)
 
 
-def turn_intent(operation_key: str, base: Base, text: str) -> dict:
+def turn_intent(operation_key: str, base: Base, text: str, authority: str = di.LIVE) -> dict:
+    """The turn journal's intent; AUTHORITY, the attempt's bound one, labels it when it is not live (R11)."""
     return {'format': TURN_FORMAT, 'operationKey': operation_key, 'attemptId': store.attempt_id_for(operation_key),
             'conversationId': store.conversation_id_for(operation_key),
             'base': {'repository': base.repository, 'ref': base.ref, 'commit': base.commit},
             'seed': {'sha256': base.seed_sha256, 'files': len(base.files)}, 'frame': FRAME_VERSION,
-            'messageSha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+            'messageSha256': hashlib.sha256(text.encode('utf-8')).hexdigest(), **di.authority_label(authority)}
 
 
 def send_message(integration_store, operation_key: str, client, base: Base, text: str, *, actor: str) -> dict:
@@ -726,7 +748,7 @@ def send_message(integration_store, operation_key: str, client, base: Base, text
     with di.dispatcher_lock(integration_store):
         body = message_body(text)
         di.TAIL_GRAMMARS[di.MESSAGE_TAIL](body)                 # the client's own grammar, before anything is recorded
-        intent = turn_intent(operation_key, base, text)
+        intent = turn_intent(operation_key, base, text, di.seam_authority(client))
         key = TURN_KEY.format(attempt_id=intent['attemptId'])
         try:
             held = integration_store.reserve(key, intent, actor=actor).reservation
@@ -945,11 +967,12 @@ def _data_text(text: str) -> str:
     return ''.join(c for c in text if c in '\n\t' or c.isprintable())
 
 
-def expected_commit(tree: str, base: str, message: str, when: int) -> bytes:
-    """The raw commit object the dispatcher specifies over TREE: parent the base, the builder bot as author and
-    committer at the store's time, the message; nothing else."""
-    identity = f'{BOT_NAME} <{BOT_EMAIL}> {when} +0000'
-    return (f'tree {tree}\nparent {base}\nauthor {identity}\ncommitter {identity}\n\n{message}').encode('utf-8')
+def expected_commit(tree: str, base: str, message: str, when: int, identity=None) -> bytes:
+    """The raw commit object the dispatcher specifies over TREE: parent the base, IDENTITY (``commit_identity``: the
+    builder bot when None) as author and committer at the store's time, the message; nothing else."""
+    name, email = commit_identity(identity)
+    who = f'{name} <{email}> {when} +0000'
+    return (f'tree {tree}\nparent {base}\nauthor {who}\ncommitter {who}\n\n{message}').encode('utf-8')
 
 
 def object_id(kind: str, raw: bytes) -> str:
@@ -978,8 +1001,14 @@ class VerifiedResult:
     excluded: tuple = field(repr=False)
     excluded_digest: dict = field(default_factory=dict)
     resumed: bool = False
+    # E-01.8 (R8, R11): the attempt's bound authority, as the run's client established it from the pinned route
+    # allowlist; in to_json only when it is not live (a native record is byte for byte what it was)
+    authority: str = di.LIVE
 
     def to_json(self) -> dict:
+        return {**self._json(), **di.authority_label(self.authority)}
+
+    def _json(self) -> dict:
         return {'format': RESULT_FORMAT, 'attemptId': self.attempt_id, 'conversationId': self.conversation_id,
                 'repository': self.repository, 'base': self.base, 'commit': self.commit, 'tree': self.tree,
                 'ref': self.ref, 'bundle': {'sha256': self.bundle_sha256, 'bytes': self.bundle_bytes},
@@ -1006,7 +1035,8 @@ def _tree_refused(problems: list[dict], what: str) -> DispatchRefused:
 
 
 def intake_result(integration_store, operation_key: str, *, base: Base, printed: dict, pulled: Mapping,
-                  message: str, when: int, resumed: bool = False) -> VerifiedResult:
+                  message: str, when: int, resumed: bool = False, identity=None,
+                  authority: str = di.LIVE) -> VerifiedResult:
     """The host's intake of the pulled bundle: the attempt confirmed with no end record (ATTEMPT_ENDED) and its turn
     confirmed; the pull verified by the retained verifier (RESULT_NOT_VERIFIED) at the bundle digest the command
     printed before the tests and the probe delivered (a resumed intake: the pulled bundle's own digest, the
@@ -1014,7 +1044,8 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
     (RESULT_REFS_INVALID); its commit the printed one and byte for byte ``expected_commit`` over its own tree
     (RESULT_COMMIT_MISMATCH); the tree within its bounds, regular files only, no link, gitlink or forbidden name,
     ``openspec/`` and ``backlog/`` exactly the base's, the blobs at most MAX_INFLATED inflated (RESULT_TREE_REFUSED
-    with a reason). Any repository error is RESULT_NOT_VERIFIED."""
+    with a reason). Any repository error is RESULT_NOT_VERIFIED. IDENTITY is the result rule's (``expected_commit``);
+    AUTHORITY the attempt's bound authority, which the result carries (the run passes its client's)."""
     resolved = _check_attempt(integration_store, operation_key)
     attempt_id = store.attempt_id_for(operation_key)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
@@ -1048,7 +1079,7 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
         if found is None or found[1] != 'commit':
             raise _refused('RESULT_NOT_VERIFIED', f'the verified repository lacks the commit {commit}')
         tree, _ = _commit_header(found[2])
-        if HEX40.fullmatch(tree) is None or found[2] != expected_commit(tree, base.commit, message, when) \
+        if HEX40.fullmatch(tree) is None or found[2] != expected_commit(tree, base.commit, message, when, identity) \
                 or object_id('commit', found[2]) != commit or tree != printed['tree']:
             raise _refused('RESULT_COMMIT_MISMATCH', f'{commit} is not the commit the dispatcher specified over its '
                            'tree (parent, identity, time, message or header)', commit=commit)
@@ -1090,7 +1121,8 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
                           bundle_bytes=int(staged.get('bytes')), staged=str(staged.get('path')),
                           verify_repo=str(verified['verify_repo']), files=len(entries), inflated_bytes=inflated,
                           tests=printed['tests'], excluded=tuple(printed['excluded']),
-                          excluded_digest=printed['excluded_digest'], resumed=resumed)
+                          excluded_digest=printed['excluded_digest'], resumed=resumed,
+                          authority=_authority(authority))
 
 
 def _varint(data: bytes, at: int) -> tuple[int, int]:
@@ -1197,6 +1229,21 @@ def _stop(integration_store, operation_key, transport, actor, records, read_arti
     return AE.end_interrupted_attempt(integration_store, operation_key, transport=transport, actor=actor,
                                       trigger=AE.ATTEMPT_STOPPED, dispatcher_records=list(records),
                                       read_artifact=read_artifact)
+
+
+def _authority(authority) -> str:
+    if authority not in di.AUTHORITIES:
+        raise ValueError(f'an authority is one of {di.AUTHORITIES}')
+    return authority
+
+
+def _observers(client, **observers) -> str:
+    """The attempt's bound authority (the client's: its pinned route allowlist's, R8 point 4), each OBSERVER (an
+    inspect or pull callable) declaring it (R8 point 5), else OBSERVER_AUTHORITY_MISMATCH before any is called."""
+    bound = di.seam_authority(client)
+    for name, observer in observers.items():
+        di.require_authority(observer, bound, 'OBSERVER_AUTHORITY_MISMATCH', f'the {name} observer')
+    return bound
 
 
 def _start(integration_store, operation_key, base, transport, read_artifact):
@@ -1334,13 +1381,15 @@ def _result_step(integration_store, operation_key, client, *, base, prepared, pu
     """RESULT, the intake and what follows it. The delivery, the verified pull and the intake are each recorded as
     a receipt; a resumed step reuses a verified pull (REUSE) instead of pulling again."""
     attempt_id, conversation_id = store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
+    bound = di.seam_authority(client)
+    label = di.authority_label(bound)             # E-01.8, R11: the step's receipts carry a bound authority not live
     answer = _command(client, conversation_id, prepared.result, 'RESULT_UNANSWERED')
     printed = parse_result(answer, delivered_expected=not resumed)
     if not resumed:
         _receipt(integration_store, DELIVERY_KEY.format(attempt_id=attempt_id), {
             'format': DELIVERY_FORMAT, 'attemptId': attempt_id, 'name': printed['delivered']['name'],
             'bundle': {'sha256': printed['delivered']['sha256'], 'size': printed['delivered']['size']},
-            'commit': printed['commit']}, actor)
+            'commit': printed['commit'], **label}, actor)
     name = result_name(attempt_id)
     if reuse is not None:
         pulled = reuse
@@ -1358,12 +1407,13 @@ def _result_step(integration_store, operation_key, client, *, base, prepared, pu
                 'format': PULL_FORMAT, 'attemptId': attempt_id, 'name': name, 'staged': str(staged.get('path')),
                 'verifyRepo': str(bundle.get('verify_repo')),
                 'bundle': {'sha256': staged.get('sha256'), 'size': staged.get('bytes')},
-                'refs': [list(r) for r in header.get('refs') or ()]}, actor)
+                'refs': [list(r) for r in header.get('refs') or ()], **label}, actor)
     verified = intake_result(integration_store, operation_key, base=base, printed=printed, pulled=pulled,
-                             message=prepared.message, when=prepared.when, resumed=resumed)
+                             message=prepared.message, when=prepared.when, resumed=resumed,
+                             identity=prepared.identity, authority=bound)
     _receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id),
              {'format': INTAKE_FORMAT, 'record': verified.to_json(), 'staged': verified.staged,
-              'verifyRepo': verified.verify_repo}, actor)
+              'verifyRepo': verified.verify_repo, **label}, actor)
     return _after_intake(integration_store, operation_key, client, verified, observe=observe,
                          reserve_result=reserve_result, stopped=stopped, status=status)
 
@@ -1407,7 +1457,7 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
                 reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
                 ceiling_s: float = TURN_CEILING_S, clock=None, wait=None,
                 read_artifact: Callable[[str], bytes] = di.read_profile_artifact,
-                defer_interruption_end: bool = False) -> RunOutcome:
+                defer_interruption_end: bool = False, identity=None) -> RunOutcome:
     """The attempt run (the module docstring's steps 0 to 7) of a confirmed attempt on BASE (``read_base`` of the
     approved repository). An attempt whose turn journal exists is TURN_ALREADY_SENT before any call (its result step
     is ``resume_result``'s). Refusals (DispatchRefused) leave the conversation as it is, for a resumed step; only an
@@ -1418,17 +1468,22 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
 
     The dispatcher lock (E-01.4.2 slice 5a, R17) is held from before the first call until the message's outcome is
     recorded (``send_message`` takes it again, re-entrantly), and released before the turn is waited for: when
-    another act holds it, DISPATCHER_BUSY before any call."""
+    another act holds it, DISPATCHER_BUSY before any call.
+
+    E-01.8: INSPECT and PULL must declare the attempt's bound authority (R8 point 5: OBSERVER_AUTHORITY_MISMATCH before
+    any call); IDENTITY is the result commit's (``commit_identity``: the bot's when None, decision 0024 point 4)."""
     region = contextlib.ExitStack()
     region.enter_context(di.dispatcher_lock(integration_store))
     try:
         resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                                read_artifact)
+        _observers(client, inspect=inspect, pull=pull)
         held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
         if held is not None:
             raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the run is not repeated; a result '
                            'step is resumed with resume_result', state=held.state)
-        prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key))   # S2: first
+        prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),   # S2: first
+                           identity=identity)
         observe = observe or (lambda phase, **facts: ())
 
         def stopped(records, outcome='stopped', problems=(), status=None):
@@ -1501,11 +1556,17 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
                         status=status, actor=actor)
 
 
-def _resumed_result(integration_store, operation_key, base, receipt) -> VerifiedResult:
+def _resumed_result(integration_store, operation_key, base, receipt, authority=None) -> VerifiedResult:
     """The VerifiedResult an intake receipt recorded, re-checked against its verify repository (the commit-id
     equality, the staged digest): agent-controlled text is not in a receipt, so the test output and the excluded
-    paths are only their digests here."""
+    paths are only their digests here. AUTHORITY is the attempt's bound one, established by the caller from the pinned
+    route allowlist; the record's label (R11; absent: live) must agree, else RESULT_STAGED_UNVERIFIED. None (a caller
+    without the allowlist's reader: the native driver's recorded_result) admits only an unlabelled, live record."""
     record, attempt_id = receipt['record'], store.attempt_id_for(operation_key)
+    labelled = record.get('authority', di.LIVE)
+    if labelled != (di.LIVE if authority is None else authority):
+        raise _refused('RESULT_STAGED_UNVERIFIED', f'the intake receipt is labelled {labelled!r}, not the attempt\'s '
+                       f'bound authority {authority!r}')
     pull = _receipt_of(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT)
     if pull is None:
         raise _refused('RESULT_STAGED_UNVERIFIED', 'the intake was recorded without its verified pull')
@@ -1530,16 +1591,18 @@ def _resumed_result(integration_store, operation_key, base, receipt) -> Verified
                           bundle_bytes=record['bundle']['bytes'], staged=receipt['staged'],
                           verify_repo=receipt['verifyRepo'], files=record['files'],
                           inflated_bytes=record['inflatedBytes'], tests=tests, excluded=(),
-                          excluded_digest=dict(record['excluded']), resumed=True)
+                          excluded_digest=dict(record['excluded']), resumed=True, authority=labelled)
 
 
-def recorded_result(integration_store, operation_key: str, *, base: Base) -> VerifiedResult:
+def recorded_result(integration_store, operation_key: str, *, base: Base, read_artifact=None) -> VerifiedResult:
     """The VerifiedResult of an attempt whose intake is recorded, re-checked against its verify repository and the
     recorded digests (as ``resume_result`` resumes the steps after an intake): what the run driver (D1 slice C) hands
     the result path when it resumes it after the result journal was dispatched, when ``resume_result`` refuses
     (ATTEMPT_RESULT_HANDED_ON). The attempt must be confirmed with no end record (ATTEMPT_ENDED) and its base the
     attempt's (BASE_LACKS_DESIGN); RESULT_STAGED_UNVERIFIED when no intake is recorded or it no longer checks. The
-    agent-controlled text is not in a receipt: the test output and the excluded paths are their digests only."""
+    agent-controlled text is not in a receipt: the test output and the excluded paths are their digests only. Given
+    READ_ARTIFACT, the attempt's bound authority is read from its pinned route allowlist and the receipt's label must
+    agree; without it only a live (unlabelled) record is admitted."""
     resolved = _check_attempt(integration_store, operation_key)
     if base.repository != resolved.repository or base.design_commit != _design(resolved)['commit']:
         raise _refused('BASE_LACKS_DESIGN', 'the base is not the approved repository checked against the attempt\'s '
@@ -1548,14 +1611,15 @@ def recorded_result(integration_store, operation_key: str, *, base: Base) -> Ver
                          INTAKE_FORMAT)
     if intake is None:
         raise _refused('RESULT_STAGED_UNVERIFIED', 'no intake is recorded for the attempt')
-    return _resumed_result(integration_store, operation_key, base, intake)
+    bound = None if read_artifact is None else di.attempt_authority(resolved, read_artifact)
+    return _resumed_result(integration_store, operation_key, base, intake, bound)
 
 
 def resume_result(integration_store, operation_key: str, *, transport, base: Base, actor: str,
                   pull: Callable[[str], Mapping], exists: Callable[[str], bool],
                   observe: Callable[..., Sequence[Mapping]] | None = None,
                   reserve_result: Callable[[dict, VerifiedResult], object] | None = None,
-                  read_artifact: Callable[[str], bytes] = di.read_profile_artifact) -> RunOutcome:
+                  read_artifact: Callable[[str], bytes] = di.read_profile_artifact, identity=None) -> RunOutcome:
     """Resume the result step of an attempt whose turn journal is confirmed, which has no end record and whose result
     journal is not dispatched (reviews S3 and A4 D2):
 
@@ -1565,9 +1629,13 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
       RUNTIME_NOT_RUNNING, A4 N-f), and
       RESULT runs again: without a delivery when the exchange already holds the bundle (``exists``), the commit-id
       equality the integrity check. A verified pull already recorded is reused (its staged file and verify
-      repository re-checked against the recorded digests) instead of pulling again; else the bundle is pulled."""
+      repository re-checked against the recorded digests) instead of pulling again; else the bundle is pulled.
+
+    E-01.8: PULL and EXISTS must declare the attempt's bound authority (OBSERVER_AUTHORITY_MISMATCH before any call);
+    IDENTITY is the result commit's, as ``run_attempt`` takes it."""
     resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                            read_artifact)
+    bound = _observers(client, pull=pull, exists=exists)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
     if turn is None or turn.state != 'confirmed':
         raise _refused('TURN_NOT_CONFIRMED', f'the turn journal is {getattr(turn, "state", None)}, not confirmed')
@@ -1586,9 +1654,10 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     _settled_receipt(integration_store, PULL_KEY.format(attempt_id=attempt_id), PULL_FORMAT, lambda receipt:
                      _staged_again(receipt, _delivery_receipt(integration_store, attempt_id)), actor)
     intake = _settled_receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id), INTAKE_FORMAT,
-                              lambda receipt: _resumed_result(integration_store, operation_key, base, receipt), actor)
+                              lambda receipt: _resumed_result(integration_store, operation_key, base, receipt, bound),
+                              actor)
     if intake is not None:
-        verified = _resumed_result(integration_store, operation_key, base, intake)
+        verified = _resumed_result(integration_store, operation_key, base, intake, bound)
         return _after_intake(integration_store, operation_key, client, verified, observe=observe,
                              reserve_result=reserve_result, stopped=stopped, status='finished')
     _, status = conversation_status(client, conversation_id)
@@ -1604,7 +1673,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
         reuse = _staged_again(pulled, _delivery_receipt(integration_store, attempt_id))
     resumed = reuse is not None or bool(exists(result_name(attempt_id)))
     prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
-                       deliver=not resumed)
+                       deliver=not resumed, identity=identity)
     return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
                         observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=resumed,
                         status=status, actor=actor, reuse=reuse)

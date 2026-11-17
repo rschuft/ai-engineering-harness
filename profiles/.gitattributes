@@ -3,3 +3,4 @@
 # core.autocrlf, so a digest computed on one clone holds on every clone.
 /seed/**        -text
 /strong-*/**    -text
+/fixture-*/**   -text

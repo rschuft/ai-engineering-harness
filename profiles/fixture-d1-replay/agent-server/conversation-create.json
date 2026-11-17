@@ -1,0 +1,20 @@
+{
+  "conversation_id": "929f0d8a-f3d8-4da3-8ac3-9d0017709d71",
+  "conversation_runtime": "docker",
+  "workspace": {
+    "kind": "LocalWorkspace",
+    "working_dir": "/workspace"
+  },
+  "agent_settings": {
+    "agent_kind": "openhands",
+    "mcp_config": {},
+    "tools": []
+  },
+  "autotitle": false,
+  "container": {
+    "browser": false
+  },
+  "tags": {
+    "aieh": "f-04.2-disposable"
+  }
+}

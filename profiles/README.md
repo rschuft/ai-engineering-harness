@@ -673,3 +673,38 @@ refuses with `TIER_UNAVAILABLE`.
 | A provider binary that is not the pinned version | Refused by `preflight`. |
 | CI or cloud VMs without nested virtualization | No local strong provider (the provider would itself need nesting). Use a remote Incus host. |
 | Docker Desktop | Not a provider in this contract. |
+
+## 13. Fixture profiles
+
+A **fixture profile** is a declared class of profile that is **not an execution profile** (plan leaf E-01.8; the I1
+integration design, R8 point 2 and R9; decision 0026 points 1 and 5). It exists so that the production dispatcher can
+dispatch an attempt to the Agent Server fixture (`integrations/agentfixture/`) through its resolver, admission and
+launch gate, unchanged.
+
+- **Authority.** It declares the authority `fixture`, the same declaration in two places: its pinned route allowlist's
+  top-level `transport` and `provisioning.agent_server.transport`, both exactly
+  `{"authority": "fixture", "kind": "loopback-fixture"}`. A profile that declares no transport is `live`. The
+  allowlist's sha256 is in the reserved policy inputs, so the authority is bound at reservation; the dispatcher refuses
+  a transport, credential provider, Gitea target or observer that declares another authority, with no call.
+- **Name.** Its id begins `fixture-` exactly when it declares the fixture authority.
+- **Not launchable.** It holds only what resolution, admission and the launch gate read: `schema`, `name`, `status`,
+  `ceilings`, `provisioning.agent_server` (`version`, `config.content`'s runtime and caps, `fixture`,
+  `stage_create_template`, `conversations`' mounts, `admission.routes`, `transport`), the one `provider-tunnel`
+  endpoint the native stage's admission reads, `replays`, and a `provider` block holding **only the image pin**
+  (`provision_lock`) that the launch gate's `admitted` reads (the engineering manager's reading of R9 for E-01.8). It
+  has no tier label, boot input, state directory, lifecycle, launch section, or provider beyond that pin, so no
+  provider can launch it.
+- **No property, no tier.** It claims none of P1 to P12 and no tier. Contract C6 is not claimed: `status.operational`
+  `true` means, for a fixture profile only, that its conformance suite passed at the pinned answers (E-01.7).
+- **What it replays.** `replays` names the execution profile whose admission-relevant values it carries, by the sha256
+  of its `profile.json`: the Agent Server version, the runtime and caps, the conversation mounts, the ceilings, the
+  provider-tunnel endpoint, the provision lock's pin, the two create templates (byte copies under its own directory)
+  and the route allowlist (the replayed one with the transport declaration added). So the fixture's recorded inspect
+  matches the admitted caps, image and mounts with the gate's logic unchanged, and the native execution kind is
+  replayed (R10: a token derived from a public seed, from a fixture credential provider).
+- **Checked.** `tools/check_profile.py` checks a fixture profile against this section and calls the dispatcher's own
+  admission, stage-template and transport-declaration rules.
+
+| Fixture profile | Replays | Leaf |
+|---|---|---|
+| `fixture-d1-replay` | `strong-windows-qemu-whpx` at `b7c5d2fe...d9c7`, the profile D1 ran | E-01.8 |

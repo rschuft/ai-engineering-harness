@@ -1,0 +1,132 @@
+{
+  "schema": "ai-engineering-harness/profiles/profile/v1",
+  "name": "fixture-d1-replay",
+  "plan_leaf": "E-01.8",
+  "contract": "profiles/README.md, section 13 (fixture profiles)",
+  "decision": "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
+  "purpose": "A fixture profile, not an execution profile (the I1 integration design, R9; decision 0026 point 5): it declares the fixture authority, cannot be launched, has no tier and claims none of P1 to P12. It replays the native execution kind of the profile D1 ran, with that profile's admission values, so that the dispatcher admits it and the launch gate compares the fixture's recorded inspect with its logic unchanged; its attempts are answered by the Agent Server fixture (integrations/agentfixture).",
+  "status": {
+    "operational": true,
+    "operational_evidence": "For a fixture profile, its conformance suite passed at the pinned answers: E-01.7, evidence/bootstrap-log.md#e-01-7-verdict-2026-11-16 (integrations/agentfixture/tests). Contract C6 is not claimed: no property, no tier."
+  },
+  "replays": {
+    "profile": "strong-windows-qemu-whpx",
+    "sha256": "b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7",
+    "evidence": [
+      "evidence/D1-run-2026-11-16.md",
+      "evidence/bootstrap-log.md#e-01-7-verdict-2026-11-16"
+    ],
+    "note": "Every admission-relevant value here is the replayed profile's at this digest (tools/check_profile.py compares them): the Agent Server version, the runtime and caps of config.content, the conversation mounts, the ceilings, the provider-tunnel endpoint, the provision lock's pin and the two create templates (byte copies); the route allowlist is the replayed one with the transport declaration added."
+  },
+  "ceilings": {
+    "vcpu": 8,
+    "memory_mib": 16384
+  },
+  "provider": {
+    "provision_lock": {
+      "path": "profiles/strong-windows-qemu-whpx/provision.lock.json",
+      "sha256": "f02e430a3f3de69976e5eb632d757126c9d1a879ab68cf2c3681f9977a8168e0"
+    },
+    "note": "Only the image pin the launch gate reads (integrations/dispatch/launch_gate.py admitted: image.image_id); no provider, binary, boot input or launch: the profile cannot be launched (the engineering manager's reading of R9 for E-01.8)."
+  },
+  "provisioning": {
+    "agent_server": {
+      "version": "1.60.1",
+      "config": {
+        "content": {
+          "conversation_runtime": "docker",
+          "conversation_runtime_selectable": false,
+          "conversation_container_memory": "4g",
+          "conversation_container_cpus": 2.0,
+          "conversation_container_pids_limit": 512,
+          "max_concurrent_runs": 3
+        }
+      },
+      "fixture": {
+        "path": "profiles/fixture-d1-replay/agent-server/conversation-create.json",
+        "sha256": "ab10e3f311c3a840405f489b803d450f11f92ed96742c9acf9cda3eca511964e",
+        "purpose": "A byte copy of the replayed profile's F-04.2 fixture, which admission reads."
+      },
+      "stage_create_template": {
+        "plan_leaf": "E-01.8",
+        "stage": "implement",
+        "path": "profiles/fixture-d1-replay/agent-server/d1-create.json",
+        "sha256": "660001d24cc0b5c0fda1d0a5a49d94fb949a99ce7f0f83bcb3d19f7d5990fce6",
+        "execution_profile": "native",
+        "purpose": "A byte copy of the replayed profile's D1 create template: the native execution kind, replayed (R10)."
+      },
+      "conversations": {
+        "source_root": "/srv/scratch/openhands",
+        "mounts": [
+          {
+            "type": "bind",
+            "source": "/srv/scratch/openhands/conversations/{conversation_hex}",
+            "destination": "/var/openhands/conversations/{conversation_hex}",
+            "rw": true
+          },
+          {
+            "type": "bind",
+            "source": "/srv/scratch/openhands/persistence/runtime-data/{conversation_hex}/persistence",
+            "destination": "/var/openhands/.openhands",
+            "rw": true
+          },
+          {
+            "type": "bind",
+            "source": "/srv/scratch/openhands/persistence/runtime-data/{conversation_hex}/workspace",
+            "destination": "/workspace",
+            "rw": true
+          }
+        ],
+        "forbidden_sources": [
+          "/run/docker.sock",
+          "/var/run/docker.sock",
+          "/run/containerd",
+          "/run/docker",
+          "/srv/scratch/docker",
+          "/etc/aieh",
+          "/var/lib/aieh",
+          "/etc",
+          "/root",
+          "/home",
+          "/proc",
+          "/sys",
+          "/dev",
+          "/run",
+          "/var/run"
+        ]
+      },
+      "admission": {
+        "routes": {
+          "path": "profiles/fixture-d1-replay/agent-server/routes.json",
+          "sha256": "dd1d51a08c3f0094d90a42f4c90aa273071f9cc56fe298e2ae8139805f144eb3",
+          "purpose": "The replayed profile's route allowlist with the transport declaration (R8 point 2)."
+        }
+      },
+      "transport": {
+        "authority": "fixture",
+        "kind": "loopback-fixture"
+      }
+    }
+  },
+  "network": {
+    "endpoints": [
+      {
+        "class": "provider-tunnel",
+        "status": "planned: declared for the native execution profile (decision 0023 section 4; plan leaf E-05.10); not active until the Owner's act OA-31 (a) and E-05.10's live qualification observe it",
+        "purpose": "the native profile's provider access: Claude Code in a conversation container reaches the provider's one origin through a host loopback CONNECT-only tunnel that holds no credential and terminates no TLS (decision 0023 sections 3 and 4.2); its HTTPS_PROXY is http://<guest_address>:<guest_port> (E-05.9's admission compares it with this entry)",
+        "direction": "guest-to-host",
+        "mechanism": "ssh-remote-forward",
+        "mechanism_detail": "the inference endpoint's guest listener and forward, unchanged on the guest side (decision 0023 section 4.1): the dispatcher holds ssh -N -R 172.17.0.1:8090:127.0.0.1:<host_port> over the management hostfwd when it starts the forward for the native profile (tools/guest.py inference-forward --execution-profile native), so each container connection reaches the tunnel instead of the broker. One forward at a time: the broker or the tunnel, never both.",
+        "forward_owner": "management-dispatcher (bootstrap: tools/guest.py under the Owner's account performs its role, decision 0013 point 1)",
+        "protocol": "tcp",
+        "guest_address": "172.17.0.1",
+        "guest_port": 8090,
+        "host_bind": "127.0.0.1",
+        "host_port": 18433,
+        "host_port_source": "this entry, declared once: the tunnel listens there (integrations/inference/provider_tunnel.py serve --profile) and the forward holder targets it for the native profile; beside the broker's example ports 18431 and 18432",
+        "origin": "api.anthropic.com:443",
+        "enforcement": "guest side: the inference endpoint's (the container guard's one ACCEPT, sshd PermitListen, the egress guard's empty allowlist, DNS refused); host side: the tunnel admits only CONNECT api.anthropic.com:443 with a TLS ClientHello whose server name is that host, refuses IP literals, plain HTTP and every other host and port, and connects only to the origin's host-resolved global addresses on 443 (a control in its own code, decision 0023 section 6)"
+      }
+    ]
+  }
+}

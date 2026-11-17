@@ -1009,7 +1009,7 @@ class Contract(Case):
                                  outcome_ref=f'outcome:{OUTCOME}')
         finally:
             store.close()
-        return core, RA.AttemptResolver(self.store, core, attempts.read_artifact)
+        return core, RA.AttemptResolver(self.store, attempts.seam(core), attempts.read_artifact)
 
     def test_complete_only_when_every_node_is_authoritative_resolved_and_current(self):
         class Trusted(T.Authorities):

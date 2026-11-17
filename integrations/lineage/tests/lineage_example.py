@@ -300,7 +300,7 @@ def build_dispatched(work, repo, declared):
         for task in ('TASK-1', 'TASK-2'):
             attempts.attempt(dispatched, core, task, change=CHANGE, design_commit=design,
                              outcome_ref=f'outcome:{OUTCOME}')
-    return path, RA.AttemptResolver(path, core, attempts.read_artifact)
+    return path, RA.AttemptResolver(path, attempts.seam(core), attempts.read_artifact)
 
 
 def example_sources(work):

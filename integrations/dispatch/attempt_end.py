@@ -524,6 +524,7 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
                        'its result is the result path\'s', result_state=result.state)
     begun = {'trigger': trigger, 'dispatcherRecords': records}
     client = _client(resolved, transport)(read_artifact)
+    label = di.authority_label(di.seam_authority(client))    # E-01.8, R11: the client's bound authority, not live
     if held is None:
         try:
             execution, events = observe(client, conversation_id)   # read only: nothing is written on a refusal here
@@ -538,7 +539,7 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
             raise _refused('ATTEMPT_NOT_INTERRUPTED', f'conversation {conversation_id} finished and no security stop '
                            'is recorded: its result is the result path\'s', execution_status=execution)
         intent = {'format': END_JOURNAL_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
-                  'conversationId': conversation_id}
+                  'conversationId': conversation_id, **label}
         integration_store.reserve(key, intent, actor=actor)
         _mark_end(integration_store, key, 'reserved', 'dispatched', actor, 'stop-runtime', begun)
     elif held.state == 'reserved':   # a crash between the reservation and its dispatch: nothing was stopped yet
@@ -571,7 +572,7 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
               'securityStop': verdict['securityStop'],
               'surfaced': {**verdict['surfaced'], 'runtimeStatus': runtime},
               'conversationStopped': True, 'resultHandedOn': False,
-              'tokenFingerprint': native_fingerprint(integration_store, operation_key)}
+              'tokenFingerprint': native_fingerprint(integration_store, operation_key), **label}
     _mark_end(integration_store, key, 'dispatched', 'confirmed', actor, verdict['classification'], record)
     return _detail(integration_store, key, 'confirmed')
 
@@ -728,10 +729,13 @@ STOP_KEY = 'dispatch/attempt/{attempt_id}/stop/{kind}/{code}'
 STOP_FORMAT = 'ai-engineering-harness/dispatch/attempt-stop/v1'
 
 
-def record_stop(integration_store, operation_key: str, records: Sequence[Mapping], *, actor: str) -> list[str]:
+def record_stop(integration_store, operation_key: str, records: Sequence[Mapping], *, actor: str,
+                read_artifact: Callable[[str], bytes] | None = None) -> list[str]:
     """Each of the dispatcher's stop RECORDS ({kind, code, ref}, of a security-stop kind) kept as a confirmed receipt
     for the attempt OPERATION_KEY; a repeat of the same kind and code is the same receipt. DISPATCHER_RECORD_INVALID
-    for a record outside the grammar or not a security stop's kind."""
+    for a record outside the grammar or not a security stop's kind. Given READ_ARTIFACT (the reader of the attempt's
+    pinned artifacts), each receipt carries the attempt's bound authority when it is not live (E-01.8, R11); the
+    native driver, which predates the authority, gives none and its receipts stay as they were."""
     checked = check_records(list(records))
     if any(r['kind'] not in NON_RETRYABLE_RECORDS for r in checked):
         raise _refused('DISPATCHER_RECORD_INVALID', 'a stop receipt is of a security-stop kind only')
@@ -739,10 +743,12 @@ def record_stop(integration_store, operation_key: str, records: Sequence[Mapping
     if held_identity is None:
         raise _refused('RESERVATION_INVALID', f'no dispatch reservation under {operation_key!r}')
     attempt_id, written = store.attempt_id_for(operation_key), []
+    label = {} if read_artifact is None else di.authority_label(di.attempt_authority(
+        di.stored_inputs(integration_store, operation_key, state='confirmed'), read_artifact))
     for record in checked:
         key = STOP_KEY.format(attempt_id=attempt_id, kind=record['kind'], code=record['code'])
         intent = {'format': STOP_FORMAT, 'workId': held_identity.identity.work_id, 'attemptId': attempt_id,
-                  'kind': record['kind'], 'code': record['code']}
+                  'kind': record['kind'], 'code': record['code'], **label}
         held = integration_store.reserve(key, intent, actor=actor).reservation
         if held.state == 'reserved':
             di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'stop-observed', None)

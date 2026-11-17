@@ -465,6 +465,18 @@ REFUSALS = {
     'RESULT_DELIVERY_UNSETTLED': 'the result step\'s delivery receipt is not confirmed and cannot be settled by '
                                  'reading it against the verified pull: the delivered digest is never left unchecked, '
                                  'and the attempt is held for the engineering manager',
+    # E-01.8 (the I1 integration design, R8; decision 0026 points 1 and 2): the attempt's bound authority, declared
+    # by its pinned route allowlist, equal to each seam's declared authority at its first use, with no call
+    'TRANSPORT_AUTHORITY_MISMATCH': 'the Agent Server transport declares another authority than the attempt\'s '
+                                    'pinned route allowlist: nothing was sent',
+    'CREDENTIAL_AUTHORITY_MISMATCH': 'the credential provider declares another authority than the attempt\'s pinned '
+                                     'route allowlist: no entry was read',
+    'RESULT_TARGET_AUTHORITY_MISMATCH': 'the Gitea target declares another authority than the attempt\'s pinned route '
+                                        'allowlist: nothing was read or written',
+    'OBSERVER_AUTHORITY_MISMATCH': 'an inspect or pull observer declares another authority than the attempt\'s '
+                                   'pinned route allowlist: nothing was called',
+    'TRANSPORT_DECLARATION_MISMATCH': 'the profile\'s declared transport and its pinned route allowlist\'s differ, or '
+                                      'one is not a declaration of the authority vocabulary',
 }
 
 
@@ -2384,6 +2396,7 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
     _check_stage_content(declared, resolved, admission, template)  # the D1 stage (E-05.2)
     routes_raw = _read_pinned(read_artifact, admission['routes'], 'route allowlist')
     _check_route_allowlist(routes_raw, admission['route'])
+    check_transport_declarations(declared, _artifact_object(routes_raw, 'route allowlist'))   # E-01.8, R8 point 2
     conversation_id = store.conversation_id_for(key)
     body = json.loads(_canonical(template))
     body['conversation_id'] = conversation_id
@@ -2695,6 +2708,83 @@ RECEIPT_FORMAT = 'ai-engineering-harness/dispatch/create-receipt/v1'
 RESULT_FORMAT = 'ai-engineering-harness/dispatch/dispatch-result/v1'
 
 
+# ---------------------------------------------------------------------------
+# The attempt's authority (E-01.8; the I1 integration design, R8; decision 0026 points 1 and 2)
+#
+# An attempt is ``live`` or ``fixture``. Its profile's pinned route allowlist declares it: an optional top-level
+# ``transport`` object, exactly TRANSPORT_DECLARATIONS[authority]; absent means ``live``. The allowlist's sha256 is in
+# the policy inputs, so the authority is bound at reservation; no record format changes. Each seam (the Agent Server
+# transport, the credential provider, the Gitea target, the inspect and pull observers) declares its own in an
+# ``authority`` attribute (absent: ``live``), and the dispatch path requires it equal to the attempt's bound one at
+# the seam's first use, refusing with a stable code and no call. These functions compare declared values: no dispatch
+# module tests for a particular authority.
+
+LIVE, FIXTURE = 'live', 'fixture'
+AUTHORITIES = (LIVE, FIXTURE)
+TRANSPORT_KEY = 'transport'
+TRANSPORT_DECLARATIONS = {FIXTURE: {'authority': FIXTURE, 'kind': 'loopback-fixture'}}
+
+
+def declared_authority(declaration, what: str = 'the route allowlist') -> str:
+    """The authority a ``transport`` DECLARATION states: ``live`` for None (none declared), else the authority whose
+    TRANSPORT_DECLARATIONS entry it is exactly; TRANSPORT_DECLARATION_MISMATCH for anything else."""
+    if declaration is None:
+        return LIVE
+    for authority, declared in TRANSPORT_DECLARATIONS.items():
+        if _same(declaration, declared):
+            return authority
+    raise DispatchRefused('TRANSPORT_DECLARATION_MISMATCH', f'{what} declares a transport that is not one of '
+                          f'{sorted(TRANSPORT_DECLARATIONS.values(), key=str)}', declared=_json_value(declaration))
+
+
+def allowlist_authority(data: dict) -> str:
+    """The authority a parsed route allowlist declares (its top-level ``transport``; absent: ``live``)."""
+    return declared_authority(data.get(TRANSPORT_KEY), 'the route allowlist')
+
+
+def seam_authority(seam) -> str:
+    """The authority a seam declares: its ``authority`` attribute, ``live`` when it has none."""
+    return getattr(seam, 'authority', LIVE)
+
+
+def require_authority(seam, bound: str, code: str, what: str) -> None:
+    """CODE unless SEAM declares the attempt's BOUND authority (context: declared, presented). Nothing is called."""
+    presented = seam_authority(seam)
+    if presented != bound:
+        raise DispatchRefused(code, f'{what} declares authority {_json_value(presented)!r}; the attempt is bound to '
+                              f'{bound!r} by its pinned route allowlist', declared=bound,
+                              presented=_json_value(presented))
+
+
+def attempt_authority(resolved: 'ResolvedInputs', read_artifact: Callable[[str], bytes] = None) -> str:
+    """The attempt's bound authority: what its pinned route allowlist (the reserved policy inputs' pin, read by its
+    sha256 through READ_ARTIFACT) declares."""
+    admission = _resolved_admission(resolved)
+    raw = _read_pinned(read_artifact or read_profile_artifact, admission['routes'], 'route allowlist')
+    return allowlist_authority(_artifact_object(raw, 'route allowlist'))
+
+
+def check_transport_declarations(declared: dict, routes: dict) -> str:
+    """The authority a profile declares, its two declarations agreeing (R8 point 2): the profile's
+    ``provisioning.agent_server.transport`` and its pinned route allowlist's top-level ``transport`` are the same
+    declaration, or both absent; TRANSPORT_DECLARATION_MISMATCH otherwise."""
+    provisioning = declared.get('provisioning') if isinstance(declared, dict) else None
+    server = provisioning.get('agent_server') if isinstance(provisioning, dict) else None
+    stated = server.get(TRANSPORT_KEY) if isinstance(server, dict) else None
+    profile = declared_authority(stated, 'the profile')
+    allowlist = allowlist_authority(routes)
+    if profile != allowlist or not _same(stated, routes.get(TRANSPORT_KEY)):
+        raise DispatchRefused('TRANSPORT_DECLARATION_MISMATCH', f'the profile declares authority {profile!r} and its '
+                              f'pinned route allowlist {allowlist!r}', profile=profile, allowlist=allowlist)
+    return profile
+
+
+def authority_label(authority: str) -> dict:
+    """What a writer adds to a record of an attempt bound to AUTHORITY (R11): ``{"authority": ...}`` when it is not
+    ``live``, else nothing, so that a live record stays byte for byte what it was."""
+    return {} if authority == LIVE else {'authority': authority}
+
+
 class AgentServerClient:
     """The dispatcher's only way to the Agent Server: ``call(method, route, params=, body=)`` sends
     ``transport(method, path, body)`` only when ``(method, route)`` is listed exactly once in the
@@ -2716,7 +2806,11 @@ class AgentServerClient:
     ``events`` one user message that starts the run, ``bash/execute_bash_command`` a ``ContainerCommand`` of a
     registered builder (``command_builder``), sent as ``{"command", "cwd": "/workspace", "timeout"}``. A built
     command that asks for an exchange delivery is sent as ``transport(method, path, body, deliver={"part",
-    "name"})``; every other call keeps the three-argument form."""
+    "name"})``; every other call keeps the three-argument form.
+
+    E-01.8 (the I1 integration design, R8 point 4): the allowlist's declared authority (its top-level ``transport``,
+    ``allowlist_authority``; ``authority`` here) must equal the transport's (``seam_authority``), else
+    TRANSPORT_AUTHORITY_MISMATCH when the client is built, so with zero transport calls."""
 
     def __init__(self, routes_raw: bytes, transport: Callable[[str, str, dict | None], object], *,
                  routes_sha256: str):
@@ -2731,6 +2825,11 @@ class AgentServerClient:
                 or not isinstance(version, str) or not version:
             raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'the route allowlist is not {ROUTES_SCHEMA} with a '
                                   'version')
+        # E-01.8 (R8 point 4): the allowlist's declared authority equal to the transport's, before any call; the
+        # one equality over declared values refuses a fixture transport for a live attempt and a live one for a
+        # fixture attempt alike
+        self.authority = allowlist_authority(data)
+        require_authority(transport, self.authority, 'TRANSPORT_AUTHORITY_MISMATCH', 'the Agent Server transport')
         listed = [(r.get('method'), r.get('path'), r.get('dispatcher'), r.get('tails')) for r in routes
                   if isinstance(r, dict)]
         counts: dict = {}
@@ -2990,6 +3089,7 @@ class DispatchResult:
     host_workspace: str
     inference_grant: dict | None = None   # the D1 stage's grant record, by fingerprint (E-05.6)
     native_token: dict | None = None      # the native D1 stage's token record, by fingerprint (E-05.9)
+    authority: str = LIVE                 # the attempt's bound authority (E-01.8, R11: in to_json when not live)
 
     def to_json(self) -> dict:
         record = {'format': RESULT_FORMAT, 'operation_key': self.operation_key, 'attempt_id': self.attempt_id,
@@ -2999,6 +3099,7 @@ class DispatchResult:
             record['inference_grant'] = self.inference_grant
         if self.native_token is not None:
             record['native_token'] = self.native_token
+        record.update(authority_label(self.authority))
         return record
 
 
@@ -3411,9 +3512,16 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code, _refusal_detail(refusal))
         raise
     custody, grant = _GrantCustody(integration_store, key, inference, actor), None
+    # E-01.8 (R8, R11): the attempt's bound authority, as its admitted (pinned) route allowlist declares it; every
+    # record written from here carries it when it is not live (a live record is byte for byte what it was)
+    label = authority_label(allowlist_authority(_artifact_object(admitted.routes_bytes, 'route allowlist')))
+    bound = label.get('authority', LIVE)
     try:
         try:
             if isinstance(staged, StageNative):   # E-05.9: only now, the native token's one entry
+                # E-01.8 (R8 point 5): the provider's declared authority first; a mismatch reads no entry
+                require_authority(native_credentials, bound, 'CREDENTIAL_AUTHORITY_MISMATCH',
+                                  'the credential provider')
                 grant = _read_native(native_credentials, reserved.stage)
                 admission.check_token(grant)       # E-05.8: never a token the provider refused
                 admitted = admit_secrets(admitted, resolved=reserved, workspaces=workspaces, grant=grant)
@@ -3423,7 +3531,7 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
             host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code,
-                  _refusal_detail(_native_ended(custody.ended(refusal), grant)))
+                  _refusal_detail(_native_ended(custody.ended(refusal), grant), **label))
             raise
         dispatched = {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
                       'route': {'method': admitted.method, 'path': admitted.path}}
@@ -3431,6 +3539,7 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
             dispatched['inferenceGrant'] = grant.record()
         elif grant is not None:
             dispatched['nativeToken'] = grant.record()
+        dispatched.update(label)
         _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
         try:
             answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport,
@@ -3438,10 +3547,10 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
                   _refusal_detail(_native_ended(custody.ended(refusal), grant),
-                                  create_sent=_create_possibly_sent(refusal)))
+                                  create_sent=_create_possibly_sent(refusal), **label))
             raise
         except Exception as exc:
-            detail = {'error': type(exc).__name__, **custody.detail(), **_native_detail(grant)}
+            detail = {'error': type(exc).__name__, **custody.detail(), **_native_detail(grant), **label}
             if 'inferenceRevocation' in detail:
                 exc.add_note('inference revocation: ' + _canonical(detail['inferenceRevocation']))
             _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered', detail)
@@ -3450,6 +3559,7 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
             grant.drop()   # held only until the transport call; the broker's grant is revoked by fingerprint
         receipt = create_receipt(answer, admitted.conversation_id)
         if receipt is not None:
+            receipt.update(label)
             _mark(integration_store, key, 'dispatched', 'confirmed', actor,
                   'created' if receipt['created'] else 'existing', receipt)
             return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
@@ -3458,17 +3568,17 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
                                   host_workspace=str(host),
                                   inference_grant=grant.record() if isinstance(grant, InferenceGrant) else None,
                                   native_token=None if grant is None or isinstance(grant, InferenceGrant)
-                                  else grant.record())
+                                  else grant.record(), authority=bound)
         status = answer.get('status') if isinstance(answer, Mapping) else None
         status = status if type(status) is int else None
         if status is not None and 400 <= status < 500:
             refusal = _native_ended(custody.ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the '
                                                                   f'create with {status}', status=status)), grant)
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-                  _refusal_detail(refusal, create_sent=True))
+                  _refusal_detail(refusal, create_sent=True, **label))
             raise refusal
         detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id',
-                  **custody.detail(), **_native_detail(grant)}
+                  **custody.detail(), **_native_detail(grant), **label}
         _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
         ended = {} if custody.revocation is None else {
             **({'inference_grant': grant.record()} if grant is not None else {}),

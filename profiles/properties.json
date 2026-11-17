@@ -46,6 +46,17 @@
     "provider": "string, for example incus-vm, incus-container, qemu-whpx, lima-vz, lima-qemu, wsl2-distro",
     "nesting": ["none", "nested"]
   },
+  "fixture_profiles": {
+    "section": "profiles/README.md, section 13",
+    "plan_leaf": "E-01.8",
+    "decision": "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
+    "name_prefix": "fixture-",
+    "transport": {"authority": "fixture", "kind": "loopback-fixture"},
+    "tier": null,
+    "properties_claimed": [],
+    "launchable": false,
+    "note": "A fixture profile is not an execution profile: no tier, no property, never launched; operational only as its conformance evidence shows (decision 0026 point 5)."
+  },
   "properties": [
     {
       "id": "P1",

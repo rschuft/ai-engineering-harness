@@ -141,6 +141,7 @@ class GiteaTarget:
     port: int
     git_url: str
     http: Callable | None = None
+    authority: str = di.LIVE        # E-01.8 (R8 point 5): the target's declared authority, the managed Gitea's live
 
     @property
     def web_root(self) -> str:
@@ -434,7 +435,9 @@ def pull_body(resolved, verified, target: GiteaTarget, refs: dict, tests_text: s
     """The pull request's body: built from the reserved record and the verified result only (values of their
     grammars), then the test output and R3's exclusions as data."""
     branch = verified.ref[len('refs/heads/'):]
-    rows = [('Repository', f'{target.full_name} (approved repository {resolved.repository})'),
+    labelled = [('Authority', verified.authority)] if verified.authority != di.LIVE else []   # E-01.8, R11
+    rows = [*labelled,
+            ('Repository', f'{target.full_name} (approved repository {resolved.repository})'),
             ('Base', f'{BASE_BRANCH} at {verified.base}'), ('Exact SHA', verified.commit), ('Branch', branch),
             ('Task', f'{resolved.work_id} ({refs["workRef"]})'), ('Attempt', verified.attempt_id),
             ('Conversation', refs['executionRef']), ('Outcome', refs['outcomeRef']),
@@ -471,11 +474,13 @@ def owner_report(resolved, verified, target: GiteaTarget, read: Verified, refs: 
             'commitMessage': read.message, 'diff': read.diff, 'tests': tests, 'exclusions': excluded,
             'search': search, 'observations': observations,
             'observationsStatement': 'supplied by the run driver' if observations is not None else
-            'not supplied: the run driver (slice C) fills this slot'}
+            'not supplied: the run driver (slice C) fills this slot', **di.authority_label(verified.authority)}
     pr = f'#{pull_view["number"]} {pull_view["url"]}' if pull else 'pending'
     diff = read.diff
     md = [f'# D1 result: {resolved.work_id}, attempt {verified.attempt_id}\n',
           f'Built by host code from the verified objects; readable without a Gitea sign-in.\n',
+          *([f'- Authority: `{verified.authority}` (the attempt\'s bound authority, not a live run)']
+            if verified.authority != di.LIVE else []),
           f'- Repository: `{target.full_name}` (approved repository `{resolved.repository}`)',
           f'- Base: `{BASE_BRANCH}` at `{verified.base}`', f'- Commit (exact SHA): `{verified.commit}`',
           f'- Branch: `{data["branch"]}`', f'- Pull request: {pr} (draft, title `{pull_title(read)}`)',
@@ -768,13 +773,26 @@ def push_branch(verified, target: GiteaTarget, delivery) -> None:
 
 def publish_result(integration_store, operation_key: str, *, verified, native, provider, target: GiteaTarget,
                    actor: str, observations: Mapping | None = None, extra_texts: Mapping[str, str] | None = None,
-                   report_dir: Path | None = None) -> ResultOutcome:
+                   report_dir: Path | None = None,
+                   read_artifact: Callable[[str], bytes] | None = None) -> ResultOutcome:
     """The result path of a verified, reserved result (the module docstring's points 1 to 7). NATIVE is the
     dispatcher's held native token (searched with, never sent); PROVIDER the credential provider of the stage bot's
     entry; OBSERVATIONS the run driver's (JSON data, in the report); EXTRA_TEXTS more texts the caller writes or sends
     with the result (searched too); REPORT_DIR, when given, receives report.json and report.md (exclusive create)
-    after the final search."""
+    after the final search.
+
+    E-01.8 (the I1 integration design, R8 point 5, R11): the attempt's bound authority is the one the verified result
+    carries (the attempt run's client established it from the pinned route allowlist); given READ_ARTIFACT it is
+    also read from that allowlist here and must agree (RESULT_NOT_RESERVED). TARGET and PROVIDER must declare it
+    (RESULT_TARGET_AUTHORITY_MISMATCH, CREDENTIAL_AUTHORITY_MISMATCH) before anything is read or written; the
+    receipt, the Owner report and the pull request body carry it when it is not live."""
     resolved, attempt_id = _attempt_checks(integration_store, operation_key, verified)
+    bound = verified.authority
+    if read_artifact is not None and di.attempt_authority(resolved, read_artifact) != bound:
+        raise _refused('RESULT_NOT_RESERVED', f'the verified result carries authority {bound!r}, not the one attempt '
+                       f'{attempt_id}\'s pinned route allowlist declares')
+    di.require_authority(target, bound, 'RESULT_TARGET_AUTHORITY_MISMATCH', 'the Gitea target')
+    di.require_authority(provider, bound, 'CREDENTIAL_AUTHORITY_MISMATCH', 'the credential provider')
     key, held = _journal(integration_store, operation_key, verified)
     if held.state == 'confirmed':
         return ResultOutcome('already-confirmed', attempt_id, receipt(integration_store, attempt_id))
@@ -882,7 +900,7 @@ def publish_result(integration_store, operation_key: str, *, verified, native, p
             'trailers': read.trailers, 'wrote': {'push': pushed, 'pullRequest': opened},
             'tests': {'status': tests['status'], 'outcome': tests['outcome'], 'outputDigest': tests['outputDigest']},
             'report': {'jsonSha256': _sha256(report_json), 'markdownSha256': _sha256(report_md)},
-            'search': {'before': before}}
+            'search': {'before': before}, **di.authority_label(bound)}
     final_texts = {'report-json': report_json, 'report-md': report_md, 'receipt': _canonical(made)}
     after = require_not_found(outbound_search(native, expected_fingerprint=expected, texts=final_texts),
                               bundle_sha256=None, texts=final_texts)

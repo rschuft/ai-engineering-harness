@@ -14,7 +14,10 @@ the P-03.2 example (plan leaf E-01.5). Not a test module.
   through the store's own API, with exactly the records the dispatcher writes (``ResolvedInputs.intent()`` with the
   admission policy ``dispatch_inputs.admission_policy`` derives from that declaration; the ``dispatched`` detail;
   the create receipt ``dispatch_inputs.create_receipt`` makes of the core's own answer to the create, which the core
-  receives as ``POST /api/conversations`` with the reserved conversation id).
+  receives as ``POST /api/conversations`` with the reserved conversation id);
+- ``seam(transport)``: TRANSPORT (the core, or a test's wrapper of it) as the transport of the attempts' client,
+  declaring the authority their allowlist binds them to (``fixture``, or ``live`` with ``live=True``): the client
+  requires the two equal (the I1 integration design, R8 point 4; the engineering manager's ruling A of E-01.8).
 
 No dispatch is run (the resolution, the manifest and the admission are E-01.2's, tested there): the records are
 built from the same constructors, so that ``dispatch_inputs.stored_inputs`` reads them as the dispatcher's.
@@ -52,9 +55,20 @@ REPOSITORY = 'demo-app'
 CATALOG_PIN = {'id': 'builder-pin', 'repository': 'aieh-catalog', 'commit': '1' * 40, 'manifest_sha256': '2' * 64}
 
 
+class Seam:
+    """A transport declaring its authority (R8 point 3): it calls TRANSPORT as it is."""
+
+    def __init__(self, transport, authority):
+        self.transport, self.authority = transport, authority
+
+    def __call__(self, method, path, body=None, **kwargs):
+        return self.transport(method, path, body, **kwargs)
+
+
 class FixtureAttempts:
     def __init__(self, root, live=False):
         self.root = Path(root)
+        self.live = live
         directory = self.root / 'profiles' / PROFILE / 'agent-server'
         directory.mkdir(parents=True, exist_ok=True)
         routes = json.loads((CHECKED_IN / 'agent-server' / 'routes.json').read_text(encoding='utf-8'))
@@ -79,6 +93,9 @@ class FixtureAttempts:
 
     def read_artifact(self, path):
         return di.read_profile_artifact(path, repo_root=self.root)
+
+    def seam(self, transport):
+        return Seam(transport, di.LIVE if self.live else di.FIXTURE)
 
     def resolved(self, work_id, *, change, design_commit, outcome_ref, ordinal=1, stage='implement'):
         """The dispatcher's resolved record of one attempt (``ResolvedInputs``), built from its constructors."""
