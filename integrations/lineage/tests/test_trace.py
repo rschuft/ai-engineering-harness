@@ -405,6 +405,26 @@ class ReadOnly(Case):
             with self.assertRaises(sqlite3.Error):
                 store._conn.execute("UPDATE attempt SET state = 'failed'")
 
+    def test_the_restore_epochs_are_read_and_nothing_is_changed(self):
+        """U-04.1: the epochs (open and closed) with their backup's high-water mark, read-only."""
+        self.reserve_tasks('TASK-1')
+        store_mod = E.store_module()
+        with store_mod.open_store(self.store) as held:
+            backup = held.backup(actor='owner')
+            high = held.high_water_mark()
+        store_mod.restore_store(self.store, self.store.parent / 'backups' / (backup['backup_file'] + '.manifest.json'),
+                                actor='owner')
+        before = store_state(self.store)
+        with T.ReadOnlyIntegrationStore(self.store) as store:
+            self.assertEqual(store.restore_epochs(), [{'epochId': 1, 'backupHighWater': high, 'closed': False}])
+            self.assertEqual([e['epoch_id'] for e in store.open_epochs()], [1])
+        self.assertEqual(store_state(self.store), before)
+        with store_mod.open_store(self.store) as held:
+            held.close_restore_epoch(actor='owner')
+        with T.ReadOnlyIntegrationStore(self.store) as store:
+            self.assertEqual(store.restore_epochs(), [{'epochId': 1, 'backupHighWater': high, 'closed': True}])
+            self.assertEqual(store.open_epochs(), [])
+
 
 # ---------------------------------------------------------------------------
 # Negative resolution fixtures

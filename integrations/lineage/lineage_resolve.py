@@ -774,7 +774,9 @@ class ReadOnlyIntegrationStore:
     file, so it is not used. This opens the existing file with SQLite's ``mode=ro``
     (``storecore.open_read_only``), sets ``query_only``, verifies the store kind and its
     migrations without migrating (``storecore.check_current``) and exposes only
-    ``attempts``, ``events``, ``get``, ``attempt_identity`` and the verified ``version``.
+    ``attempts``, ``events``, ``get``, ``attempt_identity``, the restore epochs (``open_epochs``,
+    the store's own; ``restore_epochs``, every epoch with its backup's high-water mark and whether
+    it is closed: U-04.1) and the verified ``version``.
     SQLite's WAL protocol still creates or updates the ``-wal`` and ``-shm`` sidecar files for
     any reader; the database file and its content are not changed (tested).
     """
@@ -807,6 +809,21 @@ class ReadOnlyIntegrationStore:
 
     def attempt_identity(self, operation_key):
         return self._store.attempt_identity(operation_key)
+
+    def open_epochs(self):
+        return self._store.open_epochs()
+
+    def restore_epochs(self):
+        """Every restore epoch, oldest first: ``{epochId, backupHighWater, closed}``. ``backupHighWater`` is the last
+        attempt event the restored backup held (``restore_epoch.backup_high_water``), so a record whose event id is at
+        or below it is part of the history that restore brought back. Empty before migration 0002 added the table."""
+        if self._conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'restore_epoch'"
+                              ).fetchone() is None:
+            return []
+        rows = self._conn.execute(
+            'SELECT e.epoch_id, e.backup_high_water, EXISTS (SELECT 1 FROM restore_epoch_closure c '
+            'WHERE c.epoch_id = e.epoch_id) FROM restore_epoch e ORDER BY e.epoch_id').fetchall()
+        return [{'epochId': epoch, 'backupHighWater': high, 'closed': bool(closed)} for epoch, high, closed in rows]
 
     def close(self):
         self._conn.close()

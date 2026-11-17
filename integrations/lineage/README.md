@@ -411,9 +411,11 @@ uncertainty, so a projection that uses a sample is never `complete`.
   file is opened with SQLite's `mode=ro` (`storecore.open_read_only`), `query_only` is set,
   and `storecore.check_current` verifies the store kind and its migrations without
   migrating; a store that would need a migration, an absent file and a database of another
-  kind are each `STORE_UNAVAILABLE`, unchanged. Only `attempts`, `events`, `get` and
-  `attempt_identity` are exposed (the last two since E-01.5, for the attempt resolver; it lives in
-  `lineage_resolve.py`, and `lineage_trace` uses the same class).
+  kind are each `STORE_UNAVAILABLE`, unchanged. Only `attempts`, `events`, `get`,
+  `attempt_identity` (the last two since E-01.5, for the attempt resolver; it lives in
+  `lineage_resolve.py`, and `lineage_trace` uses the same class), and since U-04.1 the restore
+  epochs, `open_epochs` and `restore_epochs` (each epoch's backup high-water mark and whether it
+  is closed, for the Integration process's outcome projection), are exposed.
   The tests show the database file's bytes and canonical content unchanged, also beside an
   open writer whose latest reservation is still only in the WAL file (it is read). As with any SQLite
   reader of a WAL database, the read creates or updates the `-wal` and `-shm` sidecar files

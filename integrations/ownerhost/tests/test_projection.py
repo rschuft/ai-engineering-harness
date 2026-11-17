@@ -114,7 +114,7 @@ class Base(TA.Bound):
                 (key,) = [r.operation_key for r in rows if r.operation_key.startswith(store_mod.KEY_PREFIX)]
             typed = held.attempt_identity(key)
             return P.attempt_view(held.get(key), rows, held.events, identity=typed.identity if typed else None,
-                                  read_artifact=self.read_artifact, epoch=bool(P.open_epochs(held)))
+                                  read_artifact=self.read_artifact, epochs=held.restore_epochs())
 
     def restore(self, backup):
         """The store restored from BACKUP (``store.backup``'s manifest), a restore epoch left open."""
@@ -795,9 +795,10 @@ class MoreRows(Base):
 
 @unittest.skipIf(tar.BASH is None, 'no Git Bash (Windows) or bash: RESULT runs the harness\'s script')
 class Restore(Base):
-    """Absence after a restore is not "not sent" (the review's ruling 1; decision 0004 point 7): while a restore epoch
-    is open, a row that rests on the absence of a later record is unknown, with its own code; outside one it states only
-    what is recorded."""
+    """Absence after a restore is not "not sent" (the review's ruling 1 and its extension; decision 0004 point 7): a row
+    that rests on the absence of a later record is unknown, with its own code, for an attempt whose reservation a
+    restore brought back, while the epoch is open and after it closed; an attempt reserved after a closed epoch keeps
+    its ordinary rows; and the rows state only what is recorded."""
 
     def test_p3_a_message_sent_after_the_backup_is_unknown_not_created(self):
         result = self.fixture_attempt()
@@ -858,11 +859,41 @@ class Restore(Base):
         self.restore(backup)
         self.assertStatus(self.view(result.operation_key), 'unknown', 'LAUNCHED_UNPROVEN')
 
-    def test_outside_an_epoch_the_rows_state_only_what_is_recorded(self):
+    def test_p6_after_the_epoch_closed_the_attempt_that_crossed_it_stays_unproven(self):
         result = self.fixture_attempt()
+        backup = self.store.backup(actor='owner')
+        self.turn(result)
+        self.restore(backup)
+        RR.recover(self.store, transport=TA.Seam(self.core, 'fixture'), actor=ACTOR, read_artifact=self.read_artifact)
+        self.store.close_restore_epoch(actor='owner')
+        self.assertEqual(self.store.open_epochs(), [])
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'unknown', 'CREATED_UNPROVEN')
+        self.assertEqual((view['restoredRow'], view['restoreEpochs']), ('CREATED', [1]))
+
+    def test_p7_a_task_whose_attempt_a_restore_lost_is_no_attempt_unproven(self):
+        self.store.reserve('u41/marker', {'x': 1}, actor=ACTOR)
+        backup = self.store.backup(actor='owner')
+        self.fixture_attempt()
+        self.restore(backup)
+        sources = Outcome.build(self, 'listed')
+        for when in ('open', 'closed'):
+            with self.subTest(epoch=when):
+                if when == 'closed':
+                    self.store.close_restore_epoch(actor='owner')
+                projection = sources.project(self)
+                self.assertEqual(projection['attempts'], [])
+                [task] = [t for t in projection['tasks'] if t['reference'] == f'backlog:{WORK}']
+                self.assertEqual((task['execution']['status'], task['execution']['code']),
+                                 ('unknown', 'NO_ATTEMPT_UNPROVEN'))
+                self.assertEqual(projection['sources']['restoreEpochOpen'], when == 'open')
+
+    def test_an_attempt_reserved_after_a_closed_epoch_keeps_its_ordinary_rows(self):
+        self.store.reserve('u41/marker', {'x': 1}, actor=ACTOR)
         backup = self.store.backup(actor='owner')
         self.restore(backup)
         self.store.close_restore_epoch(actor='owner')
+        result = self.fixture_attempt()
         view = self.view(result.operation_key)
         self.assertStatus(view, 'pending', 'CREATED')
         self.assertIn('recorded', view['detail'])
@@ -872,6 +903,26 @@ class Restore(Base):
         view = self.view(result.operation_key)
         self.assertStatus(view, 'pending', 'MESSAGE_RESERVED')
         self.assertNotIn('not sent', view['detail'])
+
+    def test_a_store_with_no_epoch_is_unchanged(self):
+        result = self.fixture_attempt()
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'pending', 'CREATED')
+        self.assertNotIn('restoredRow', view)
+        projection = Outcome.build(self, 'listed').project(self)
+        self.assertEqual((projection['sources']['restoreEpochOpen'], projection['sources']['restoreEpochs']), (False, 0))
+        [task] = [t for t in projection['tasks'] if t['reference'] == 'backlog:TASK-1']
+        self.assertEqual(task['execution']['code'], 'NO_ATTEMPT')
+
+    def test_a_failed_epoch_read_is_the_store_s_stable_code(self):
+        self.fixture_attempt()
+        with mock.patch.object(P.R.ReadOnlyIntegrationStore, 'restore_epochs',
+                               side_effect=sqlite3.OperationalError('no such table')):
+            projection = Outcome.build(self, 'listed').project(self)
+        self.assertTrue(projection['sources']['integrationStore'].startswith('OperationalError'))
+        self.assertEqual(projection['attempts'], [])
+        for task in projection['tasks']:
+            self.assertEqual((task['execution']['status'], task['execution']['code']), ('unknown', 'STORE_UNAVAILABLE'))
 
 
 class Latest(Base):

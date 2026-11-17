@@ -339,11 +339,11 @@ uncertain), and each attempt's `executionStatus` is about what the dispatcher's 
 | `lineageVerdict` | `failed` when an objective, statement (`message`, `conversation`) or task (`work`, archived ones included) reference does not resolve; else `incomplete` when `lineageUncertainties` holds anything; else `complete`. It is never `complete` while the outcome has an attempt: an attempt node's lineage resolution is never asked here (`RESOLVER_NOT_CONFIGURED`), and a fixture-bound attempt adds `FIXTURE_AUTHORITY` (R11). U-06.1's item 8 is judged from the dispatcher-side trace in its run record (R6; PB-5), never from this verdict |
 | `lineageUncertainties` | The lineage's own uncertainties, unfiltered, and one `fixture-authority` (`FIXTURE_AUTHORITY`) per fixture-bound attempt node |
 | `objective`, `statements`, `designs` | The lineage nodes of those roles, as `lineage-projection/v1` has them |
-| `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts in reservation order, and `execution`: its latest attempt's execution status and code. The latest is the last reserved, by the typed attempt's reservation event (the store's `attempt_event.event_id`, an `INTEGER PRIMARY KEY` of an append-only table, so monotonic), never by ordinal: ordinals restart per work item, design revision and stage. `pending` `NO_ATTEMPT` when the store was read and holds none; `unknown` `STORE_UNAVAILABLE` when it could not be read |
+| `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts in reservation order, and `execution`: its latest attempt's execution status and code. The latest is the last reserved, by the typed attempt's reservation event (the store's `attempt_event.event_id`, an `INTEGER PRIMARY KEY` of an append-only table, so monotonic), never by ordinal: ordinals restart per work item, design revision and stage. `pending` `NO_ATTEMPT` when the store was read and holds none and no restore epoch exists, `unknown` `NO_ATTEMPT_UNPROVEN` when one exists (a restore can lose a reservation), `unknown` `STORE_UNAVAILABLE` when the store could not be read |
 | `attempts` | Per attempt: its ids and `reservedEventId`; `executionStatus`, `executionCode`, `detail` and `shownBy` (the record, its state and its last event that decided it), and where a row says so `cause`, `end`, `stops`, `disclosed` (records beside a published result) or `restoredRow` (the row a restore epoch made unproven); `authority` (`shown`: `live`, `fixture` or `unknown`; `bound`: the pinned allowlist's declaration, or none; its code); `result` and `evidence` (below); every record of the attempt it read |
 | `failures` | Each unresolved objective, statement or task reference: role, kind, outcome, code |
 | `coverage` | Always present: `{"archivedTasksEnumerable": false, "code": "ARCHIVED_TASKS_NOT_ENUMERABLE", "basis": "Backlog.md 1.55.3 task list --json", "detail": ...}` |
-| `sources`, `lineage` | The traversal's sources, whether the integration store was read and whether a restore epoch is open; the whole `lineage-projection/v1`, its own verdict and uncertainties included |
+| `sources`, `lineage` | The traversal's sources, whether the integration store was read, whether a restore epoch is open and how many exist; the whole `lineage-projection/v1`, its own verdict and uncertainties included |
 
 Refusals, each changing nothing: `OUTCOME_INVALID` (400: not an outcome id, or a pinned one), and 503 for
 `PROJECTION_PROJECT_UNCONFIGURED`, `PROJECTION_CONFIG_INVALID` (`components.owner_host`, read as the capture reads
@@ -370,18 +370,27 @@ The rows are read in order, and the first that matches decides. Changes from the
 the unreadable-record row is read right after the authority row; a published result (row 5) is read before the
 launch's not-launched, the stops and the end, which are disclosed beside it (`disclosed`), because a published result
 is an observed effect (the review's ruling 7: a stop recorded after it does not unpublish it; the writers refuse a
-result after an end or a stop, and an end after a result handed on, so only a later stop can stand beside one);
+result after an end, and an end after a result handed on; a stop blocks publication only through the run's own stop
+path, which writes an end, while `attempt_end.record_stop` alone writes a stop receipt and no end, so a stop receipt
+can stand beside a published result);
 among the failed rows the launch's not-launched is read before the stops and the end it causes; and a result-step
 receipt left `unknown` or `failed` is `unknown` (row 16).
 
-**Absence after a restore is not "not sent"** (decision 0004 point 7; the review's ruling 1). While a restore epoch
-is open (`IntegrationStore.open_epochs`), every `pending` or `running` row rests on the absence of a later record that
-the restored history cannot prove: it is `unknown`, with the row's own code and the suffix `_UNPROVEN`
+**Absence across a restore is not "not sent"** (decision 0004 point 7; the review's ruling 1 and its extension). Every
+`pending` or `running` row rests on the absence of a later record. The records cannot prove that absence for an
+attempt whose reservation crossed a restore: its reservation event is at or below some restore epoch's backup
+high-water mark (`restore_epoch.backup_high_water`, the last attempt event the restored backup held), the epoch open
+or closed. Both are the store's own event ids, so no clock is compared: the read is
+`ReadOnlyIntegrationStore.restore_epochs` (integrations/lineage), and a failure of it is the store's
+`STORE_UNAVAILABLE`, never a 500. Such a row is `unknown`, with the row's own code and the suffix `_UNPROVEN`
 (`ATTEMPT_RESERVED_UNPROVEN`, `CREATE_SENT_UNPROVEN`, `TURN_SENT_UNPROVEN`, `MESSAGE_RESERVED_UNPROVEN`,
-`LAUNCHED_UNPROVEN`, `CREATED_UNPROVEN`, ...; `restoredRow` names the row). `recover` holds a reserved turn inside an
-epoch as `TURN_RESERVED_UNPROVEN` in its report only (it records no hold), so the projection applies the same
-condition, the open epoch, and shows `MESSAGE_RESERVED_UNPROVEN`. Outside an epoch the absence rows keep their status,
-and their detail states only what is recorded ("no create is recorded"), never that something was not sent.
+`LAUNCHED_UNPROVEN`, `CREATED_UNPROVEN`, ...; `restoredRow` names the row and `restoreEpochs` the epochs). While an
+epoch is open no attempt can be reserved (the store's reservation gate), so every attempt then has crossed it; `recover`
+holds a reserved turn inside an epoch as `TURN_RESERVED_UNPROVEN` in its report only (it records no hold), and the
+projection shows `MESSAGE_RESERVED_UNPROVEN` by the same rule. While any restore epoch exists, a task with no recorded
+attempt is `unknown` `NO_ATTEMPT_UNPROVEN`: the reservation is exactly the receipt a restore can lose. An attempt
+reserved after every epoch keeps its ordinary rows, and their detail states only what is recorded ("no create is
+recorded"), never that something was not sent.
 
 | # | Records | Status | Code |
 |---|---|---|---|
@@ -434,7 +443,9 @@ record of the attempt is written without one by design (the engineering manager'
 shown `fixture`, never `live`. Since this slice's review, a `not-launched` launch receipt whose admitted values could
 not be read carries the bound authority as well (`launch_gate.py`, a writer gap of E-01.8; live receipts unchanged).
 
-**Reported and verified are kept apart.** `succeeded` comes only from the result receipt: the host computed the
+**Reported and verified are kept apart.** `succeeded` means verified and read back at publication time: the
+projection does not read Gitea again (R6), so a pull request closed later or a branch rewritten later is not
+reflected. It comes only from the result receipt: the host computed the
 commit itself over the pulled bundle (the intake) and read the branch and the draft pull request back (the result
 path). Every attempt's `result` shows the claims with their basis: `reported` for what the attempt itself said (the
 commit and bundle digest RESULT printed, in the delivery receipt) and for the attempt's own tests (status, command,

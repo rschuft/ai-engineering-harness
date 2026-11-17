@@ -102,9 +102,12 @@ CODES = (*AUTHORITY_CODES, 'RECORD_UNREADABLE', 'ATTEMPT_RESERVED', 'CREATE_SENT
          'ATTEMPT_ENDING', 'RESULT_PUBLISHED', 'RESULT_FAILED', 'RESULT_WRITE_UNSETTLED', 'RESULT_PUBLISHING',
          'RESULT_VERIFIED', 'RESULT_DELIVERED', 'TURN_OUTCOME_UNKNOWN', 'TURN_FAILED', 'TURN_SENT', 'MESSAGE_SENDING',
          'MESSAGE_RESERVED', 'LAUNCHED', 'CREATED', 'NO_ATTEMPT', 'STORE_UNAVAILABLE', 'RESULT_RECEIPT_UNSETTLED')
-# While a restore epoch is open (decision 0004 point 7), a pending or running row rests on the absence of a later record
-# that the restored history cannot prove: it is unknown, its code the row's own with this suffix (ATTEMPT_RESERVED ->
-# ATTEMPT_RESERVED_UNPROVEN, MESSAGE_RESERVED -> MESSAGE_RESERVED_UNPROVEN, CREATED -> CREATED_UNPROVEN, ...).
+# Absence across a restore (decision 0004 point 7): a pending or running row rests on the absence of a later record. For
+# an attempt whose reservation is part of a history a restore brought back (its reservation event at or below some restore
+# epoch's backup high-water mark, open or closed), the records cannot prove that absence: the row is unknown, its code the
+# row's own with this suffix (ATTEMPT_RESERVED -> ATTEMPT_RESERVED_UNPROVEN, CREATED -> CREATED_UNPROVEN, ...); and while
+# any restore epoch exists, a task with no recorded attempt is NO_ATTEMPT_UNPROVEN (the reservation is exactly the
+# receipt a restore can lose).
 UNPROVEN = '_UNPROVEN'
 FIXTURE_AUTHORITY = 'FIXTURE_AUTHORITY'
 
@@ -253,16 +256,26 @@ def _decide(status, code, shown, detail='', **extra):
     return {'executionStatus': status, 'executionCode': code, 'shownBy': shown, 'detail': detail, **extra}
 
 
-def state_of(typed: Record, records: dict, *, epoch: bool = False) -> dict:
-    """The state table (README.md) over the typed attempt and its records. EPOCH: a restore epoch is open, so a
-    pending or running row, which rests on the absence of a later record, is unknown (``<code>_UNPROVEN``)."""
+def state_of(typed: Record, records: dict, *, crossed: tuple = ()) -> dict:
+    """The state table (README.md) over the typed attempt and its records. CROSSED: the restore epochs (their ids) whose
+    restored history holds the attempt's reservation; with any, a pending or running row, which rests on the absence
+    of a later record, is unknown (``<code>_UNPROVEN``)."""
     decided = _rows(typed, records)
-    if epoch and decided['executionStatus'] in (PENDING, RUNNING):
+    if crossed and decided['executionStatus'] in (PENDING, RUNNING):
         return {**decided, 'executionStatus': UNKNOWN, 'executionCode': decided['executionCode'] + UNPROVEN,
-                'restoredRow': decided['executionCode'],
-                'detail': 'a restore epoch is open: the restored history proves nothing about what followed '
+                'restoredRow': decided['executionCode'], 'restoreEpochs': list(crossed),
+                'detail': 'the attempt\'s records crossed a restore (epoch '
+                          f'{", ".join(str(e) for e in crossed)}): the restored history proves no absence '
                           f'({decided["detail"]})'}
     return decided
+
+
+def crossing(reserved_event_id, epochs) -> tuple:
+    """The ids of the restore EPOCHS (``ReadOnlyIntegrationStore.restore_epochs``) whose restored history holds a
+    reservation of event RESERVED_EVENT_ID: its event is at or below the epoch's backup high-water mark. Ordered by the
+    store's own event ids, never a clock. An unknown event id crosses every epoch."""
+    return tuple(e['epochId'] for e in epochs
+                 if reserved_event_id is None or e['backupHighWater'] >= reserved_event_id)
 
 
 def _unsettled(record: Record):
@@ -419,7 +432,7 @@ def evidence_of(records: dict) -> dict | None:
     }
 
 
-def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=None, epoch: bool = False) -> dict:
+def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=None, epochs=()) -> dict:
     """The typed status of the attempt RESERVATION from its records among ROWS (EVENTS_OF answers a key's
     transitions), with its authority, its result's claims and its evidence."""
     key = reservation.operation_key
@@ -432,7 +445,7 @@ def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=N
             'ordinal': identity.ordinal if identity else None,
             'reservedEventId': typed.events[0][1] if typed.events else None,
             'records': sorted(r.key for r in every(records))}
-    decided = state_of(typed, records, epoch=epoch)
+    decided = state_of(typed, records, crossed=crossing(view['reservedEventId'], epochs))
     try:
         bound = binding.bound_authority(reservation, read_artifact)
     except binding.Unbound as exc:
@@ -464,12 +477,6 @@ def latest(views: list):
     return ordered[-1] if ordered else None
 
 
-def open_epochs(held) -> list:
-    """The store's restore epochs without a closure (``IntegrationStore.open_epochs``, read on the read-only view's
-    own connection)."""
-    return held._store.open_epochs()
-
-
 def project(outcome, *, project, backlog, store, conversations, read_artifact=None) -> dict:
     """The ``outcome-projection/v1`` of OUTCOME (``outcome:<uuid>``, text or ObjectiveRef), read-only."""
     root = L.parse(outcome) if isinstance(outcome, str) else outcome
@@ -479,7 +486,7 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
     lineage = trace_mod.trace(root, trace_mod.Authorities(registry), project=project, backlog=backlog, store=store)
     executed = [(e['from'], e['to'], p.get('operation_key')) for e in lineage['edges']
                 if e['relation'] == trace_mod.EXECUTED_BY for p in e['provenance']]
-    attempts, store_read, why, epoch = {}, False, None, False
+    attempts, store_read, why, epochs = {}, False, None, []
     if store is not None:
         try:
             with R.ReadOnlyIntegrationStore(store) as held:
@@ -491,13 +498,13 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
                     if key not in cache:
                         cache[key] = held.events(key)
                     return cache[key]
-                epoch = bool(open_epochs(held))
+                epochs = held.restore_epochs()
                 for _task, _node, key in executed:
                     if key in by_key and key not in attempts:
                         typed = held.attempt_identity(key)
                         attempts[key] = attempt_view(by_key[key], rows, events_of,
                                                      identity=typed.identity if typed else None,
-                                                     read_artifact=read_artifact, epoch=epoch)
+                                                     read_artifact=read_artifact, epochs=epochs)
                 store_read = True
         except (store_mod.StoreError, sqlite3.Error, OSError) as exc:
             why = f'{type(exc).__name__}: {exc}'
@@ -512,6 +519,10 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
         if last is not None:
             execution = {'status': last['executionStatus'], 'code': last['executionCode'],
                          'attempt': last['operationKey']}
+        elif store_read and epochs:
+            execution = {'status': UNKNOWN, 'code': 'NO_ATTEMPT' + UNPROVEN, 'attempt': None,
+                         'restoreEpochs': [e['epochId'] for e in epochs],
+                         'detail': 'no attempt is recorded, and a restore can lose a reservation'}
         elif store_read:
             execution = {'status': PENDING, 'code': 'NO_ATTEMPT', 'attempt': None}
         else:
@@ -551,7 +562,7 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
         'lineageUncertainties': uncertainties,
         'coverage': dict(COVERAGE),
         'sources': {**lineage['sources'], 'integrationStore': 'read' if store_read else why,
-                    'restoreEpochOpen': epoch},
+                    'restoreEpochOpen': any(not e['closed'] for e in epochs), 'restoreEpochs': len(epochs)},
         'lineage': lineage,
     }
 
