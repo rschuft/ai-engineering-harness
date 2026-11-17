@@ -105,6 +105,7 @@ Three different workflows touch this repository:
 | Implementation evidence | [`evidence/`](evidence/) |
 | The repository's Work: tasks, dependencies and status (Backlog.md) | [`backlog/`](backlog/); see [Repository Work in Backlog.md](docs/development.md#repository-work-in-backlogmd) |
 | Decisions | [`decisions/`](decisions/) |
+| Research leads and candidate integrations (not adopted, not evaluated, not authority) | [`docs/research-inventory.md`](docs/research-inventory.md) |
 | Component selection, locks and licence inventory | [`composition/`](composition/) |
 | Trust domains, principals, protected assets and credential requirements | [`security/`](security/) |
 | Role-token matrix and revocation contract | [`policy/`](policy/) |

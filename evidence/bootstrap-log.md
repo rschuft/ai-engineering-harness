@@ -6594,7 +6594,6 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   >
   > No additional Owner decision is required for
   > these planning and documentation actions.
-
 - <a id="i1-final-planning-2026-11-17"></a>**2026-11-17: Planning: PB-14 and PB-15 disposed of; three readings confirmed; U-06.1 prepared, with OA-32 and OA-33 presented; the eleven discovered items placed; the plan amendment of 2026-11-17 (I1 final) applied (planning, program manager, architect).** By the product manager, on the [Owner's direction](#owner-direction-i1-final-2026-11-17), Part A, and [execution's third questions](#i1-execution-questions-3-2026-11-17). [Commitment: I1](#commitment-i1-2026-11-16) stands, with U-06.1 as its terminal leaf. No criterion is lowered except E-01.7's read-only face, which the Owner directed. No live act was performed, no credential was read, and no Owner act was granted.
   - **Observed starting state.**
     - HEAD `497f47c` = `origin/main`, clean.
@@ -6731,6 +6730,33 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - accept U-06.1's design;
     - promote its manifest inside OA-33 (a);
     - accept I1.
+- <a id="research-intake-2026-11-17"></a>**2026-11-17: Research intake: seven leads recorded as candidates or under existing deferrals; the plan amendment of 2026-11-17 (research intake) (planning, program manager).** By the product manager, on the [Owner's direction](#owner-direction-i1-final-2026-11-17), Part B.
+  - **Separate from I1.** It is a commit separate from [the I1 planning](#i1-final-planning-2026-11-17). I1's committed scope, criteria, dependencies and critical path are unchanged: `plan_commitment.py U-06.1` still reports 72 leaves, 70 passed. No research candidate is implemented, adopted or evaluated, and no source was fetched ("Do not begin deep technical evaluations yet").
+  - **The inventory** is [`docs/research-inventory.md`](../docs/research-inventory.md), linked from the README's repository guide as not authority. For each lead it records:
+    - the URL as supplied;
+    - the problem it could solve;
+    - the capability it affects;
+    - its intended boundary;
+    - facts, the Owner's direction and hypotheses, kept apart;
+    - its status;
+    - its earliest milestone;
+    - its dependencies;
+    - its evaluation trigger.
+  - **Reconciled** against the blueprint (its "Available extensions, adopted on evidence", `#knowledge`, `#workflow`, `#authority` and `#quality-pipeline`), the plan's leaves and deferrals, `decisions/`, `composition/` and the lineage README. Program manager dispatch 4 challenged the draft read-only and found 18 defects, all taken; it also placed each lead.
+  - **Already represented** (no duplicate created):
+    - RL-03 OpenAI Symphony, under deferral 1 (independent workflow engine);
+    - RL-05 Cognee, under deferral 3 (graph database or vector server), whose missing reconsider condition is now stated;
+    - RL-06 Self-Harness, Meta-Harness, AHE and HarnessOpt-Bench, under deferral 6 (self-improvement platform) and the Opik / RSIHub extension.
+
+    Each of the three deferrals gains a pointer to its entry and no new condition, except deferral 3's stated condition.
+  - **Newly recorded as candidates**, each reached from the leaf where it would be evaluated by a one-sentence, non-normative note that adds no criterion, dependency or adoption:
+    - RL-01 Floorplan (K-01.1; capability class: the Groma.md extension);
+    - RL-02 Plannotator (D-01.2; partly represented by P-04.x, Gitea review and assistant-ui cards);
+    - RL-04 OpenCodeReview (E-03.4; the role is E-03.3.1's adopted OpenHands review Skill);
+    - RL-07 Raw-RAG and The Trinity (K-03.1; largely represented by `#authority`, K-02.2, K-03.3.x and the lineage kinds; only capability and test nodes are new).
+  - **Source verification needed** before any evaluation: all seven. Cognee and the four harness-optimization leads have no URL. The repository identities, licences and the two arXiv papers are unverified.
+  - **The Tarinala Control Plane** is kept separate, as the Owner directed; nothing is transferred.
+  - **Delegated decisions** (decision 0018 point 3): the inventory's placement; the three deferral appends; the four leaf notes. No leaf, task or criterion is added.
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

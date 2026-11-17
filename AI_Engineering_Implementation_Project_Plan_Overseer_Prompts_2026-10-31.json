@@ -118,6 +118,11 @@
       "date": "2026-11-17",
       "provenance": "Execution's third questions for planning on I1: PB-14 and PB-15, three readings and eleven discovered items (evidence/bootstrap-log.md, Decisions, 'i1-execution-questions-3-2026-11-17'), disposed of by the product manager under decision 0018 points 2 and 3 (refining a criterion without lowering what it proves; adding a criterion and a leaf; deferrals with reconsider conditions), on the Owner's direction of 2026-11-17 ('owner-direction-i1-final-2026-11-17'): \"Approve the measured Content Security Policy change blocking requests to cdn.simpleicons.org.\", \"Allow the deterministic fixture to accept and retain the analytics preference in memory.\", \"Classify the eleven discovered issues into their existing future leaves or explicit deferrals. Create new leaves only for demonstrated gaps.\" and \"Keep the live-server recovery issues assigned outside I1.\"; with the architect's consultation of 2026-11-17 (gates A, C and G) as advisory input, and the program manager's challenge of 2026-11-17 (dispatch 1: thirty defects, all taken), and the independent challenge of the applied change (program manager dispatch 3, 8 should-fix defects and 12 notes, all taken); a sentence first added to E-01.6's proof, observing E-01.9's handling live, was reverted before this record, and the question is the 29th deferral. Applied through the documented integrity process (docs/development.md, Changing integrity-tracked files).",
       "summary": "1. E-01.7's proof (PB-15): the UI face is read-only but for the one write U-01.2's proof admits (the analytics-consent preference, held in the fixture process's memory), and no value it serves or holds reaches a record of the dispatch path; the provenance classes gain, on the UI face only, the value of that write, held from an earlier request and marked held in memory. Its verdict of 2026-11-16 stands; the write is proved at U-01.2. Its notes: the Canvas reading admits one content-security-policy meta element in the derived index.html (PB-14). 2. U-01.2's proof gains two sentences: the bounded consent write and its held value; every served Canvas copy carries the policy element, and in gate G5 no request is sent to a host other than 127.0.0.1 with the preference unset, declined or accepted. Its notes: the G5 rule-3 reading, the DNS observation, G6 rule 6 re-observed, the logos (no deferral), two record corrections. 3. New leaf E-01.9 (PB-13: E-01.5's live create-in-flight 404 window and a surviving earlier conversation's exit), phase 1, deps E-01.5, outside the I1 commitment; E-01.6 depends on it (its deps and required inputs); E-01.6's proof and action are unchanged, and observing E-01.9's handling on a live Agent Server is the 29th deferral, cited in both leaves' notes. 4. Notes: E-01.8 (its reading of 2026-11-16 kept; a dated correction gives planning's reading 1, confirmed on the Owner's direction), U-06.1 (readings 2 and 3, the pause, nonduplication, consent, the Owner's git identity), U-03.1 and U-03.2 (U-01.2's review findings and the policy element's retirement), F-09.5 (the lineage timing-ratio test). 5. Deferrals 24 to 29: decision 0028 on the native result path; the Gitea service accounts' identities; a lock on gitea_host's run record; archived tasks in the lineage traversal's report; reused Backlog.md task ids; observing E-01.9's handling on a live Agent Server. 6. Derived counters: 191 leaves (phase 1: 58); the slice_count of E-01's direct children E-01.5 to E-01.8 becomes 9 (counters and card step text only; no contract field of E-01.5 changes); E-01's child_ids and leaf_descendants and the topological order (E-01.9 after E-01.5); task_prompt_count 191; the HTML's static counts, including E-01's row of the retained Large outcomes, which read 11 since the 2026-11-16 (I1) amendment and now reads 15. U-06.1's proof, every status and every I1 dependency are unchanged; I1's committed set stays 72 leaves. The conditional changes that wait on OA-33 (b) and (c) are not applied. The prompts, CSV rows and cards of E-01.6, E-01.7 and U-01.2 change and E-01.9's are added; the cards of E-01.5 and E-01.8 change in their step text only."
+    },
+    {
+      "date": "2026-11-17",
+      "provenance": "The Owner's direction of 2026-11-17 (evidence/bootstrap-log.md, Decisions, 'owner-direction-i1-final-2026-11-17'), Part B: \"Use a small, discoverable research inventory and references from future backlog candidates.\" and \"Do not create a proliferation of executable tasks from unvalidated research.\" The references are the product manager's under decision 0018 points 2 and 3, on the program manager's challenge of 2026-11-17 (dispatch 4). Applied through the documented integrity process (docs/development.md, Changing integrity-tracked files).",
+      "summary": "The plan amendment of 2026-11-17 (research intake). 1. Three deferrals gain a reference to a research lead of docs/research-inventory.md, appended to their reconsider conditions: the 1st (independent workflow engine) to RL-03, OpenAI Symphony, evaluated only under its condition; the 3rd (full ontology or graph database, separate vector server) gains an explicit reconsider condition (hybrid SQLite retrieval demonstrably failing a K-01 to K-03 proof or the I4 gate, or explicit source references proving insufficient for semantic discovery, the blueprint's Open Ontologies trigger) and a reference to RL-05, Cognee; the 6th (automated model self-improvement platform) holds RL-06, harness optimization (Self-Harness, Meta-Harness, AHE, HarnessOpt-Bench). 2. Four leaves' notes, each non-normative, name a research lead for the planning pass that commits the leaf: K-01.1 (RL-01, Floorplan), D-01.2 (RL-02, Plannotator), E-03.4 (RL-04, OpenCodeReview) and K-03.1 (RL-07, Raw-RAG and The Trinity). 3. No leaf, dependency, criterion, prompt or Backlog.md task is added or changed, no lead is adopted, and I1's committed set is unchanged (72 leaves). The CSV, task_prompts/ and task_manifest.json are unchanged; in the HTML only planData and the 1st, 3rd and 6th deferral cards change."
     }
   ],
   "scope": "Adoption-first open-source implementation.",
@@ -5234,7 +5239,7 @@
       "artifact": "Seeded-defect review contract test and report.",
       "proof": "Seeded real defect is identified, review blocks acceptance, and the parent review-contract acceptance is met.",
       "adoption": "OpenHands review run; Gitea evidence",
-      "notes": "",
+      "notes": "Research lead, non-normative: docs/research-inventory.md RL-04 (OpenCodeReview, an unverified candidate review capability) may be compared with the adopted review method on this leaf's seeded defect, with its measures fixed beforehand, only if the planning pass that commits this leaf chooses to. This note adds no criterion, dependency or adoption.",
       "status": "Not started",
       "blueprint_section": "execution-qualification",
       "parent_id": "E-03",
@@ -6075,7 +6080,7 @@
       "artifact": "Gitea merge policy and PR governance test.",
       "proof": "Only eligible current revision with passed gates merges; original D-01 proof satisfied. The reader identity cannot open a PR (fd-gitea-reader-opens-pr), or the residual is a recorded limit with its reason.",
       "adoption": "Gitea Git hosting + Dulwich as appropriate.",
-      "notes": "",
+      "notes": "Research lead, non-normative: docs/research-inventory.md RL-02 (Plannotator, an unverified candidate for the Owner's review of plans and diffs at an exact revision), which could never replace the authorization recorder (P-04.2) or Gitea's authenticated review; the planning pass that commits this leaf decides whether to evaluate it. This note adds no criterion, dependency or adoption.",
       "status": "Not started",
       "blueprint_section": "decisions",
       "parent_id": "D-01",
@@ -7213,7 +7218,7 @@
       "artifact": "Source ingest schema, adapter fixtures and change checkpoint.",
       "proof": "Indexed passage identifies original source, revision, range and authorized audience.",
       "adoption": "SQLite FTS5, native source read APIs.",
-      "notes": "",
+      "notes": "Research lead, non-normative: docs/research-inventory.md RL-01 (Floorplan, an unverified candidate architecture-enrichment provider for repository onboarding and Knowledge refresh, to compare with the blueprint's Groma.md extension); the planning pass that commits this leaf decides whether to evaluate it. This note adds no criterion, dependency or adoption.",
       "status": "Not started",
       "blueprint_section": "knowledge",
       "parent_id": "K-01",
@@ -7401,7 +7406,7 @@
       "artifact": "Authority/resolution model and allowed-source access matrix.",
       "proof": "Tentative discussion, accepted records and superseded design revisions are distinguishable.",
       "adoption": "Native source APIs; OpenSpec/Git revisions",
-      "notes": "",
+      "notes": "Research lead, non-normative: docs/research-inventory.md RL-07 (Raw-RAG and The Trinity, unverified hypotheses on source-grounded Knowledge and capability graphs), to be compared with this contract and the lineage schema when this leaf is designed. This note adds no criterion, dependency or adoption.",
       "status": "Not started",
       "blueprint_section": "knowledge",
       "parent_id": "K-03",
@@ -9162,7 +9167,7 @@
   "deferred": [
     [
       "Independent workflow engine / DBOS",
-      "Existing native dispatch + receipts cover first integration; reconsider only on demonstrated recovery failure."
+      "Existing native dispatch + receipts cover first integration; reconsider only on demonstrated recovery failure. Research lead RL-03 (OpenAI Symphony, docs/research-inventory.md) is evaluated only under this condition; the reference adds no condition."
     ],
     [
       "Universal event renderer / AG-UI bridge",
@@ -9170,7 +9175,7 @@
     ],
     [
       "Full ontology/graph DB / separate vector server",
-      "Hybrid SQLite retrieval and source authority resolver meet initial need."
+      "Hybrid SQLite retrieval and source authority resolver meet initial need. Reconsider when hybrid SQLite retrieval demonstrably fails a K-01 to K-03 proof or the I4 gate, or when explicit source references prove insufficient for semantic discovery (the blueprint's Open Ontologies trigger, #components). Research lead RL-05 (Cognee, docs/research-inventory.md) is evaluated only under this condition."
     ],
     [
       "OpenTofu / Kubernetes / bespoke microVM manager",
@@ -9182,7 +9187,7 @@
     ],
     [
       "Automated model self-improvement platform",
-      "Evaluate only once observable engineering benchmarks justify complexity."
+      "Evaluate only once observable engineering benchmarks justify complexity. Research lead RL-06 (harness optimization: Self-Harness, Meta-Harness, AHE, HarnessOpt-Bench; docs/research-inventory.md) is held under this entry and evaluated only under this condition; the reference adds no condition."
     ],
     [
       "Podman as default runtime",
