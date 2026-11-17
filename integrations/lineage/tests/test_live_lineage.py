@@ -241,11 +241,11 @@ class LiveTrace(unittest.TestCase):
     def test_the_chain_through_live_backlog_then_after_archive(self):
         projection = self.trace(f'outcome:{OUTCOME}@{self.declared}')
         # Since U-02.2 the corpus statements are asked of the real Owner conversation store, which does not hold
-        # them; the attempts are still answered by their sample.
+        # them; since E-01.5 no sample answers the attempts, and this registry configures no Agent Server for them.
         self.assertEqual({(u['reason'], u['code']) for u in projection['uncertainties']},
-                         {('sample-authority', 'SAMPLE_AUTHORITY'), ('unresolved', 'CONVERSATION_MISSING')},
+                         {('unresolved', 'RESOLVER_NOT_CONFIGURED'), ('unresolved', 'CONVERSATION_MISSING')},
                          json.dumps(projection['uncertainties'], indent=1))
-        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'unresolved'},
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['code'] == 'CONVERSATION_MISSING'},
                          {'conversation:qual-02/message-1', 'conversation:qual-02/message-2'})
         tasks = {e['to'] for e in projection['edges'] if e['relation'] == self.T.FULFILLED_BY}
         self.assertEqual(tasks, {'backlog:TASK-1', 'backlog:TASK-2'})
