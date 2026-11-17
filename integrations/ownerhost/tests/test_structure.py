@@ -4,11 +4,15 @@ imports no credential, Gitea, authorization-recorder or dispatch-transport modul
 - **No client socket** (read from the syntax trees, the pattern of integrations/inference/tests/test_egress.py): the
   modules the server process loads (app.py and the modules it loads by file name, transitively) import no network
   client and call no connector; the one socket constructor is ``bind_listener``'s, which binds and listens and never
-  connects. The lifecycle command (service.py) and the enroll command open no socket either.
+  connects. The lifecycle command (service.py) and the enroll command open no socket either. Since P-01.3 the server
+  loads the capture (capture.py) and, through it, the shared repository-access module, whose remote operations
+  (push, fetch) import a network client: those imports are pinned to the two functions that build a remote
+  transport, and the capture calls only local repository reads and the commit (tests/test_capture.py, which also
+  audits a whole capture: no socket, no process).
 - **The import census** (the pattern of the input recorder's): a fresh interpreter loads app.py and builds the
-  application; the repository files it has then loaded are exactly the server's four modules, none under
-  integrations/credentials, integrations/gitea, integrations/dispatch or integrations/inference, and no
-  authorization recorder. The supervisor's too: a fresh interpreter loads service.py and selects the platform
+  application; the repository files it has then loaded are exactly the server's modules (the four of U-01.3 and,
+  since P-01.3, the capture's), none under integrations/credentials, integrations/gitea, integrations/dispatch or
+  integrations/inference, and no authorization recorder; no network client module is loaded. The supervisor's too: a fresh interpreter loads service.py and selects the platform
   adapter, and loads nothing under those packages (the Windows adapter loads its credential provider only when one
   is asked for). The live processes' own censuses (their records, at start and at stop) are test_listener.py's.
 - **One declared port**: app.PORT is the host census's port (tools/guest.py HOST_CENSUS_PORTS) and the network
@@ -33,8 +37,24 @@ NETWORK_MODULES = ('http', 'urllib', 'urllib3', 'requests', 'httpx', 'aiohttp', 
                    'ftplib', 'xmlrpc', 'dulwich')
 # The database calls of the store's own SQLite file are the only "connect" calls allowed.
 DATABASE_CONNECTS = {'sqlite3.connect', 'storecore.connect'}
-SERVER_MODULES = {'integrations/ownerhost/app.py', 'integrations/ownerhost/session.py',
-                  'integrations/conversation/conversation_store.py', 'integrations/storecore/storecore.py'}
+# The server's modules: U-01.3's four, and since P-01.3 the capture's (capture.py, the integration store, the planning
+# adapter's grammars and the shared repository-access module, the lineage span anchor, the intent-record checker).
+# LIVE_SERVER_MODULES is what loading them loads; the planning adapter names the no-window helper, which it loads
+# only to start a tool (the capture starts none).
+LIVE_SERVER_MODULES = {'integrations/ownerhost/app.py', 'integrations/ownerhost/session.py',
+                       'integrations/conversation/conversation_store.py', 'integrations/storecore/storecore.py',
+                       'integrations/ownerhost/capture.py', 'integrations/store/integration_store.py',
+                       'integrations/planning/planning_adapter.py', 'integrations/repository/repository_access.py',
+                       'integrations/lineage/lineage.py', 'tools/check_intent_record.py'}
+SERVER_MODULES = LIVE_SERVER_MODULES | {'integrations/platform/no_window.py'}
+# The one server module with network-client imports, each pinned to the function that holds it: Dulwich's local
+# modules (dulwich_modules), the remote transport (_transport_modules, _transport_class) and URL parsing (_origin,
+# _remote). Any other import of a network module there fails this census.
+REPOSITORY_ACCESS = 'integrations/repository/repository_access.py'
+REPOSITORY_NETWORK_IMPORTS = {('dulwich', 'dulwich_modules'), ('dulwich.file', 'dulwich_modules'),
+                              ('dulwich', '_transport_modules'), ('urllib.parse', '_origin'),
+                              ('urllib.parse', '_remote'), ('urllib3', '_transport_class/Transport/__init__')}
+NETWORK_CLIENT_MODULES = ('dulwich.client', 'dulwich.protocol', 'urllib3', 'http.client', 'requests', 'httpx')
 SUPERVISOR_MODULES = SERVER_MODULES | {'integrations/ownerhost/service.py', 'integrations/platform/platform_contract.py',
                                        'integrations/platform/platform_windows.py', 'integrations/platform/no_window.py',
                                        'integrations/paths/aieh_paths.py'}
@@ -52,7 +72,8 @@ def loaded_sources(path: Path) -> set:
     found = set()
     for node in ast.walk(tree(path)):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.endswith('.py'):
-            for candidate in [path.parent / node.value] + list(T.REPO.glob(f'integrations/*/{node.value}')):
+            for candidate in ([path.parent / node.value] + list(T.REPO.glob(f'integrations/*/{node.value}'))
+                              + list(T.REPO.glob(f'tools/{node.value}'))):
                 if candidate.is_file():
                     found.add(candidate.resolve())
     return found
@@ -96,6 +117,22 @@ def calls(path: Path) -> dict:
     return found
 
 
+def network_imports(path: Path) -> set:
+    """{(imported network module, enclosing function path)} of PATH."""
+    found = set()
+
+    def visit(node, where):
+        for child in ast.iter_child_nodes(node):
+            inner = where + [child.name] if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                                ast.ClassDef)) else where
+            names = ([alias.name for alias in child.names] if isinstance(child, ast.Import)
+                     else [child.module or ''] if isinstance(child, ast.ImportFrom) else [])
+            found.update((name, '/'.join(where)) for name in names if name.split('.')[0] in NETWORK_MODULES)
+            visit(child, inner)
+    visit(tree(path), [])
+    return found
+
+
 def connector_calls(path: Path) -> set:
     """The calls of PATH whose called name is a connector, as written (``sqlite3.connect``, ``sock.connect``)."""
     return {ast.unparse(node.func) for node in ast.walk(tree(path)) if isinstance(node, ast.Call)
@@ -114,7 +151,10 @@ class NoClientSocket(unittest.TestCase):
     def test_no_server_module_imports_a_network_client_or_calls_a_connector(self):
         for path in sorted(server_census()):
             with self.subTest(module=relative(path)):
-                self.assertEqual(imported(path) & set(NETWORK_MODULES), set())
+                if relative(path) == REPOSITORY_ACCESS:   # its remote transport only (P-01.3; see the docstring)
+                    self.assertEqual(network_imports(path), REPOSITORY_NETWORK_IMPORTS)
+                else:
+                    self.assertEqual(imported(path) & set(NETWORK_MODULES), set())
                 self.assertEqual(connector_calls(path) - DATABASE_CONNECTS, set())
 
     def test_the_one_socket_is_the_listener_which_binds_and_never_connects(self):
@@ -210,8 +250,12 @@ class ImportCensus(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         files = [Path(f) for f in json.loads(result.stdout) if f]
         loaded = {relative(f) for f in files if f.resolve().is_relative_to(T.REPO)}
-        self.assertEqual(loaded, SERVER_MODULES)
+        self.assertEqual(loaded, LIVE_SERVER_MODULES)
         self.assertEqual([f for f in loaded if f.startswith(FORBIDDEN_PREFIXES)], [])
+        packages = {part for f in files for part in f.parts[:-1]}     # a network client's package directory
+        self.assertTrue(packages.isdisjoint({'urllib3', 'httpx', 'requests', 'aiohttp'}), 'a network client was loaded')
+        self.assertFalse([f for f in files if f.parent.name == 'dulwich' and f.stem in ('client', 'protocol')],
+                         'dulwich.client was loaded')
 
     def test_the_supervisor_loads_no_credential_gitea_dispatch_inference_or_owner_module(self):
         code = ('import importlib.util, json, sys\n'

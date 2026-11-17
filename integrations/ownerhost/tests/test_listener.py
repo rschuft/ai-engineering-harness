@@ -362,8 +362,11 @@ class Listener(unittest.TestCase):
         self.assertEqual((config['address'], config['port']), ('127.0.0.1', 13310))
 
     def test_the_live_import_census_is_the_server_s_four_modules(self):
-        expected = ['integrations/conversation/conversation_store.py', 'integrations/ownerhost/app.py',
-                    'integrations/ownerhost/session.py', 'integrations/storecore/storecore.py']
+        expected = ['integrations/conversation/conversation_store.py', 'integrations/lineage/lineage.py',
+                    'integrations/ownerhost/app.py', 'integrations/ownerhost/capture.py',
+                    'integrations/ownerhost/session.py', 'integrations/planning/planning_adapter.py',
+                    'integrations/repository/repository_access.py', 'integrations/store/integration_store.py',
+                    'integrations/storecore/storecore.py', 'tools/check_intent_record.py']   # since P-01.3
         self.assertEqual(self.obs['server_record_at_start']['harness_modules'], expected)
         self.assertEqual(self.obs['server_record_at_stop']['harness_modules'], expected)
 

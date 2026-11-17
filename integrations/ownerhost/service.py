@@ -28,6 +28,12 @@ of no credential. Linux and macOS are ``PLATFORM_UNSUPPORTED``, as the contract 
   ``aieh-readiness/1`` record passes: the supervisor and the server run, the server runs in the supervision, it
   listens on 127.0.0.1:13310 and nowhere else, and nothing else holds that port.
 
+The capture (P-01.3, capture.py) is configured here, never by the server: ``components.owner_host`` of the
+resolved configuration (the project repository's path and id, the Backlog.md command and each principal's git
+identity) is passed to the server as JSON (``--owner-host-config``), with the managed integration store's path
+(``<state>/integration/integration.sqlite``, the file the recorders use; ``--integration-store``). An absent or invalid
+``components.owner_host`` does not stop the service: the capture refuses with its stable code.
+
 Records: ``<state>/owner-host/run.json`` (``aieh-service-run/1``: the supervisor, the server, the job, the harness
 commit and the tools lock digest, the configuration), ``<state>/owner-host/server.json`` (the server's own record:
 its process, address, port, console window and its live import census), the conversation store beside them; logs in
@@ -107,9 +113,12 @@ def now() -> str:
 
 @dataclasses.dataclass(frozen=True)
 class Layout:
-    """The managed root's places for this service (decision 0009): its state and logs directories."""
+    """The managed root's places for this service (decision 0009): its state and logs directories; and the capture's
+    inputs (P-01.3): ``components.owner_host`` as JSON text (None when not set) and the integration store's path."""
     state: Path
     logs: Path
+    owner_host: str | None = None
+    integration_store: Path | None = None
 
     @property
     def run_record(self) -> Path:
@@ -196,9 +205,30 @@ class InstanceLock:
         return False
 
 
+def owner_host_json(components) -> str | None:
+    """``components.owner_host`` of a resolution's COMPONENTS as JSON text, None when it is not set. A value JSON
+    cannot hold is replaced by a marker the capture refuses (CAPTURE_CONFIG_INVALID)."""
+    raw = (components or {}).get('owner_host')
+    if raw is None:
+        return None
+    return json.dumps(raw, sort_keys=True, default=lambda value: {'unrepresentable': type(value).__name__})
+
+
 def layout(res) -> Layout:
-    """``<state>/owner-host`` and ``<logs>/owner-host`` of the resolution RES, created if needed."""
-    return Layout(paths.ensure('state', res, COMPONENT), paths.ensure('logs', res, COMPONENT))
+    """``<state>/owner-host`` and ``<logs>/owner-host`` of the resolution RES, created if needed, with the capture's
+    configuration and the managed integration store (``<state>/integration/integration.sqlite``)."""
+    return Layout(paths.ensure('state', res, COMPONENT), paths.ensure('logs', res, COMPONENT),
+                  owner_host_json(res.components), paths.ensure('state', res, 'integration') / 'integration.sqlite')
+
+
+def capture_argv(lay: Layout) -> list[str]:
+    """The capture's arguments of the supervisor and the server: none when LAY carries no capture input."""
+    out = []
+    if lay.owner_host is not None:
+        out += ['--owner-host-config', lay.owner_host]
+    if lay.integration_store is not None:
+        out += ['--integration-store', str(lay.integration_store)]
+    return out
 
 
 def child_environment(environ) -> dict:
@@ -209,7 +239,8 @@ def child_environment(environ) -> dict:
 
 
 def server_argv(lay: Layout, python: str = sys.executable) -> list[str]:
-    return [python, '-I', '-B', str(APP), 'serve', '--state-dir', str(lay.state), '--logs-dir', str(lay.logs)]
+    return [python, '-I', '-B', str(APP), 'serve', '--state-dir', str(lay.state), '--logs-dir', str(lay.logs),
+            *capture_argv(lay)]
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -259,8 +290,13 @@ def harness() -> dict:
 
 def configuration(lay: Layout) -> dict:
     """The process's whole configuration (its configuration snapshot): no credential, no secret-shaped value."""
-    return {'address': LOOPBACK, 'port': PORT, 'state_dir': str(lay.state), 'logs_dir': str(lay.logs),
-            'store': lay.store.name, 'environment_names': list(ENVIRONMENT_NAMES)}
+    config = {'address': LOOPBACK, 'port': PORT, 'state_dir': str(lay.state), 'logs_dir': str(lay.logs),
+              'store': lay.store.name, 'environment_names': list(ENVIRONMENT_NAMES)}
+    if lay.owner_host is not None:
+        config['owner_host'] = json.loads(lay.owner_host)
+    if lay.integration_store is not None:
+        config['integration_store'] = str(lay.integration_store)
+    return config
 
 
 # ---------------------------------------------------------------- the managed environment
@@ -387,7 +423,7 @@ def _up(lay: Layout, adapter, python: str) -> dict:
         raise refused('PORT_IN_USE', f'{LOOPBACK}:{PORT}, or the port on another address, is in use')
     launch_id = secrets.token_hex(8)
     argv = [python, '-I', '-B', str(Path(os.path.realpath(__file__))), 'supervise',
-            '--state-dir', str(lay.state), '--logs-dir', str(lay.logs), '--launch-id', launch_id]
+            '--state-dir', str(lay.state), '--logs-dir', str(lay.logs), '--launch-id', launch_id, *capture_argv(lay)]
     with open(lay.logs / 'supervisor.log', 'ab') as log:
         supervisor = adapter.launch_supervisor(argv, log, lay.state, env=child_environment(os.environ))
     deadline = time.monotonic() + READY_CEILING_S
@@ -523,6 +559,8 @@ def main(argv=None, *, config=None) -> int:
     sup.add_argument('--state-dir', required=True, type=Path)
     sup.add_argument('--logs-dir', required=True, type=Path)
     sup.add_argument('--launch-id')
+    sup.add_argument('--owner-host-config')
+    sup.add_argument('--integration-store', type=Path)
     args = parser.parse_args(argv)
     out = sys.stdout
     if hasattr(out, 'reconfigure'):
@@ -530,7 +568,8 @@ def main(argv=None, *, config=None) -> int:
     try:
         adapter = contract.select_adapter()
         if args.command == 'supervise':
-            return supervise(Layout(args.state_dir, args.logs_dir), adapter, args.launch_id)
+            return supervise(Layout(args.state_dir, args.logs_dir, args.owner_host_config, args.integration_store),
+                             adapter, args.launch_id)
         lay = layout(paths.resolve(config=config))
         report = {'up': up, 'down': down, 'restart': restart, 'status': status, 'inspect': inspect,
                   'verify': readiness, 'recover': recover}[args.command](lay, adapter)

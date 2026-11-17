@@ -34,17 +34,25 @@ owns and the order:
   /threads/{thread_id}/messages/{message_id}`` (update, an upsert for assistant messages; a user message is
   immutable).
 
+The capture route (P-01.3; decision 0025 point 8; capture.py): ``POST /threads/{thread_id}/messages/{message_id}/capture``
+``{sha256}`` makes the Owner message in the request layout one intent-record/v1 OpenSpec change in the project
+repository, idempotent by message id, behind a write-ahead receipt in the integration store; a request whose sha256 is
+not the stored message's is ``CAPTURE_MESSAGE_MISMATCH`` and changes nothing. The project configuration and the
+integration store's path are given to ``serve`` by service.py.
+
 Every write is attributed to the authenticated session. A body is JSON (``Content-Type: application/json``), at most
 ``MAX_BODY_BYTES``, with no duplicate key and no NaN or Infinity (``REQUEST_INVALID``); the store's refusals keep their
 stable codes. Nothing the client wrote is logged: a request is logged by its route's path template.
 
 What it never does (decision 0025 point 2): it opens no outbound connection (its one socket is the listener that
 ``bind_listener`` binds); it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it
-reads no credential and no ``config.yml``; it has no dispatch endpoint. The credential is never logged: the service
+reads no credential and no ``config.yml`` (service.py passes ``components.owner_host`` in); it has no dispatch
+endpoint. The credential is never logged: the service
 log records each request's outcome code, its method (one of the common ones, else OTHER), the path of the route it
 matched (else ``unmatched``; never the client's path) and the session's public id.
 
-  <tools python> -I -B integrations/ownerhost/app.py serve --state-dir DIR --logs-dir DIR
+  <tools python> -I -B integrations/ownerhost/app.py serve --state-dir DIR --logs-dir DIR \
+      [--owner-host-config JSON] [--integration-store FILE]
 
 is the server process; run it through service.py (``up``), which gives it the managed root's
 ``<state>/owner-host`` and ``<logs>/owner-host`` and a minimal environment.
@@ -83,6 +91,7 @@ def _load(name: str, path: Path):
 
 session = _load('aieh_ownerhost_session', HERE / 'session.py')
 conversation = _load('aieh_conversation_store', REPO / 'integrations' / 'conversation' / 'conversation_store.py')
+capture = _load('aieh_ownerhost_capture', HERE / 'capture.py')
 
 from starlette.applications import Starlette          # noqa: E402  (the tools set; decision 0025 point 1)
 from starlette.middleware import Middleware            # noqa: E402
@@ -215,6 +224,24 @@ async def start_session(request):
 class RequestRefused(Exception):
     def __init__(self, code: str, detail: str, status: int):
         self.code, self.detail, self.status = code, detail, status
+
+
+async def capture_message(request):
+    """P-01.3: capture one stored Owner message as an intent change (capture.py)."""
+    try:
+        body = await _body(request)
+        if set(body) != {'sha256'}:
+            raise RequestRefused('REQUEST_INVALID', 'capture takes {sha256}', 400)
+        answer = request.app.state.capture.capture(
+            request.app.state.store(), request.path_params['thread_id'], request.path_params['message_id'],
+            body['sha256'], request.scope['state']['owner_session'])
+    except RequestRefused as exc:
+        return refusal(exc.code, exc.detail, exc.status)
+    except capture.CaptureRefused as exc:
+        return refusal(exc.code, exc.detail, exc.status, exc.remedy)
+    except conversation.ConversationRefused as exc:
+        return refusal(exc.code, exc.detail, STORE_REFUSAL_STATUS[exc.code])
+    return JSONResponse(answer, headers=SECURITY_HEADERS)
 
 
 def _no_constant(name):
@@ -350,6 +377,7 @@ ROUTES = (
     Route('/threads/{thread_id}/delete', thread_delete, methods=['POST']),
     Route('/threads/{thread_id}/messages', messages, methods=['GET', 'POST']),
     Route('/threads/{thread_id}/messages/{message_id}', message, methods=['POST']),
+    Route('/threads/{thread_id}/messages/{message_id}/capture', capture_message, methods=['POST']),
 )
 LOGGED_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')
 
@@ -370,10 +398,11 @@ def described(scope) -> str:
 
 def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Callable[[], str] = now,
                log: Callable[[str], None] = lambda line: None, lifespan=None,
-               store: Callable[[], object] | None = None) -> Starlette:
+               store: Callable[[], object] | None = None, capturer=None) -> Starlette:
     """The ASGI application. SESSIONS returns the object that answers ``session_by_verifier`` (the conversation
     store); STORE the conversation store the thread and history routes use (SESSIONS' object when not given); CLOCK
-    the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request."""
+    the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request; CAPTURER the capture
+    (capture.Capture; without one every capture is CAPTURE_PROJECT_UNCONFIGURED)."""
     app = Starlette(
         routes=list(ROUTES),
         middleware=[
@@ -386,6 +415,7 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
         lifespan=lifespan)
     app.state.store = store or sessions
     app.state.clock = clock
+    app.state.capture = capturer or capture.Capture(None, None)
     return app
 
 
@@ -480,9 +510,22 @@ def _logger(logs_dir: Path) -> logging.Logger:
     return logging.getLogger('aieh.ownerhost')
 
 
-def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT) -> int:
+def owner_host_config(text: str | None):
+    """``components.owner_host`` as service.py passed it (JSON; None when not set). Text that is not JSON is kept as
+    text, which the capture refuses as CAPTURE_CONFIG_INVALID."""
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
+def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT, owner_host: str | None = None,
+          integration_store: Path | None = None) -> int:
     """The server process: open the conversation store, bind the listener, write the server record, serve until
-    service.py asks it to stop (the stop-request file), then record the stop."""
+    service.py asks it to stop (the stop-request file), then record the stop. OWNER_HOST (``components.owner_host``
+    as JSON) and INTEGRATION_STORE (the managed integration store's path) are the capture's."""
     import uvicorn
     state_dir, logs_dir = Path(state_dir), Path(logs_dir)
     log = _logger(logs_dir)
@@ -504,7 +547,8 @@ def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT) -> int:
         finally:
             task.cancel()
 
-    app = create_app(lambda: store, port=port, log=log.info, lifespan=lifespan)
+    capturer = capture.Capture(owner_host_config(owner_host), integration_store)
+    app = create_app(lambda: store, port=port, log=log.info, lifespan=lifespan, capturer=capturer)
     config = uvicorn.Config(app, log_config=None, access_log=False, proxy_headers=False, server_header=False,
                             date_header=True, ws='none', http='h11', loop='asyncio', lifespan='on',
                             timeout_graceful_shutdown=5)
@@ -531,9 +575,12 @@ def main(argv=None) -> int:
     run = sub.add_parser('serve', help='serve on 127.0.0.1:13310 (the server process service.py starts)')
     run.add_argument('--state-dir', required=True, type=Path, help='<state>/owner-host of the managed root')
     run.add_argument('--logs-dir', required=True, type=Path, help='<logs>/owner-host of the managed root')
+    run.add_argument('--owner-host-config', help='components.owner_host of config.yml, as JSON (service.py)')
+    run.add_argument('--integration-store', type=Path, help='the managed integration store (service.py)')
     args = parser.parse_args(argv)
     try:
-        return serve(args.state_dir, args.logs_dir)
+        return serve(args.state_dir, args.logs_dir, owner_host=args.owner_host_config,
+                     integration_store=args.integration_store)
     except ServeError as exc:
         print(str(exc), file=sys.stderr)
         return 2

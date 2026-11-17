@@ -122,6 +122,61 @@ class Environment(unittest.TestCase):
         self.assertEqual(T.A.PORT, 13310)
 
 
+
+class CaptureConfiguration(Base):
+    """P-01.3: service.py, never the server, reads components.owner_host; it reaches the supervisor and the server as
+    JSON with the managed integration store's path, and appears in the configuration snapshot."""
+    RAW = {'project_repository': 'C:/projects/demo', 'project_repository_id': 'aieh-d1-demo',
+           'backlog_command': 'backlog', 'git_identities': {'owner': 'Test Owner <12345+test-owner@users.noreply.github.com>'}}
+
+    def captured_layout(self):
+        return SV.Layout(self.lay.state, self.lay.logs, SV.owner_host_json({'owner_host': self.RAW}),
+                         Path('C:/managed/state/integration/integration.sqlite'))
+
+    def test_components_owner_host_reaches_the_server_as_json_with_the_integration_store(self):
+        lay = self.captured_layout()
+        argv = SV.server_argv(lay, 'python.exe')
+        self.assertEqual(argv[:9], ['python.exe', '-I', '-B', str(SV.APP), 'serve', '--state-dir', str(lay.state),
+                                    '--logs-dir', str(lay.logs)])
+        self.assertEqual(argv[9:], ['--owner-host-config', lay.owner_host, '--integration-store',
+                                    str(lay.integration_store)])
+        self.assertEqual(T.A.owner_host_config(argv[10]), self.RAW)
+        config = SV.configuration(lay)
+        self.assertEqual((config['owner_host'], config['integration_store']), (self.RAW, str(lay.integration_store)))
+        self.assertEqual([k for k in config if paths.SECRET_SHAPED.search(k)], [])
+
+    def test_absent_owner_host_passes_nothing_and_the_capture_refuses_unconfigured(self):
+        for components in ({}, {'owner_host': None}, None):
+            with self.subTest(components=components):
+                self.assertIsNone(SV.owner_host_json(components))
+        self.assertEqual(SV.capture_argv(SV.Layout(self.lay.state, self.lay.logs)), [])
+        with self.assertRaises(T.A.capture.CaptureRefused) as caught:
+            T.A.capture.project_config(T.A.owner_host_config(None))
+        self.assertEqual(caught.exception.code, 'CAPTURE_PROJECT_UNCONFIGURED')
+
+    def test_a_value_json_cannot_hold_becomes_a_value_the_capture_refuses(self):
+        import datetime
+        text = SV.owner_host_json({'owner_host': {**self.RAW, 'project_repository': datetime.date(2026, 11, 16)}})
+        with self.assertRaises(T.A.capture.CaptureRefused) as caught:
+            T.A.capture.project_config(T.A.owner_host_config(text))
+        self.assertEqual(caught.exception.code, 'CAPTURE_CONFIG_INVALID')
+        with self.assertRaises(T.A.capture.CaptureRefused) as caught:
+            T.A.capture.project_config(T.A.owner_host_config('{not json'))
+        self.assertEqual(caught.exception.code, 'CAPTURE_CONFIG_INVALID')
+
+    def test_up_and_the_supervisor_pass_the_capture_arguments_on(self):
+        lay = self.captured_layout()
+        adapter = FakeAdapter()
+        with self.assertRaises(AssertionError):     # the fake starts nothing; it records the argv
+            SV.up(lay, adapter)
+        (argv,) = adapter.launched
+        self.assertEqual(argv[-4:], SV.capture_argv(lay))
+        seen = []
+        with mock.patch.object(SV, 'supervise', lambda layout, adapter, launch: seen.append(layout) or 0),                 mock.patch.object(SV.contract, 'select_adapter', lambda: adapter):
+            self.assertEqual(SV.main(argv[4:]), 0)
+        self.assertEqual(seen, [lay])
+
+
 class Readiness(Base):
     def test_ready_when_the_server_listens_on_the_declared_port_only(self):
         adapter = self.running([row('127.0.0.1', 13310, 20)])

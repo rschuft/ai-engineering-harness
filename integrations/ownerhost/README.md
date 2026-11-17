@@ -9,14 +9,17 @@ credential, `cred-owner-ui-session`, which the Owner mints himself at a console.
 
 Behind the credential: `POST /session` answers the authenticated session's public id and validity (the shell's
 sign-in), and since U-02.1 the thread and history routes keep the Owner chat in the conversation store (below);
-since U-02.2 a pending decision kept there survives a restart of the process and a reopened browser, once.
-Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. It has no dispatch endpoint.
+since U-02.2 a pending decision kept there survives a restart of the process and a reopened browser, once; since
+P-01.3 an Owner message sent through the shell's request form is captured as an OpenSpec intent change in the project
+repository ([below](#capture-p-013)). Acceptance (P-04.4) and the projection (U-04.1) attach later. It has no dispatch
+endpoint.
 
 ## Files
 
 | Path | What |
 |---|---|
-| `app.py` | The ASGI application (`create_app`), its three request checks, the session route and the thread and history routes; `bind_listener` and `serve`, the server process |
+| `app.py` | The ASGI application (`create_app`), its three request checks, the session route, the thread and history routes and the capture route; `bind_listener` and `serve`, the server process |
+| `capture.py` | P-01.3: the request layout's parser, the intent record it writes, the project configuration (`components.owner_host`), the commit identity, the write-ahead receipt and the commit |
 | `session.py` | The credential's shape and verifier, and `check`, which decides one request against the session table |
 | `enroll.py` | The Owner's enroll command: the console guard, minting, the session row, the one showing |
 | `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `recover`, `status`, `inspect`, `verify`, and the supervisor |
@@ -29,6 +32,7 @@ Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. 
 | `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
 | `tests/test_history_listener.py` | U-02.1's proof against the real service: a reload after a restart, repeats, the refusals, a quote cut from a received statement and a changed source byte (integration, Windows) |
 | `tests/test_pending_decision.py` | U-02.2's proof against a real Integration process the test starts (`app.serve` through `serve_on_port.py`) on a free loopback port and a throwaway state directory, stopped by its stop request and started again twice: the shell's recorded pending-decision requests replayed, the thread and its pending call back once, a reconnect adding nothing, the answer an update of the same id; the lineage resolvers reading the store it wrote (integration) |
+| `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals; the crash windows; the commit identity and its refusals; no socket, no process, no model (integration) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
@@ -115,6 +119,89 @@ thread id, message id or text reaches it. Any current session reads and writes e
 superseded sessions included (decision 0025: one Owner, no per-session isolation); a row names the session that wrote
 it.
 
+## Capture (P-01.3)
+
+Plan leaf **P-01.3**; decision 0025 point 8; the I1 work design, R6 and slice 8. `capture.py` holds the rules; this is
+their summary.
+
+| Route | Answer |
+|---|---|
+| `POST /threads/{thread_id}/messages/{message_id}/capture` `{sha256}` | `{change, commit, created, receipt, state, quote, files, project}`; `created` is false when the message was captured already |
+
+**No model is called.** The structure of a requested change comes from the Owner: the shell's request form
+(`apps/owner-host/src/areas/RequestForm.tsx`) sends **one** message in a fixed layout, and the capture parses that
+layout only:
+
+```
+Change: <change name, kebab-case>
+Objective: <one line>
+Acceptance criteria:
+- <one line>            (one or more)
+Suggestion: <one line>  (zero or more)
+```
+
+LF between lines, no final line break, every value one non-empty line with no surrounding whitespace and no control or
+separator character but a tab. Anything else is `CAPTURE_LAYOUT_INVALID` (422) naming the line: nothing is guessed,
+trimmed or reordered. The shell's model-free chat adapter asks for the capture of a message that begins `Change: `,
+once the history adapter has stored it, and replies with a card built only from the answer or the refusal.
+
+**In order, each refusal changing nothing:** the project configuration (`CAPTURE_PROJECT_UNCONFIGURED`,
+`CAPTURE_CONFIG_INVALID`); the message: an Owner statement (`CAPTURE_NOT_A_STATEMENT`) whose **stored bytes** have the
+request's sha256 (`CAPTURE_MESSAGE_MISMATCH`, 409); the layout; the commit identity (below); the project repository
+(`CAPTURE_PROJECT_UNAVAILABLE`: the configured path must be the root of a work tree with a commit on a branch; nothing
+above it is searched) and a new change name (`CAPTURE_CHANGE_EXISTS`). The store's own codes (`THREAD_NOT_FOUND`,
+`MESSAGE_NOT_FOUND`) and `REQUEST_INVALID` keep their meaning.
+
+**The change.** One commit through `repository_access.Repository.write_commit` (a compare-and-swap of the branch) adds
+exactly `openspec/changes/<change>/proposal.md` and `.openspec.yaml` (schema `intent-driven`, the message's creation
+date). Its intent record (`intent-record/v1`, `normalized_by: agent:owner-host-capture@1.0.0`): Q1 is the whole message
+under its span anchor (`conversation:<thread>/<message>#span:0+<n>:sha256:<digest>`, cut with
+`lineage.span_reference` from the stored bytes); O1, each ACn and each Mn are exact byte spans of it, `attributed_to:
+owner`, `source: Q1`; a suggestion is a Proposed Method with `claim_type: hypothesis` and its Hypothesis, never the
+objective; the Hypotheses' one sentence is the only statement the capture wrote. The record passes
+`tools/check_intent_record.py` against the stored bytes before anything is written. The commit message carries the
+trailer `Intent-Capture: owner-ui/intent-capture/v1/<thread>/<message>`.
+
+**One change per message.** The write-ahead receipt `owner-ui/intent-capture/v1/<thread>/<message>` (format
+`aieh-owner-ui-intent-capture/1`) is reserved in the managed integration store before the commit, and goes to
+`dispatched` and `confirmed` with the commit once the branch has moved (the capturing session in the detail; the
+message, its sha256 and its session in the intent). A confirmed receipt answers its commit. A receipt left `reserved`
+or `dispatched` (a process that ended between the receipt and the confirmation) is settled **by reading the project
+repository first**: the commit carrying its trailer on HEAD's first-parent history confirms it, and nothing is written
+again; only when no such commit is there is the commit made. A refused commit (`CAPTURE_COMMIT_REFUSED`,
+`CAPTURE_GIT_FAILED`) writes nothing and leaves the receipt `reserved`, so the same message is captured once the
+repository is repaired; a branch that moves under the capture is read again (at most three times).
+
+**Who commits.** The commissioning user is the author and the committer of the commits the harness makes on that
+user's behalf: the commit is made under the user's own git identity, and the harness is the user's mechanism. In I1
+the user is the one enrolled Owner, the principal `owner` (every Owner UI session is his; the conversation store
+records his statements with that author). Agents and components get no git identity: provenance lives in the intent
+record (`normalized_by`), the lineage (the message's bytes, sha256 and session) and the evidence and receipts, and
+authorship grants nothing. The identity is set explicitly, per principal, under `components.owner_host.git_identities`
+(below); it is never read from git configuration or the environment and never inferred, and there is no shared default
+or fallback. Refused, with nothing written and no receipt: `COMMIT_IDENTITY_UNAVAILABLE` (none for the principal;
+another principal's is never used), `COMMIT_IDENTITY_INVALID` (not `Name <email>`, a line break, `<` or `>` in the
+name), `COMMIT_IDENTITY_PLACEHOLDER` (an invented placeholder domain: `localhost`, or under `.invalid`, `.localhost`,
+`.example` or `.test`). A GitHub no-reply address is accepted, and so is any other real address the user configured.
+This is not decision 0025's undecided "separate host identity for the service", which is an operating-system account.
+
+**Configuration.** service.py, never the server, reads `components.owner_host` of `config.yml` and passes it to the
+server as JSON, with the managed integration store's path (`<state>/integration/integration.sqlite`):
+
+```yaml
+components:
+  owner_host:
+    project_repository: /absolute/path/to/the/project/work/tree   # its root; a copy of D1's demo repository in I1
+    project_repository_id: aieh-d1-demo
+    backlog_command: /absolute/path/to/backlog.md/cli.js           # for the projection (U-04.1); unused by the capture
+    git_identities:
+      owner: "<Your Name> <<id>+<login>@users.noreply.github.com>"   # a placeholder the capture refuses: replace it
+```
+
+The `git_identities` value shown is a placeholder that `COMMIT_IDENTITY_INVALID` refuses until the user replaces it with
+his own identity. Absent, the capture answers `CAPTURE_PROJECT_UNCONFIGURED`; malformed, `CAPTURE_CONFIG_INVALID`; the service itself
+starts either way. A change of the configuration takes effect at the next start.
+
 ## Pending decisions across a restart (U-02.2)
 
 No route changes. A run paused on the shell's `owner_decision` human tool is appended as an assistant message with
@@ -133,9 +220,12 @@ Decision 0025 point 2, each with its test: it opens no outbound connection (its 
 listener, bound with `SO_EXCLUSIVEADDRUSE`, so no other socket binds `127.0.0.1:13310` while it is held, even with
 `SO_REUSEADDR`; a socket on another address of the port is not excluded, which `up` and `verify` cover by refusing or
 failing on any other holder of the port; readiness reads the kernel's TCP table, never a request);
-the server process loads only `app.py`, `session.py`, the conversation store and storecore (no credential, Gitea,
-authorization-recorder, dispatch or inference module); it reads no credential and no `config.yml` (service.py gives
-it its two directories); its environment, and its supervisor's, is the allowlist `ENVIRONMENT_NAMES` (Windows and
+the server process loads only `app.py`, `session.py`, the conversation store and storecore, and since P-01.3 the
+capture's modules (`capture.py`, the integration store, the planning adapter, the shared repository-access module,
+`lineage.py` and `tools/check_intent_record.py`): no credential, Gitea, authorization-recorder, dispatch or inference
+module, and no network client (the repository-access module's remote transport, which imports one, is never reached:
+a whole capture audited opens no socket and starts no process); it reads no credential and no `config.yml`
+(service.py gives it its two directories, `components.owner_host` and the integration store's path); its environment, and its supervisor's, is the allowlist `ENVIRONMENT_NAMES` (Windows and
 the interpreter's needs, nothing else); it has no dispatch endpoint.
 
 ## The lifecycle
@@ -191,5 +281,7 @@ rather than skip, when the port is already held. `test_pending_decision.py` uses
 - U-02.1's and U-02.2's verdicts (built 2026-11-16; their tests PASS offline and against the real process with
   throwaway layouts).
 - A pending decision asked by a real producer: no chat model is connected, so only the tests ask one.
+- P-01.3's verdict (built 2026-11-16; its tests PASS offline with throwaway stores and repositories): no capture has
+  been made in a real project repository, with the Owner's own configured identity, or from a real browser.
 - Linux and macOS (the platform contract's adapters, F-06.4 and F-06.5).
 - Ending with the Owner's session or a reboot (the job's declared behaviour, as for Gitea).
