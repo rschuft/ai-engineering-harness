@@ -453,6 +453,35 @@
     "median": 8.187,
     "discovery_median": 0.113
    }
+  },
+  {
+   "name": "agentfixture",
+   "start_dir": "integrations/agentfixture/tests",
+   "tests": 56,
+   "outcomes": {
+    "ok": 51,
+    "skip": 5
+   },
+   "successful": true,
+   "launches": 17,
+   "mkdtemp": 23,
+   "sockets": 262,
+   "chdir": 0,
+   "unattributed": {
+    "launches": 0,
+    "mkdtemp": 0,
+    "sockets": 0,
+    "chdir": 0
+   },
+   "wall": {
+    "runs": [
+     12.344,
+     13.134,
+     13.081
+    ],
+    "median": 13.081,
+    "discovery_median": 1.254
+   }
   }
  ],
  "categories": {
@@ -7198,6 +7227,305 @@
    "sockets": 0,
    "chdir": 0,
    "wall": 1.117
+  },
+  {
+   "id": "test_catalog.Answers",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 1,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.07
+  },
+  {
+   "id": "test_catalog.Citations",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_catalog.Routes",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_catalog.Rules",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_catalog.Table",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_process.Census",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.019
+  },
+  {
+   "id": "test_process.Process",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 1,
+   "mkdtemp": 1,
+   "sockets": 2,
+   "chdir": 0,
+   "wall": 0.593
+  },
+  {
+   "id": "test_process.Transport",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.503
+  },
+  {
+   "id": "test_result.Answer",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 6,
+   "mkdtemp": 10,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.944
+  },
+  {
+   "id": "test_result.G7RealShell",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 4,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.198
+  },
+  {
+   "id": "test_result.Refused",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 5,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.213
+  },
+  {
+   "id": "test_served.Authority",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 17,
+   "chdir": 0,
+   "wall": 0.317
+  },
+  {
+   "id": "test_served.CallLog",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 9,
+   "chdir": 0,
+   "wall": 0.222
+  },
+  {
+   "id": "test_served.Faces",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 99,
+   "chdir": 0,
+   "wall": 0.982
+  },
+  {
+   "id": "test_served.Failed",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 9,
+   "chdir": 0,
+   "wall": 0.221
+  },
+  {
+   "id": "test_served.LostAcknowledgement",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_served.Pending",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 11,
+   "chdir": 0,
+   "wall": 2.209
+  },
+  {
+   "id": "test_served.Running",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 31,
+   "chdir": 0,
+   "wall": 0.219
+  },
+  {
+   "id": "test_served.Socket",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 43,
+   "chdir": 0,
+   "wall": 1.107
+  },
+  {
+   "id": "test_served.SourceDerived",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 31,
+   "chdir": 0,
+   "wall": 0.659
+  },
+  {
+   "id": "test_served.Unknown",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_served.Unvalidated",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 7,
+   "chdir": 0,
+   "wall": 0.22
+  },
+  {
+   "id": "test_served.Validated",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
   }
  ],
  "modules": [
@@ -7350,6 +7678,23 @@
     "python": "3.12.10"
    },
    "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording."
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "b53741cb8f74f04948a4b45134259032bb609701",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Registered later (E-01.7, the engineering manager's ruling 6 of dispatch 24 of unit I1) from a profile of this suite alone (tools/test_profile.py run --runs 3 --suite agentfixture; check_test_budget.py record and propose), without AIEH_LOCKED_OPENAPI, so the five tests that need the locked openapi.json are recorded skipped; every other suite, category and total is unchanged and keeps its own recording."
   }
  ]
 }

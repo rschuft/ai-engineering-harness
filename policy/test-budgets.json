@@ -120,6 +120,12 @@
    "launches": 6,
    "mkdtemp": 43,
    "wall_s": 8.2
+  },
+  "agentfixture": {
+   "tests": 56,
+   "launches": 17,
+   "mkdtemp": 23,
+   "wall_s": 13.1
   }
  },
  "categories": {
@@ -165,6 +171,17 @@
    "measured": "2026-11-16",
    "runs": 3,
    "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "b53741cb8f74f04948a4b45134259032bb609701",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Registered later (E-01.7, the engineering manager's ruling 6 of dispatch 24 of unit I1) from a profile of this suite alone (tools/test_profile.py run --runs 3 --suite agentfixture; check_test_budget.py record and propose), without AIEH_LOCKED_OPENAPI, so the five tests that need the locked openapi.json are recorded skipped; every other suite, category and total is unchanged and keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]

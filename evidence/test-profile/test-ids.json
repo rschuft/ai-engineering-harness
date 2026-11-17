@@ -2746,6 +2746,9 @@
     "test_read_binding.ReadBinding.test_no_row_marked_read_is_clock_valued_or_not_served",
     "test_read_binding.ReadBinding.test_the_core_answered_in_the_matrix_and_the_three_fakes_modules",
     "test_read_binding.ReadBinding.test_the_reads_are_exactly_the_rows_marked_read",
+    "test_read_binding.ServedReadBinding.test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it",
+    "test_read_binding.ServedReadBinding.test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served",
+    "test_read_binding.ServedReadBinding.test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses",
     "test_restart_matrix.Rows.test_a_dies_before_the_reservation",
     "test_restart_matrix.Rows.test_b_dies_reserved",
     "test_restart_matrix.Rows.test_c_dies_dispatched_its_create_not_received",
@@ -2810,7 +2813,11 @@
     "test_work_source_operation.ReadIsOneOperation.test_an_exception_ends_the_reader",
     "test_work_source_operation.ReadIsOneOperation.test_one_list_one_view_one_reader"
    ],
-   "skipped": []
+   "skipped": [
+    "test_read_binding.ServedReadBinding.test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it",
+    "test_read_binding.ServedReadBinding.test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served",
+    "test_read_binding.ServedReadBinding.test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses"
+   ]
   },
   "repository": {
    "tests": [
@@ -3325,6 +3332,73 @@
     "test_structure.OnePort.test_the_port_is_the_census_s_and_the_matrix_s"
    ],
    "skipped": []
+  },
+  "agentfixture": {
+   "tests": [
+    "test_catalog.Answers.test_each_answer_validates_against_the_catalogs_model_schemas",
+    "test_catalog.Answers.test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served",
+    "test_catalog.Answers.test_the_ui_statuses_are_only_those_a_live_run_reaches",
+    "test_catalog.Citations.test_each_observed_value_is_in_its_cited_section",
+    "test_catalog.Routes.test_every_route_the_listener_answers_is_a_catalog_route",
+    "test_catalog.Routes.test_every_served_route_is_in_the_pinned_inventory_with_its_recorded_source",
+    "test_catalog.Routes.test_g4_each_routes_presence_in_the_locked_document_is_as_recorded",
+    "test_catalog.Rules.test_a_row_read_is_served_on_the_dispatchers_face_and_never_clock_valued",
+    "test_catalog.Rules.test_clock_valued_is_an_unread_observation_of_the_clock",
+    "test_catalog.Rules.test_each_ui_label_names_exactly_its_source_derived_fields",
+    "test_catalog.Rules.test_every_field_has_a_class_and_only_a_classed_field_is_served",
+    "test_catalog.Rules.test_every_observation_cites_a_record_the_proof_names",
+    "test_catalog.Rules.test_source_derived_only_on_the_ui_face_cited_to_the_locked_wheels_and_marked",
+    "test_catalog.Rules.test_the_pinned_rule_is_harness_code_the_production_path_runs",
+    "test_catalog.Table.test_every_served_answer_has_rows_and_every_row_an_answer",
+    "test_catalog.Table.test_the_readme_table_is_the_catalog_row_for_row",
+    "test_process.Census.test_the_armed_guard_refuses_a_connect_and_a_lookup",
+    "test_process.Census.test_the_served_sources_have_no_outbound_call_site",
+    "test_process.Process.test_it_listens_on_127_0_0_1_only_and_on_nothing_else",
+    "test_process.Process.test_it_loads_no_client_and_no_dispatch_module",
+    "test_process.Process.test_it_stops_on_its_stop_request",
+    "test_process.Transport.test_a_delivery_or_the_ui_face_is_refused_before_anything_is_sent",
+    "test_process.Transport.test_an_answer_without_the_label_is_refused",
+    "test_process.Transport.test_it_targets_the_literal_loopback_address_and_declares_fixture",
+    "test_result.Answer.test_d1s_recorded_changes_are_the_report_d1_committed",
+    "test_result.Answer.test_g7_the_commit_is_decision_0024_point_4_4s_rule",
+    "test_result.Answer.test_result_is_the_harness_script_over_d1s_changes_with_d1s_test_output",
+    "test_result.Answer.test_the_demo_blobs_are_the_committed_template_and_the_constants_the_builders",
+    "test_result.Answer.test_the_identity_is_an_input",
+    "test_result.G7RealShell.test_the_built_commit_equals_the_real_scripts_through_a_real_shell",
+    "test_result.Refused.test_a_base_that_is_not_d1s_outside_openspec_and_backlog_is_refused",
+    "test_result.Refused.test_a_result_with_an_exchange_delivery_is_refused_as_before",
+    "test_result.Refused.test_a_script_or_a_constant_not_the_builders_is_refused_without_running",
+    "test_result.Refused.test_result_before_seed_before_the_turn_or_twice_is_refused",
+    "test_served.Authority.test_no_answer_of_the_fixture_can_be_taken_as_live",
+    "test_served.CallLog.test_the_call_log_names_face_method_path_and_answer_never_a_body",
+    "test_served.Faces.test_each_faces_access_value_is_refused_on_the_other_face",
+    "test_served.Faces.test_every_answer_carries_the_label_on_both_faces",
+    "test_served.Faces.test_outside_the_catalog_is_501_with_the_label_on_both_faces",
+    "test_served.Faces.test_the_dispatcher_never_calls_the_ui_face",
+    "test_served.Faces.test_the_ui_face_is_read_only_and_a_write_changes_nothing",
+    "test_served.Failed.test_the_create_is_refused_as_s_01_3_1_observed",
+    "test_served.LostAcknowledgement.test_the_create_reaches_the_core_its_answer_is_withheld_and_the_lookup_answered",
+    "test_served.Pending.test_the_message_never_reaches_the_core_and_the_conversation_stays_idle",
+    "test_served.Running.test_the_ui_face_runs_for_its_own_reads_while_the_dispatchers_face_is_finished",
+    "test_served.Socket.test_a_socket_outside_the_catalog_is_refused_with_the_label",
+    "test_served.Socket.test_an_inbound_message_is_refused_and_changes_nothing",
+    "test_served.Socket.test_authentication_as_the_pinned_server_refuses_it",
+    "test_served.Socket.test_one_sync_frame_then_the_replay_and_the_label_on_the_handshake",
+    "test_served.Socket.test_without_after_seq_only_the_sync_frame",
+    "test_served.SourceDerived.test_a_conversation_whose_agent_the_source_does_not_determine_is_refused_on_the_ui_face",
+    "test_served.SourceDerived.test_the_listener_refuses_the_request_that_would_need_the_source_derived_entry",
+    "test_served.SourceDerived.test_the_ui_face_names_its_source_derived_fields_in_the_label",
+    "test_served.Unknown.test_the_create_and_every_lookup_reach_the_core_and_are_withheld",
+    "test_served.Unvalidated.test_without_the_locked_document_every_create_is_refused",
+    "test_served.Validated.test_a_valid_create_is_answered_201_and_an_invalid_one_never"
+   ],
+   "skipped": [
+    "test_catalog.Answers.test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served",
+    "test_catalog.Routes.test_g4_each_routes_presence_in_the_locked_document_is_as_recorded",
+    "test_served.LostAcknowledgement.test_the_create_reaches_the_core_its_answer_is_withheld_and_the_lookup_answered",
+    "test_served.Unknown.test_the_create_and_every_lookup_reach_the_core_and_are_withheld",
+    "test_served.Validated.test_a_valid_create_is_answered_201_and_an_invalid_one_never"
+   ]
   }
  },
  "suites_added": [
@@ -3345,6 +3419,23 @@
     "python": "3.12.10"
    },
    "note": "Registered later (U-01.3, the engineering manager's ruling of 2026-11-16 on dispatch 4b) from a profile of these suites alone (tools/test_profile.py run --runs 3 --suite conversation --suite ownerhost; check_test_budget.py record and propose); every other suite, category and total is unchanged and keeps its own recording. Re-recorded for these two suites only at 6a62cb2 after the review fixes of dispatch 4c (renamed and added tests). Re-recorded for these two suites only at 9ef0ac7 (U-02.1, engineering dispatch 7 of unit I1): the new tests of migration 0002 and of the thread and history routes added, and five ownerhost tests committed after 6a62cb2 and not yet recorded (test_listener.Listener: the two restart tests; test_service.Transitions: three); no id removed or renamed."
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "b53741cb8f74f04948a4b45134259032bb609701",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 1,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Registered later (E-01.7, the engineering manager's ruling 6 of dispatch 24 of unit I1) from a profile of this suite alone (tools/test_profile.py run --runs 3 --suite agentfixture; check_test_budget.py record and propose), without AIEH_LOCKED_OPENAPI, so the five tests that need the locked openapi.json are recorded skipped; every other suite, category and total is unchanged and keeps its own recording. The dispatch suite's three ServedReadBinding tests (the read-binding test's extension, which needs the same document) are appended to its recorded set as skipped."
   }
  ]
 }
