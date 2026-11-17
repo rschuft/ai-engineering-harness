@@ -36,6 +36,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -120,6 +121,13 @@ COVERAGE = {'archivedTasksEnumerable': False, 'code': 'ARCHIVED_TASKS_NOT_ENUMER
                       'cite the outcome or its design) or when an attempt reservation cites it and the outcome, '
                       'archived or not: a task archived with no attempt citing the outcome is not shown.'}
 FAILURE_ROLES = ('objective', 'statement', 'work')
+# The session-detail source action (U-01.2; the I1 design R15; decision 0026 point 9): data only. For a fixture-bound
+# attempt with a conversation id, the path of that conversation in the standalone Agent Canvas application (the shell
+# composes the address on its own constant origin); for any other, the refusal. This process opens no socket for it and
+# names no Canvas or fixture client: the live session access (the dispatcher-issued runtime credential) is U-03.1's.
+SESSION_ACCESS_UNAVAILABLE = 'SESSION_ACCESS_UNAVAILABLE'
+CANVAS_CONVERSATION_PATH = '/conversations/'
+CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 
 
 def _sha256(text: str) -> str:
@@ -432,6 +440,21 @@ def evidence_of(records: dict) -> dict | None:
     }
 
 
+def session_detail(conversation, authority: dict) -> dict:
+    """The session-detail action of an attempt: available for a fixture-bound attempt whose conversation id is a
+    lower-case UUID, refused (SESSION_ACCESS_UNAVAILABLE) otherwise, with the reason."""
+    bound = authority.get('bound')
+    if bound != FIXTURE:
+        why = ("the attempt is bound to the live authority: a live conversation's session access (the "
+               "dispatcher-issued runtime credential) is U-03.1's" if bound == LIVE
+               else "the attempt's bound authority is not known, so no session access is given")
+        return {'refused': SESSION_ACCESS_UNAVAILABLE, 'reason': why}
+    if not isinstance(conversation, str) or CONVERSATION_ID.fullmatch(conversation) is None:
+        return {'refused': SESSION_ACCESS_UNAVAILABLE, 'reason': 'the attempt has no conversation id'}
+    return {'conversationId': conversation, 'canvasPath': f'{CANVAS_CONVERSATION_PATH}{conversation}',
+            'authority': FIXTURE}
+
+
 def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=None, epochs=()) -> dict:
     """The typed status of the attempt RESERVATION from its records among ROWS (EVENTS_OF answers a key's
     transitions), with its authority, its result's claims and its evidence."""
@@ -464,6 +487,7 @@ def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=N
             view['authority'] = {'shown': UNKNOWN, 'bound': bound, 'code': broken[0], 'detail': broken[1]}
             decided = _decide(UNKNOWN, broken[0], typed.shown(), broken[1])
     view.update(decided)
+    view['sessionDetail'] = session_detail(conversation, view['authority'])
     view['result'] = result_of(records)
     view['evidence'] = evidence_of(records)
     return view

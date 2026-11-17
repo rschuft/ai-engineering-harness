@@ -315,6 +315,10 @@
       },
       "detail": "the attempt failed (PROFILE_ARTIFACT_MISSING)",
       "cause": "PROFILE_ARTIFACT_MISSING",
+      "sessionDetail": {
+       "refused": "SESSION_ACCESS_UNAVAILABLE",
+       "reason": "the attempt's bound authority is not known, so no session access is given"
+      },
       "result": {
        "reported": null,
        "verified": null,

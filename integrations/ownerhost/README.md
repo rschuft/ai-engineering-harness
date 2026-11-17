@@ -343,7 +343,7 @@ uncertain), and each attempt's `executionStatus` is about what the dispatcher's 
 | `lineageUncertainties` | The lineage's own uncertainties, unfiltered, and one `fixture-authority` (`FIXTURE_AUTHORITY`) per fixture-bound attempt node |
 | `objective`, `statements`, `designs` | The lineage nodes of those roles, as `lineage-projection/v1` has them |
 | `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts in reservation order, and `execution`: its latest attempt's execution status and code. The latest is the last reserved, by the typed attempt's reservation event (the store's `attempt_event.event_id`, an `INTEGER PRIMARY KEY` of an append-only table, so monotonic), never by ordinal: ordinals restart per work item, design revision and stage. `pending` `NO_ATTEMPT` when the store was read and holds none and no restore epoch exists, `unknown` `NO_ATTEMPT_UNPROVEN` when one exists (a restore can lose a reservation), `unknown` `STORE_UNAVAILABLE` when the store could not be read |
-| `attempts` | Per attempt: its ids and `reservedEventId`; `executionStatus`, `executionCode`, `detail` and `shownBy` (the record, its state and its last event that decided it), and where a row says so `cause`, `end`, `stops`, `disclosed` (records beside a published result) or `restoredRow` (the row a restore epoch made unproven); `authority` (`shown`: `live`, `fixture` or `unknown`; `bound`: the pinned allowlist's declaration, or none; its code); `result` and `evidence` (below); every record of the attempt it read |
+| `attempts` | Per attempt: its ids and `reservedEventId`; `executionStatus`, `executionCode`, `detail` and `shownBy` (the record, its state and its last event that decided it), and where a row says so `cause`, `end`, `stops`, `disclosed` (records beside a published result) or `restoredRow` (the row a restore epoch made unproven); `authority` (`shown`: `live`, `fixture` or `unknown`; `bound`: the pinned allowlist's declaration, or none; its code); `result` and `evidence` (below); every record of the attempt it read; `sessionDetail`, the session-detail source action (U-01.2; below) |
 | `failures` | Each unresolved objective, statement or task reference: role, kind, outcome, code |
 | `coverage` | Always present: `{"archivedTasksEnumerable": false, "code": "ARCHIVED_TASKS_NOT_ENUMERABLE", "basis": "Backlog.md 1.55.3 task list --json", "detail": ...}` |
 | `sources`, `lineage` | The traversal's sources, whether the integration store was read, whether a restore epoch is open and how many exist; the whole `lineage-projection/v1`, its own verdict and uncertainties included |
@@ -356,6 +356,16 @@ it), `PROJECTION_STORE_UNCONFIGURED` and `PROJECTION_BACKLOG_UNAVAILABLE` (`back
 `query_only`), the project repository is read through the repository-access module (no git process), Backlog.md runs
 only `task list --json` and `task view <id> --json` (`ReadOnlyBacklog`), and OpenSpec never runs. No Agent Server is
 asked, and the projection holds no transport.
+
+**The session-detail source action** (`sessionDetail`, plan leaf U-01.2; the I1 design R15; decision 0026 point 9).
+Data only: the process opens no socket for it and names no Canvas or fixture client (the census of R2 is unchanged).
+For an attempt whose bound authority is `fixture` (from its pinned route allowlist, whatever its labels show) and
+whose conversation id is a lower-case UUID: `{"conversationId": <id>, "canvasPath": "/conversations/<id>",
+"authority": "fixture"}`, the path of that conversation in the standalone Agent Canvas application. For any other
+attempt, `{"refused": "SESSION_ACCESS_UNAVAILABLE", "reason": ...}`: a live-bound attempt's session access (the
+dispatcher-issued runtime credential) is U-03.1's; an unbound attempt has none; an attempt without a conversation id
+has none. No origin is in the answer: the Owner host joins the id to its own constant Canvas origin, after checking
+the id again.
 
 ### The state table
 

@@ -315,6 +315,11 @@
        "eventId": 3
       },
       "detail": "the attempt is bound fixture and dispatch/attempt/0ac9cc13-dd79-5522-a87e-e5802c5ee369/turn lacks the label",
+      "sessionDetail": {
+       "conversationId": "bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "canvasPath": "/conversations/bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "authority": "fixture"
+      },
       "result": {
        "reported": null,
        "verified": null,

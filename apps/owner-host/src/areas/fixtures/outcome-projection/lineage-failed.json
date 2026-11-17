@@ -225,6 +225,11 @@
        "eventId": 3
       },
       "detail": "the create is recorded answered; no later record",
+      "sessionDetail": {
+       "conversationId": "bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "canvasPath": "/conversations/bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "authority": "fixture"
+      },
       "result": {
        "reported": null,
        "verified": null,

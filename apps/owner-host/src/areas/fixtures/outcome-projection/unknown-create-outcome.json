@@ -312,6 +312,11 @@
        "eventId": 3
       },
       "detail": "the create's answer was lost",
+      "sessionDetail": {
+       "conversationId": "bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "canvasPath": "/conversations/bea5f866-3f2d-589f-a557-4c0941c0da7e",
+       "authority": "fixture"
+      },
       "result": {
        "reported": null,
        "verified": null,

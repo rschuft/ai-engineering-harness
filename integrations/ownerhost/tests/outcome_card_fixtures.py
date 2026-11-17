@@ -278,7 +278,9 @@ def schema() -> dict:
     return {'format': P.FORMAT, 'statuses': list(P.STATUSES), 'codes': list(P.CODES), 'unprovenSuffix': P.UNPROVEN,
             'noAttemptCodes': ['NO_ATTEMPT', 'NO_ATTEMPT' + P.UNPROVEN, 'STORE_UNAVAILABLE'],
             'fixtureAuthority': P.FIXTURE_AUTHORITY, 'coverage': dict(P.COVERAGE),
-            'refusals': {code: P.STATUS[code] for code in P.STATUS}}
+            'refusals': {code: P.STATUS[code] for code in P.STATUS},
+            'sessionDetail': {'refused': P.SESSION_ACCESS_UNAVAILABLE, 'canvasPath': P.CANVAS_CONVERSATION_PATH,
+                              'authority': P.FIXTURE}}
 
 
 def document(name: str, answers: list[dict]) -> dict:
@@ -328,7 +330,7 @@ def decisive(answer: dict) -> dict:
                       a['authority']['code'], a['authority'].get('reason'), a['authority'].get('detail'),
                       a.get('restoredRow'), len(a.get('disclosed') or ()),
                       a['evidence'] is not None, a['result']['verified'] is not None,
-                      a['result']['reported'] is not None, bases(a)) for a in body['attempts']],
+                      a['result']['reported'] is not None, bases(a), a['sessionDetail']) for a in body['attempts']],
         'failures': sorted((f['role'], f['outcome'], f['code']) for f in body['failures']),
         'uncertainties': sorted((u['reason'], u['code']) for u in body['lineageUncertainties']),
         'coverage': body['coverage'],

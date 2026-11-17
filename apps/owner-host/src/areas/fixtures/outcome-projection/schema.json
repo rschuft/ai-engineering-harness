@@ -59,5 +59,10 @@
   "PROJECTION_CONFIG_INVALID": 503,
   "PROJECTION_STORE_UNCONFIGURED": 503,
   "PROJECTION_BACKLOG_UNAVAILABLE": 503
+ },
+ "sessionDetail": {
+  "refused": "SESSION_ACCESS_UNAVAILABLE",
+  "canvasPath": "/conversations/",
+  "authority": "fixture"
  }
 }

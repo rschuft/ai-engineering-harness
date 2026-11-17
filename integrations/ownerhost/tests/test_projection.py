@@ -925,6 +925,51 @@ class Restore(Base):
             self.assertEqual((task['execution']['status'], task['execution']['code']), ('unknown', 'STORE_UNAVAILABLE'))
 
 
+class SessionDetail(Base):
+    """U-01.2's session-detail source action (the I1 design R15): data only, never a call. A fixture-bound attempt with
+    a conversation id gives that conversation's Canvas path; any other authority, or no conversation id, the stable
+    refusal with its reason."""
+
+    def test_a_fixture_bound_attempt_gives_its_conversation_s_canvas_path(self):
+        result = self.fixture_attempt()
+        view = self.view()
+        self.assertEqual(view['sessionDetail'], {'conversationId': result.conversation_id,
+                                                 'canvasPath': f'/conversations/{result.conversation_id}',
+                                                 'authority': 'fixture'})
+        self.assertRegex(result.conversation_id, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+    def test_a_live_bound_attempt_is_refused(self):
+        self.dispatched(live=True)
+        view = self.view()
+        self.assertEqual(view['authority']['bound'], 'live')
+        self.assertEqual(view['sessionDetail']['refused'], 'SESSION_ACCESS_UNAVAILABLE')
+        self.assertIn('U-03.1', view['sessionDetail']['reason'])
+        self.assertNotIn('conversationId', view['sessionDetail'])
+        self.assertNotIn('canvasPath', view['sessionDetail'])
+
+    def test_an_unbound_attempt_is_refused(self):
+        routes = self.profiles / TA.FIX / 'agent-server' / 'routes.json'
+        routes.unlink()
+        with self.assertRaises(di.DispatchRefused):
+            self.dispatch(TA.Seam(self.core, 'fixture'), TA.provider('fixture'), manifest=self.fixture_manifest)
+        detail = self.view()['sessionDetail']
+        self.assertEqual(set(detail), {'refused', 'reason'})
+        self.assertEqual(detail['refused'], 'SESSION_ACCESS_UNAVAILABLE')
+        self.assertIn('not known', detail['reason'])
+
+    def test_the_rule_without_a_store(self):
+        cid = '055b27f3-903e-5eb9-8758-197c1029ade7'
+        self.assertEqual(P.session_detail(cid, {'bound': 'fixture', 'shown': 'unknown'})['canvasPath'],
+                         f'/conversations/{cid}')
+        for conversation in (None, '', cid.upper(), cid + '/x', '../threads', 'http://203.0.113.9/', 42):
+            with self.subTest(conversation=conversation):
+                self.assertEqual(P.session_detail(conversation, {'bound': 'fixture'}),
+                                 {'refused': 'SESSION_ACCESS_UNAVAILABLE', 'reason': 'the attempt has no conversation id'})
+        for bound in ('live', None, 'other'):
+            with self.subTest(bound=bound):
+                self.assertEqual(set(P.session_detail(cid, {'bound': bound})), {'refused', 'reason'})
+
+
 class Latest(Base):
     """The review's ruling 3: a task's latest attempt is the store's last reservation, not its highest ordinal
     (ordinals restart per work item, design revision and stage)."""
