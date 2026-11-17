@@ -5780,6 +5780,67 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   - **Detected, not a defect of this leaf.** Under a very long TEMP, `tools/guest.py` `verify_pulled_bundle` fails, because git does not find a repository whose path is 252 characters or more (measured on git 2.52.0.windows.1). This was observed on P-03.1's row in 2026-11. The production guest state root is far below that, and the full run passes under an ordinary TEMP.
   - **Not verified:** a capture in the real project repository with the Owner's real identity, from a real browser, against the live Integration process (U-06.1); the OpenSpec CLI validating a captured change; Linux and macOS.
 
+- <a id="e-01-7-verdict-2026-11-16"></a>**2026-11-16: E-01.7 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline. Judged against TASK-9's eleven criteria, the I1 design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): slice 9, R11, R14, PB-1, PB-2, PB-4, PB-6) and decision 0027.
+  - **Commits, all pushed by this entry:**
+    - the slice: `e09c639` (records first: G3, the matrix row `nm-dispatcher-agentfixture`, the asset `api-agentfixture`), `b53741c`, `d71204f`;
+    - the review's fixes: `4295ef3`, `ed9b7d4`, `778a65e`; the second round `8545c51`, `de2bc03`, `16b2623`, `358600e`.
+    - `4295ef3`'s title names only the census port, but by a staging slip it also holds most of the fixture's review fixes (`ed9b7d4`'s message says so). History is not rewritten.
+  - **The fixture.** `integrations/agentfixture/`: a Starlette listener on 127.0.0.1 only (port 13320), with two faces over the deterministic core.
+    - **The dispatcher face** serves the routes the dispatcher calls.
+    - **The UI face** serves the minimal catalog Agent Canvas's conversation view needs: `GET /server_info`, `GET /api/conversations/{id}`, events search and the session socket. It is read-only.
+    - Everything else is the labelled 501. Every answer carries the label `X-AIEH-Fixture`, and its lineage `answering_authority` is `fixture`.
+  - **Gates:**
+    - **G4 PASS.** `openapi.json` was downloaded and verified against the lock and `SHA256SUMS` before reading. It was not committed (decision 0005). PB-1's premise holds: the document covers 148 of the inventory's 193 routes, and none of the dispatcher's runtime, proxy or socket routes.
+    - **G3:** the provenance table was written before any route.
+    - **G7 PASS:** the built RESULT equals the real RESULT script run through Git Bash on the same inputs (base, tree, commit and bundle). The identity is an input.
+    - **G10 PASS.**
+  - **The engineering manager's rulings for the slice** (decision 0018 point 3.1):
+    1. **"running"** is on the UI face only, source-derived and marked. The dispatcher face answers the observed `finished` at the first status read after the message, because no recorded run observed a dispatcher-face "running". The README states the divergence.
+    2. **Validation:** dispatcher-face answers are validated against the pinned wheel's response models. UI-face answers are validated against the locked document, plus the source model for events search.
+    3. **Scenarios:** failed is S-01.3.1's recorded 401. Unknown is the create's answer withheld, then every lookup withheld. There is also a lost create acknowledgement, and pending (idle before the message).
+    4. **RESULT's stdout** is the harness's own RESULT script run over D1's base and recorded changes, by decision 0024 point 4.4's rule (PB-4). `delivered` is a transport key and E-01.8's seam: it is read by `parse_result` and never served, and its row says so.
+    5. **The UI catalog** is minimal, as above.
+    6. **The fixture's tests** are in the full run, with no new budget gate.
+    7. **Before any answer:** a create body is validated before any 201, and the listener refuses the one request that would need the source-derived dispatcher entry (`message-event`).
+  - **Criteria** (tests in `integrations/agentfixture/tests/` unless named):
+    - #1 `test_served.Faces`;
+    - #2 `test_catalog.Routes`;
+    - #3 `test_catalog.Answers` (including RESULT against `BashOutput`) and `test_result.OverTheListener`;
+    - #4 `test_catalog.Answers`;
+    - #5 `test_catalog.Table`, `Rules`;
+    - #6 `Rules`;
+    - #7 `integrations/dispatch/tests/test_read_binding.py` `ReadBinding`, `ServedReadBinding`, the transport key read from its row;
+    - #8 `test_catalog.Rules`, `test_served.SourceDerived`, `Cors`;
+    - #9 `SourceDerived`, and the restart matrix's J, J′ and K refused over the listener;
+    - #10 `test_served.Pending`, `LostAcknowledgement`, `Unknown`, `Failed`, `test_scenarios.py` (production dispatch, `reconcile_creates` and `recover` over the listener: unknown is held `OUTCOME_UNKNOWN`, the lost acknowledgement is confirmed with one create, pending is `TURN_UNRECONCILED` and is not resent);
+    - #11 `test_process.Process` (one TCP listener on 127.0.0.1, read from the kernel's tables by its pid; the outbound guard shown armed in the served process), `test_process.Transport` (an answer whose label is missing, or whose authority is not `fixture`, is refused), `test_served.Authority`.
+    - **#11's records clause.** That every record a fixture attempt causes carries authority `fixture`, and can never be recorded as live, is written by the dispatcher's writers under R11. It is proved with E-01.8's criterion 1. E-01.7 proves its share: the labelled answers, the transport's refusal of any other authority, and the lineage authority. No production dispatcher module and no `apps/` code changed in `9f704b7..358600e` (an empty `git diff --stat` over `integrations/dispatch/*.py` and `apps/`), and neither has a fixture branch; Agent Canvas actually running against the UI face is gate G5, at U-01.2.
+  - **Review.** One fresh read-only review (dispatch 25) found no blocker, 8 should-fix findings and 7 notes. All were fixed, or accepted with a reason, in `4295ef3`, `ed9b7d4` and `778a65e`. Among them:
+    - CORS removed from the dispatcher face, with the UI face limited to GET from configured loopback origins and every preflight labelled;
+    - the census port N6;
+    - the guard and authority mutants that had survived;
+    - the scenario outcomes, which corrected a README claim (`OUTCOME_UNKNOWN`, not `LOOKUP_INDETERMINATE`).
+
+    The same reviewer re-checked the fixes. It closed every finding, and found one new should-fix (a parseable deeply nested body gave an unlabelled 500) and notes, fixed in `8545c51` (bodies nested deeper than 64 levels are the labelled 400; a dispatcher-face GET preflight and SEED's timeout tested; UI origins limited to loopback) and `358600e`. `358600e` corrects the engineering manager's own ruling, which had named `[::1]`: the pinned CORS middleware admits only `localhost` and `127.0.0.1`, so `[::1]` is refused to keep `ui-preflight` derivable (criterion 8). `de2bc03` re-proposed the agentfixture suite's counters without the matching reference-profile rows, and `test_check_test_budget` failed until `16b2623` re-measured them by the `1e9de10` convention.
+  - **Validation:**
+    - mutants: 15 at build, 17 at the first fixes, 7 at the second plus one for `358600e`, all killed;
+    - the full `tools/run_tests.py` in a clean clone, without the document: 16 suites passed at `d71204f`, `778a65e` and `16b2623`;
+    - with the locked document: the agentfixture suite (74 tests; the engineering manager re-ran it at `358600e`: OK) and `test_read_binding.py` (14 tests), OK;
+    - `test_check_test_budget`, `test_test_profile`, `verify_seed`, the gate, `check_network_matrix` and `check_security_inventory` PASS.
+  - **Delegated decisions:**
+    - the rulings above;
+    - `ui-server-info`'s status stays source-derived, because F-04.1c §3 records that route's body but no status;
+    - `ui-preflight` is source-derived from the pinned CORS middleware;
+    - CORS headers are the listener's own policy;
+    - the `malformed` 400 is answered before the catalog checks;
+    - the guard probe is self-attested (the guard's absence is caught);
+    - the authorized one-line `tools/guest.py` census edit.
+  - **Recorded, not defects of this leaf:**
+    - The document-dependent tests (criteria 2's G4, 3, ruling 7, the lost-acknowledgement and unknown scenarios, and 7 over the wire) skip with their reason when `AIEH_LOCKED_OPENAPI` is absent. Decision 0005 keeps the document out of the repository. This verdict rests on runs with it present.
+    - The session socket sends sync and replay at connect, and no live frames after. U-01.2's G5 must account for it.
+    - **U-06.1 under ruling 1:** the outcome card's "running" lasts only for the dispatcher's RESULT and intake, and the fixture gives no deterministic execution window for item (7)'s close and reopen. This is carried to E-01.8 and U-06.1 as an engineering question before planning.
+  - **Not verified:** Agent Canvas against the UI face (G5, U-01.2); the delivery seam and the labels on dispatcher records (E-01.8); every source-derived field live (U-03.2; E-01.6 for `message-event`); Linux and macOS.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
