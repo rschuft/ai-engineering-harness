@@ -31,15 +31,15 @@
   {
    "name": "tools",
    "start_dir": "tools/tests",
-   "tests": 1310,
+   "tests": 1684,
    "outcomes": {
-    "ok": 1304,
-    "skip": 6
+    "ok": 1677,
+    "skip": 7
    },
    "successful": true,
-   "launches": 311,
-   "mkdtemp": 560,
-   "sockets": 47,
+   "launches": 310,
+   "mkdtemp": 949,
+   "sockets": 82,
    "chdir": 0,
    "unattributed": {
     "launches": 0,
@@ -49,12 +49,12 @@
    },
    "wall": {
     "runs": [
-     75.918,
-     76.076,
-     76.511
+     113.066,
+     112.658,
+     112.602
     ],
-    "median": 76.076,
-    "discovery_median": 1.069
+    "median": 112.658,
+    "discovery_median": 1.834
    }
   },
   {
@@ -317,14 +317,15 @@
   {
    "name": "dispatch",
    "start_dir": "integrations/dispatch/tests",
-   "tests": 153,
+   "tests": 887,
    "outcomes": {
-    "ok": 153
+    "ok": 883,
+    "skip": 4
    },
    "successful": true,
-   "launches": 15,
-   "mkdtemp": 126,
-   "sockets": 2,
+   "launches": 419,
+   "mkdtemp": 1246,
+   "sockets": 400,
    "chdir": 0,
    "unattributed": {
     "launches": 0,
@@ -334,12 +335,12 @@
    },
    "wall": {
     "runs": [
-     8.025,
-     8.178,
-     8.115
+     219.402,
+     219.054,
+     218.847
     ],
-    "median": 8.115,
-    "discovery_median": 0.684
+    "median": 219.054,
+    "discovery_median": 1.403
    }
   },
   {
@@ -457,15 +458,15 @@
   {
    "name": "agentfixture",
    "start_dir": "integrations/agentfixture/tests",
-   "tests": 74,
+   "tests": 89,
    "outcomes": {
-    "ok": 65,
-    "skip": 9
+    "ok": 78,
+    "skip": 11
    },
    "successful": true,
-   "launches": 27,
-   "mkdtemp": 33,
-   "sockets": 398,
+   "launches": 55,
+   "mkdtemp": 47,
+   "sockets": 403,
    "chdir": 0,
    "unattributed": {
     "launches": 0,
@@ -475,12 +476,12 @@
    },
    "wall": {
     "runs": [
-     19.643,
-     19.696,
-     19.762
+     27.763,
+     27.134,
+     27.336
     ],
-    "median": 19.696,
-    "discovery_median": 1.272
+    "median": 27.336,
+    "discovery_median": 1.369
    }
   }
  ],
@@ -1002,17 +1003,589 @@
    "wall": 0.022
   },
   {
+   "id": "test_acp_qualification.DestinationRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.017
+  },
+  {
+   "id": "test_acp_qualification.FieldRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.039
+  },
+  {
+   "id": "test_acp_qualification.FixtureRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.018
+  },
+  {
+   "id": "test_acp_qualification.PinRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.014
+  },
+  {
+   "id": "test_acp_qualification.PositiveControl",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.006
+  },
+  {
+   "id": "test_acp_qualification.RealStageRefusal",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_acp_qualification.Refusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_acp_qualification.SecretRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.048
+  },
+  {
+   "id": "test_agent_assignment.AcceptsThePinnedAssignment",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 4,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.395
+  },
+  {
+   "id": "test_agent_assignment.NoSkillIsMaterialized",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.213
+  },
+  {
+   "id": "test_agent_assignment.RefusesADifferentDigest",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.104
+  },
+  {
+   "id": "test_agent_assignment.RefusesAnUnpinnedAssignment",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 8,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.147
+  },
+  {
+   "id": "test_agent_assignment.RefusesSkillsAndInvalidAssignments",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.184
+  },
+  {
+   "id": "test_agent_assignment.TheAdmittedTemplate",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.102
+  },
+  {
+   "id": "test_agent_assignment.TheCheckedInAssignment",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_agent_assignment.TheGitCatalogSource",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.162
+  },
+  {
+   "id": "test_agentfixture_core.ByState",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.006
+  },
+  {
+   "id": "test_agentfixture_core.Citations",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_agentfixture_core.ContainerInspect",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.004
+  },
+  {
+   "id": "test_agentfixture_core.Recording",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.022
+  },
+  {
+   "id": "test_agentfixture_core.Rules",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.006
+  },
+  {
+   "id": "test_agentfixture_core.Seed",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 2,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.139
+  },
+  {
+   "id": "test_agentfixture_core.TableBinding",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_attempt_end.AuthenticationRefusal",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.492
+  },
+  {
+   "id": "test_attempt_end.CauseCommand",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.145
+  },
+  {
+   "id": "test_attempt_end.Classification",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.177
+  },
+  {
+   "id": "test_attempt_end.CleanEnd",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 8,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.451
+  },
+  {
+   "id": "test_attempt_end.ClientQuery",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_attempt_end.EndRefusals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 12,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.644
+  },
+  {
+   "id": "test_attempt_end.NeverFromAStatusAlone",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.487
+  },
+  {
+   "id": "test_attempt_end.NewAttempt",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 11,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.647
+  },
+  {
+   "id": "test_attempt_end.RepeatSafety",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 8,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.413
+  },
+  {
+   "id": "test_attempt_end.ReviewFindings",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 21,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.902
+  },
+  {
+   "id": "test_attempt_end.TokenNeverAgain",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.217
+  },
+  {
+   "id": "test_attempt_end.UnclassifiedEndCause",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 11,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.643
+  },
+  {
+   "id": "test_attempt_run.Base",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 19,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.726
+  },
+  {
+   "id": "test_attempt_run.EndExclusion",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.311
+  },
+  {
+   "id": "test_attempt_run.Goldens",
+   "suite": "dispatch",
+   "category": "contract",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.176
+  },
+  {
+   "id": "test_attempt_run.Intake",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 19,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.719
+  },
+  {
+   "id": "test_attempt_run.Message",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.256
+  },
+  {
+   "id": "test_attempt_run.Oracle",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 17,
+   "discovered": 17,
+   "launches": 135,
+   "mkdtemp": 56,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 15.805
+  },
+  {
+   "id": "test_attempt_run.Policy",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_attempt_run.Run",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 21,
+   "discovered": 21,
+   "launches": 63,
+   "mkdtemp": 93,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 11.478
+  },
+  {
+   "id": "test_attempt_run.Turn",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 21,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.783
+  },
+  {
    "id": "test_attempt_tokens.DeliveryTests",
    "suite": "dispatch",
    "category": "integration",
    "source": "module",
    "tests": 10,
    "discovered": 10,
-   "launches": 4,
-   "mkdtemp": 12,
+   "launches": 0,
+   "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.719
+   "wall": 0.466
   },
   {
    "id": "test_attempt_tokens.LiveCustodyDriverTests",
@@ -1025,7 +1598,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.398
+   "wall": 0.463
   },
   {
    "id": "test_attempt_tokens.ReachableNamesTests",
@@ -1038,7 +1611,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.039
+   "wall": 0.22
   },
   {
    "id": "test_attempt_tokens.StageMappingTests",
@@ -1051,7 +1624,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.003
+   "wall": 0.004
   },
   {
    "id": "test_attempt_tokens.StandingCredentialTests",
@@ -1064,7 +1637,254 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.297
+   "wall": 0.371
+  },
+  {
+   "id": "test_authority.AdmissionRefusal",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.163
+  },
+  {
+   "id": "test_authority.Census",
+   "suite": "dispatch",
+   "category": "contract",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.254
+  },
+  {
+   "id": "test_authority.Client",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.004
+  },
+  {
+   "id": "test_authority.Dispatch",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 13,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.401
+  },
+  {
+   "id": "test_authority.Identity",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.321
+  },
+  {
+   "id": "test_authority.Labels",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.363
+  },
+  {
+   "id": "test_authority.Observers",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 8,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.358
+  },
+  {
+   "id": "test_authority.Publication",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.195
+  },
+  {
+   "id": "test_authority.Recovery",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.304
+  },
+  {
+   "id": "test_authority.Vocabulary",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_conversation_containment.Collection",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.004
+  },
+  {
+   "id": "test_conversation_containment.CommandLine",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.011
+  },
+  {
+   "id": "test_conversation_containment.ContainerVerdict",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 17,
+   "discovered": 17,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.007
+  },
+  {
+   "id": "test_conversation_containment.EdgeCases",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 16,
+   "discovered": 16,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_conversation_containment.HostVerdict",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.008
+  },
+  {
+   "id": "test_conversation_containment.NetworkVerdict",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_conversation_containment.Parsers",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_conversation_containment.SetsVerdict",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_conversation_containment.Shapes",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
   },
   {
    "id": "test_conversation_create.CreateReceiptTests",
@@ -1090,7 +1910,20 @@
    "mkdtemp": 20,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.961
+   "wall": 1.285
+  },
+  {
+   "id": "test_conversation_create.ProxyTailTests",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.86
   },
   {
    "id": "test_conversation_create.RouteAllowlistTests",
@@ -1103,7 +1936,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.096
+   "wall": 0.092
   },
   {
    "id": "test_conversation_create.ServerPreconditionTests",
@@ -1119,6 +1952,318 @@
    "wall": 0.001
   },
   {
+   "id": "test_d1_candidate.TheD1Candidate",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.008
+  },
+  {
+   "id": "test_d1_checked_in_template.AdmitsTheApprovedBlock",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.232
+  },
+  {
+   "id": "test_d1_checked_in_template.RefusesADriftedTemplate",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.245
+  },
+  {
+   "id": "test_d1_checked_in_template.RefusesAnyOtherBlock",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.225
+  },
+  {
+   "id": "test_d1_checked_in_template.RefusesTheF042Fixture",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.179
+  },
+  {
+   "id": "test_d1_checked_in_template.ThePin",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_d1_checked_in_template.TheProbeDerivation",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.016
+  },
+  {
+   "id": "test_d1_stage_admission.AcceptsTheApprovedBlock",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 6,
+   "chdir": 0,
+   "wall": 0.367
+  },
+  {
+   "id": "test_d1_stage_admission.DeclarationRefusals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.3
+  },
+  {
+   "id": "test_d1_stage_admission.RefusesAnyOtherBlock",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 6,
+   "chdir": 0,
+   "wall": 0.479
+  },
+  {
+   "id": "test_d1_stage_admission.RefusesTheF042Fixture",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.339
+  },
+  {
+   "id": "test_d1_stage_admission.RefusesTheQualificationFixture",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.268
+  },
+  {
+   "id": "test_d1_stage_admission.SendCreateRechecks",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.254
+  },
+  {
+   "id": "test_d1_stage_admission.TheApprovedTemplate",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_d1_stage_secrets.Accepts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 5,
+   "chdir": 0,
+   "wall": 0.259
+  },
+  {
+   "id": "test_d1_stage_secrets.Custody",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 15,
+   "sockets": 21,
+   "chdir": 0,
+   "wall": 0.854
+  },
+  {
+   "id": "test_d1_stage_secrets.GrantJournal",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 0,
+   "mkdtemp": 21,
+   "sockets": 86,
+   "chdir": 0,
+   "wall": 1.576
+  },
+  {
+   "id": "test_d1_stage_secrets.HeldSelection",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 14,
+   "sockets": 45,
+   "chdir": 0,
+   "wall": 1.087
+  },
+  {
+   "id": "test_d1_stage_secrets.Issuance",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 14,
+   "chdir": 0,
+   "wall": 0.49
+  },
+  {
+   "id": "test_d1_stage_secrets.NoProviderCredential",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 5,
+   "chdir": 0,
+   "wall": 0.22
+  },
+  {
+   "id": "test_d1_stage_secrets.Refusals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 0,
+   "mkdtemp": 17,
+   "sockets": 22,
+   "chdir": 0,
+   "wall": 1.174
+  },
+  {
+   "id": "test_d1_stage_secrets.Revocation",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 23,
+   "sockets": 68,
+   "chdir": 0,
+   "wall": 1.661
+  },
+  {
+   "id": "test_d1_stage_secrets.RevocationReceipts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 12,
+   "chdir": 0,
+   "wall": 0.679
+  },
+  {
+   "id": "test_d1_stage_secrets.SharedCheck",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.265
+  },
+  {
    "id": "test_dispatch_admission.PositiveControlTests",
    "suite": "dispatch",
    "category": "integration",
@@ -1129,7 +2274,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.308
+   "wall": 0.341
   },
   {
    "id": "test_dispatch_admission.ProfilePolicyDenialTests",
@@ -1142,7 +2287,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.941
+   "wall": 1.096
   },
   {
    "id": "test_dispatch_admission.TamperDenialTests",
@@ -1155,7 +2300,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.513
+   "wall": 0.597
   },
   {
    "id": "test_dispatch_admission.WorkspaceDenialTests",
@@ -1168,7 +2313,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.763
+   "wall": 0.92
   },
   {
    "id": "test_dispatch_inputs.AcceptanceRefusalTests",
@@ -1181,7 +2326,7 @@
    "mkdtemp": 24,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.392
+   "wall": 0.704
   },
   {
    "id": "test_dispatch_inputs.CliTests",
@@ -1194,7 +2339,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.651
+   "wall": 0.744
   },
   {
    "id": "test_dispatch_inputs.DeterminismTests",
@@ -1207,7 +2352,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.14
+   "wall": 0.146
   },
   {
    "id": "test_dispatch_inputs.ManifestCheckerTests",
@@ -1227,13 +2372,13 @@
    "suite": "dispatch",
    "category": "unit",
    "source": "class",
-   "tests": 4,
-   "discovered": 4,
+   "tests": 8,
+   "discovered": 8,
    "launches": 0,
-   "mkdtemp": 4,
+   "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.01
+   "wall": 0.019
   },
   {
    "id": "test_dispatch_inputs.SuccessTests",
@@ -1246,7 +2391,137 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.16
+   "wall": 0.183
+  },
+  {
+   "id": "test_dispatcher_lock.Busy",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 3,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.5
+  },
+  {
+   "id": "test_dispatcher_lock.DynamicCensus",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 1,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 32.444
+  },
+  {
+   "id": "test_dispatcher_lock.FailClosed",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_dispatcher_lock.Interrupted",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.33
+  },
+  {
+   "id": "test_dispatcher_lock.KilledHolder",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 1,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.222
+  },
+  {
+   "id": "test_dispatcher_lock.LockFile",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.273
+  },
+  {
+   "id": "test_dispatcher_lock.OperatingSystemFacts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 2,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.111
+  },
+  {
+   "id": "test_dispatcher_lock.Primitive",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.005
+  },
+  {
+   "id": "test_dispatcher_lock.StaticCensus",
+   "suite": "dispatch",
+   "category": "contract",
+   "source": "class",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.41
+  },
+  {
+   "id": "test_dispatcher_lock.Windows",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.116
   },
   {
    "id": "test_guest_transport.CustodyTests",
@@ -1272,7 +2547,20 @@
    "mkdtemp": 2,
    "sockets": 1,
    "chdir": 0,
-   "wall": 0.334
+   "wall": 0.341
+  },
+  {
+   "id": "test_guest_transport.ExchangeDeliveryTests",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 18,
+   "mkdtemp": 10,
+   "sockets": 1,
+   "chdir": 0,
+   "wall": 1.427
   },
   {
    "id": "test_guest_transport.ProbePairTests",
@@ -1285,20 +2573,930 @@
    "mkdtemp": 1,
    "sockets": 1,
    "chdir": 0,
-   "wall": 0.407
+   "wall": 0.428
+  },
+  {
+   "id": "test_guest_transport.SealedSecretsTests",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.005
   },
   {
    "id": "test_guest_transport.SeamTests",
    "suite": "dispatch",
    "category": "unit",
    "source": "class",
-   "tests": 6,
-   "discovered": 6,
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_launch_gate.Limits",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_launch_gate.NotLaunched",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 15,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.272
+  },
+  {
+   "id": "test_launch_gate.Passes",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.31
+  },
+  {
+   "id": "test_launch_gate.Wired",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 1,
+   "mkdtemp": 16,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.814
+  },
+  {
+   "id": "test_live_d1_run.Dispatch",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 10,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.437
+  },
+  {
+   "id": "test_live_d1_run.Providers",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
    "wall": 0.0
+  },
+  {
+   "id": "test_live_d1_run.Regenerate",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 4,
+   "chdir": 0,
+   "wall": 0.915
+  },
+  {
+   "id": "test_live_d1_run.Stops",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.206
+  },
+  {
+   "id": "test_live_resolution.LiveResolution",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.344
+  },
+  {
+   "id": "test_manifest_promotion.DesignEntryWithoutAnAcceptance",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.065
+  },
+  {
+   "id": "test_manifest_promotion.DigestOtherThanTheDecidedOne",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.068
+  },
+  {
+   "id": "test_manifest_promotion.EnforcementCannotBeSkipped",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.152
+  },
+  {
+   "id": "test_manifest_promotion.EntryWithoutARecordedDecision",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.069
+  },
+  {
+   "id": "test_manifest_promotion.GuardRecheck",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.03
+  },
+  {
+   "id": "test_manifest_promotion.LoadOrder",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.077
+  },
+  {
+   "id": "test_manifest_promotion.NeverAnOwnerDecision",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.053
+  },
+  {
+   "id": "test_manifest_promotion.PromotedManifestLoads",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.054
+  },
+  {
+   "id": "test_manifest_promotion.ReplayedDecision",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.113
+  },
+  {
+   "id": "test_native_d1_stage.Accepts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.162
+  },
+  {
+   "id": "test_native_d1_stage.Custody",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.285
+  },
+  {
+   "id": "test_native_d1_stage.Mixing",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 0.227
+  },
+  {
+   "id": "test_native_d1_stage.NoOtherCredential",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.133
+  },
+  {
+   "id": "test_native_d1_stage.OtherStages",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.165
+  },
+  {
+   "id": "test_native_d1_stage.ReadOrder",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.268
+  },
+  {
+   "id": "test_native_d1_stage.Refusals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.884
+  },
+  {
+   "id": "test_native_d1_stage.SharedCheck",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.46
+  },
+  {
+   "id": "test_native_qualification.OwnRefusals",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.037
+  },
+  {
+   "id": "test_native_qualification.Pin",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_native_qualification.PositiveControl",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_native_qualification.RealStageRefusal",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.004
+  },
+  {
+   "id": "test_native_qualification.ReviewProbes",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.019
+  },
+  {
+   "id": "test_native_qualification.SharedCheck",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.021
+  },
+  {
+   "id": "test_native_token.Read",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_native_token.Shape",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_native_token_search.Bundle",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.199
+  },
+  {
+   "id": "test_native_token_search.CommandLine",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.316
+  },
+  {
+   "id": "test_native_token_search.Verdicts",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.877
+  },
+  {
+   "id": "test_non_overlap.BrokeredOrdinals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 7,
+   "chdir": 0,
+   "wall": 0.251
+  },
+  {
+   "id": "test_non_overlap.GrantJournal",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.038
+  },
+  {
+   "id": "test_non_overlap.NativeOrdinals",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 12,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.368
+  },
+  {
+   "id": "test_non_overlap.Readme",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.005
+  },
+  {
+   "id": "test_read_binding.Judge",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.007
+  },
+  {
+   "id": "test_read_binding.ReadBinding",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 32,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 60.857
+  },
+  {
+   "id": "test_read_binding.ServedReadBinding",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_reconcile.InconclusiveLookup",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.312
+  },
+  {
+   "id": "test_reconcile.LostAcknowledgement",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.225
+  },
+  {
+   "id": "test_reconcile.NamespaceRule",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.193
+  },
+  {
+   "id": "test_reconcile.VerdictTable",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_restart_matrix.Rows",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 16,
+   "discovered": 16,
+   "launches": 15,
+   "mkdtemp": 54,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 3.365
+  },
+  {
+   "id": "test_restart_matrix.RuleBinding",
+   "suite": "dispatch",
+   "category": "unit",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_restart_recovery.Busy",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 1,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.176
+  },
+  {
+   "id": "test_restart_recovery.Conflicts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.226
+  },
+  {
+   "id": "test_restart_recovery.Convergence",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 42,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.557
+  },
+  {
+   "id": "test_restart_recovery.Ended",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 12,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.506
+  },
+  {
+   "id": "test_restart_recovery.Holds",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 15,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.579
+  },
+  {
+   "id": "test_restart_recovery.Namespace",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 15,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.935
+  },
+  {
+   "id": "test_restart_recovery.NoSend",
+   "suite": "dispatch",
+   "category": "contract",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.007
+  },
+  {
+   "id": "test_restart_recovery.Reentrant",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.223
+  },
+  {
+   "id": "test_restart_recovery.RefusedClients",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.336
+  },
+  {
+   "id": "test_restart_recovery.Table",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 0,
+   "mkdtemp": 30,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.145
+  },
+  {
+   "id": "test_result_path.FirstRun",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 16,
+   "sockets": 15,
+   "chdir": 0,
+   "wall": 3.019
+  },
+  {
+   "id": "test_result_path.Journal",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 16,
+   "sockets": 5,
+   "chdir": 0,
+   "wall": 1.517
+  },
+  {
+   "id": "test_result_path.NoMerge",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 10,
+   "sockets": 5,
+   "chdir": 0,
+   "wall": 1.143
+  },
+  {
+   "id": "test_result_path.Report",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 19,
+   "sockets": 18,
+   "chdir": 0,
+   "wall": 3.639
+  },
+  {
+   "id": "test_result_path.Retry",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 40,
+   "sockets": 31,
+   "chdir": 0,
+   "wall": 7.71
+  },
+  {
+   "id": "test_result_path.Search",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 22,
+   "sockets": 7,
+   "chdir": 0,
+   "wall": 3.27
+  },
+  {
+   "id": "test_result_receipts.DeliveryReceipt",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 39,
+   "mkdtemp": 18,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 5.609
+  },
+  {
+   "id": "test_result_receipts.InterruptedReceipt",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 22,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 2.9
+  },
+  {
+   "id": "test_step0_rehearsal.Rehearsal",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 31,
+   "mkdtemp": 16,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 6.323
   },
   {
    "id": "test_work_source_operation.ReadIsOneOperation",
@@ -1311,7 +3509,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.069
+   "wall": 0.059
   },
   {
    "id": "test_effects_store.BackupRestoreTests",
@@ -4746,6 +6944,97 @@
    "wall": 0.858
   },
   {
+   "id": "test_acp_qualification_driver.CommandLine",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.024
+  },
+  {
+   "id": "test_acp_qualification_driver.Delegation",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_acp_qualification_driver.DriverRun",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 45,
+   "discovered": 45,
+   "launches": 0,
+   "mkdtemp": 153,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 15.22
+  },
+  {
+   "id": "test_acp_qualification_driver.HostVantage",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_acp_qualification_driver.InnerConversationsScript",
+   "suite": "tools",
+   "category": "integration",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 29,
+   "chdir": 0,
+   "wall": 0.094
+  },
+  {
+   "id": "test_acp_qualification_driver.RealKeyReader",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_attempt_token_contract.AttemptTokenContract",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.004
+  },
+  {
    "id": "test_check_ci_policy.CommandLine",
    "suite": "tools",
    "category": "unit",
@@ -4756,7 +7045,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.042
+   "wall": 0.053
   },
   {
    "id": "test_check_ci_policy.CommittedPolicy",
@@ -4769,20 +7058,20 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.17
+   "wall": 0.184
   },
   {
    "id": "test_check_ci_policy.FactsAndRecords",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 9,
-   "discovered": 9,
+   "tests": 10,
+   "discovered": 10,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.214
+   "wall": 0.612
   },
   {
    "id": "test_check_ci_policy.Gitea",
@@ -4795,7 +7084,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.071
+   "wall": 0.034
   },
   {
    "id": "test_check_ci_policy.Guards",
@@ -4808,7 +7097,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.07
+   "wall": 0.035
   },
   {
    "id": "test_check_ci_policy.Lanes",
@@ -4821,23 +7110,10 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.037
+   "wall": 0.018
   },
   {
    "id": "test_check_ci_policy.ProxyRegistrationActs",
-   "suite": "tools",
-   "category": "unit",
-   "source": "module",
-   "tests": 5,
-   "discovered": 5,
-   "launches": 0,
-   "mkdtemp": 0,
-   "sockets": 0,
-   "chdir": 0,
-   "wall": 0.044
-  },
-  {
-   "id": "test_check_ci_policy.RunnerConfig",
    "suite": "tools",
    "category": "unit",
    "source": "module",
@@ -4847,7 +7123,33 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.111
+   "wall": 0.037
+  },
+  {
+   "id": "test_check_ci_policy.RunnerConfig",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 11,
+   "discovered": 11,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.149
+  },
+  {
+   "id": "test_check_ci_policy.RunnerServiceAndRegistration",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.071
   },
   {
    "id": "test_check_ci_policy.Workflow",
@@ -4860,7 +7162,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.072
+   "wall": 0.034
   },
   {
    "id": "test_check_ci_policy.YamlSubset",
@@ -4886,7 +7188,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.316
+   "wall": 0.313
   },
   {
    "id": "test_check_containment_cases.Committed",
@@ -4899,20 +7201,59 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.012
+   "wall": 0.013
   },
   {
    "id": "test_check_containment_cases.Rules",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 25,
-   "discovered": 25,
+   "tests": 26,
+   "discovered": 26,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 3.891
+   "wall": 1.861
+  },
+  {
+   "id": "test_check_control_catalog.CommittedCatalog",
+   "suite": "tools",
+   "category": "contract",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.017
+  },
+  {
+   "id": "test_check_control_catalog.Mutations",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.101
+  },
+  {
+   "id": "test_check_fixture_profile.FixtureProfile",
+   "suite": "tools",
+   "category": "contract",
+   "source": "class",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.373
   },
   {
    "id": "test_check_intent_record.Catalog",
@@ -4938,7 +7279,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.066
+   "wall": 0.065
   },
   {
    "id": "test_check_intent_record.MethodMutations",
@@ -4977,33 +7318,33 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.134
+   "wall": 0.122
   },
   {
    "id": "test_check_network_matrix.Acceptance",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 14,
-   "discovered": 14,
+   "tests": 15,
+   "discovered": 15,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 3.398
+   "wall": 1.304
   },
   {
    "id": "test_check_network_matrix.CommittedMatrix",
    "suite": "tools",
    "category": "contract",
    "source": "class",
-   "tests": 10,
-   "discovered": 10,
+   "tests": 11,
+   "discovered": 11,
    "launches": 4,
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.343
+   "wall": 0.342
   },
   {
    "id": "test_check_prereqs.ToolsVenvInfo",
@@ -5016,33 +7357,59 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.016
+   "wall": 0.011
   },
   {
    "id": "test_check_profile.AdmissionBlock",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 7,
-   "discovered": 7,
+   "tests": 8,
+   "discovered": 8,
    "launches": 0,
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.56
+   "wall": 0.619
   },
   {
    "id": "test_check_profile.AgentServerBlock",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 9,
-   "discovered": 9,
+   "tests": 11,
+   "discovered": 11,
    "launches": 0,
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.561
+   "wall": 0.733
+  },
+  {
+   "id": "test_check_profile.CIRunnerBlock",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 13,
+   "discovered": 13,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.918
+  },
+  {
+   "id": "test_check_profile.CISeedScript",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.024
   },
   {
    "id": "test_check_profile.CheckedInProfiles",
@@ -5055,7 +7422,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.291
+   "wall": 0.647
   },
   {
    "id": "test_check_profile.CommandLine",
@@ -5068,7 +7435,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.172
+   "wall": 0.373
   },
   {
    "id": "test_check_profile.JobsBlock",
@@ -5081,20 +7448,20 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.483
+   "wall": 0.522
   },
   {
    "id": "test_check_profile.Negative",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 105,
-   "discovered": 105,
+   "tests": 111,
+   "discovered": 111,
    "launches": 0,
    "mkdtemp": 20,
    "sockets": 0,
    "chdir": 0,
-   "wall": 3.77
+   "wall": 3.839
   },
   {
    "id": "test_check_profile.OpenApiSubset",
@@ -5107,7 +7474,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.111
+   "wall": 0.278
   },
   {
    "id": "test_check_profile.QuiesceBlock",
@@ -5120,7 +7487,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.378
+   "wall": 0.42
   },
   {
    "id": "test_check_role_tokens.Acceptance",
@@ -5133,20 +7500,20 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.239
+   "wall": 0.141
   },
   {
    "id": "test_check_role_tokens.AgentGrants",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 9,
-   "discovered": 9,
+   "tests": 11,
+   "discovered": 11,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.126
+   "wall": 0.14
   },
   {
    "id": "test_check_role_tokens.CommittedMatrix",
@@ -5159,20 +7526,20 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.319
+   "wall": 0.331
   },
   {
    "id": "test_check_role_tokens.Contract",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 12,
-   "discovered": 12,
+   "tests": 13,
+   "discovered": 13,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.213
+   "wall": 0.181
   },
   {
    "id": "test_check_role_tokens.Mapping",
@@ -5185,7 +7552,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.266
+   "wall": 0.149
   },
   {
    "id": "test_check_role_tokens.StatusAndLinks",
@@ -5198,33 +7565,33 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.203
+   "wall": 0.12
   },
   {
    "id": "test_check_security_inventory.AgentAndOwnerAuthority",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 12,
-   "discovered": 12,
+   "tests": 14,
+   "discovered": 14,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.184
+   "wall": 0.247
   },
   {
    "id": "test_check_security_inventory.CommittedInventory",
    "suite": "tools",
    "category": "contract",
    "source": "class",
-   "tests": 8,
-   "discovered": 8,
+   "tests": 9,
+   "discovered": 9,
    "launches": 3,
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.25
+   "wall": 0.243
   },
   {
    "id": "test_check_security_inventory.NamedPrincipal",
@@ -5237,7 +7604,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.061
+   "wall": 0.039
   },
   {
    "id": "test_check_security_inventory.Publication",
@@ -5250,7 +7617,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.076
+   "wall": 0.048
   },
   {
    "id": "test_check_security_inventory.References",
@@ -5263,7 +7630,20 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.2
+   "wall": 0.123
+  },
+  {
+   "id": "test_check_security_inventory.RememberedAnswers",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.037
   },
   {
    "id": "test_check_security_inventory.SharedOsIdentity",
@@ -5276,7 +7656,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.045
+   "wall": 0.029
   },
   {
    "id": "test_check_security_inventory.StatusesAndLinks",
@@ -5289,46 +7669,111 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.167
+   "wall": 0.105
   },
   {
    "id": "test_check_test_budget.BudgetCheckTests",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 13,
-   "discovered": 13,
+   "tests": 21,
+   "discovered": 21,
    "launches": 0,
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.01
+   "wall": 0.016
   },
   {
    "id": "test_check_test_budget.CommittedBudgetTests",
    "suite": "tools",
    "category": "contract",
    "source": "class",
-   "tests": 4,
-   "discovered": 4,
+   "tests": 5,
+   "discovered": 5,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.012
+   "wall": 0.046
+  },
+  {
+   "id": "test_custody_probe.ContractWithTheRealProbe",
+   "suite": "tools",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.062
   },
   {
    "id": "test_custody_probe.ProbeRun",
    "suite": "tools",
    "category": "integration",
    "source": "module",
-   "tests": 12,
-   "discovered": 12,
-   "launches": 18,
-   "mkdtemp": 12,
+   "tests": 15,
+   "discovered": 15,
+   "launches": 2,
+   "mkdtemp": 15,
    "sockets": 2,
    "chdir": 0,
-   "wall": 2.558
+   "wall": 0.41
+  },
+  {
+   "id": "test_d1_run_driver.D1Run",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 12,
+   "discovered": 12,
+   "launches": 0,
+   "mkdtemp": 20,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.023
+  },
+  {
+   "id": "test_d1_run_driver.DeltaCheck",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 1.018
+  },
+  {
+   "id": "test_d1_run_driver.ReviewOfBAndC",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 9,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.842
+  },
+  {
+   "id": "test_d1_run_driver.StopRecords",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
   },
   {
    "id": "test_guest.AdmissionInspect",
@@ -5341,7 +7786,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.051
+   "wall": 0.046
   },
   {
    "id": "test_guest.AdmissionProbe",
@@ -5354,7 +7799,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.11
+   "wall": 0.122
   },
   {
    "id": "test_guest.AgentServerSecretScan",
@@ -5367,20 +7812,20 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.012
+   "wall": 0.006
   },
   {
    "id": "test_guest.ApiProbe",
    "suite": "tools",
    "category": "integration",
    "source": "class",
-   "tests": 3,
-   "discovered": 3,
-   "launches": 3,
-   "mkdtemp": 3,
-   "sockets": 3,
+   "tests": 4,
+   "discovered": 4,
+   "launches": 10,
+   "mkdtemp": 4,
+   "sockets": 4,
    "chdir": 0,
-   "wall": 2.495
+   "wall": 3.119
   },
   {
    "id": "test_guest.ArtifactLabels",
@@ -5393,7 +7838,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.054
+   "wall": 0.05
   },
   {
    "id": "test_guest.Canaries",
@@ -5419,20 +7864,20 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.094
+   "wall": 0.087
   },
   {
    "id": "test_guest.ContainmentProbe",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 26,
-   "discovered": 26,
+   "tests": 36,
+   "discovered": 36,
    "launches": 0,
-   "mkdtemp": 26,
+   "mkdtemp": 36,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.322
+   "wall": 2.509
   },
   {
    "id": "test_guest.ConversationLifecycle",
@@ -5445,7 +7890,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.052
+   "wall": 0.05
   },
   {
    "id": "test_guest.Destroy",
@@ -5458,7 +7903,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.079
+   "wall": 0.069
   },
   {
    "id": "test_guest.EgressInspect",
@@ -5471,7 +7916,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.053
+   "wall": 0.048
   },
   {
    "id": "test_guest.Evaluate",
@@ -5484,7 +7929,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.073
+   "wall": 0.067
   },
   {
    "id": "test_guest.Exchange",
@@ -5497,7 +7942,7 @@
    "mkdtemp": 19,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.176
+   "wall": 2.023
   },
   {
    "id": "test_guest.ForwardingGuard",
@@ -5510,15 +7955,15 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.051
+   "wall": 0.047
   },
   {
    "id": "test_guest.HostCensus",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 4,
-   "discovered": 4,
+   "tests": 6,
+   "discovered": 6,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
@@ -5532,6 +7977,19 @@
    "source": "module",
    "tests": 6,
    "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_guest.HostPortRows",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
@@ -5562,20 +8020,20 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.085
+   "wall": 0.068
   },
   {
    "id": "test_guest.InferenceJobSweep",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 3,
-   "discovered": 3,
+   "tests": 9,
+   "discovered": 9,
    "launches": 0,
-   "mkdtemp": 3,
+   "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.053
+   "wall": 0.231
   },
   {
    "id": "test_guest.InferenceTokenStep",
@@ -5588,7 +8046,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.982
+   "wall": 0.944
   },
   {
    "id": "test_guest.Inventory",
@@ -5601,7 +8059,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.378
+   "wall": 0.348
   },
   {
    "id": "test_guest.JobAccessProbe",
@@ -5614,7 +8072,7 @@
    "mkdtemp": 20,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.202
+   "wall": 0.2
   },
   {
    "id": "test_guest.JobContainerShape",
@@ -5666,7 +8124,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.04
+   "wall": 0.057
   },
   {
    "id": "test_guest.NetprobeCycleOneRegressions",
@@ -5679,7 +8137,7 @@
    "mkdtemp": 15,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.12
+   "wall": 0.109
   },
   {
    "id": "test_guest.NetprobeFixture",
@@ -5692,7 +8150,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.091
+   "wall": 0.078
   },
   {
    "id": "test_guest.NetprobeListener",
@@ -5705,7 +8163,7 @@
    "mkdtemp": 3,
    "sockets": 8,
    "chdir": 0,
-   "wall": 4.811
+   "wall": 4.848
   },
   {
    "id": "test_guest.NetprobeOverlay",
@@ -5731,7 +8189,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.045
+   "wall": 0.04
   },
   {
    "id": "test_guest.NetprobeSessionSockets",
@@ -5744,7 +8202,7 @@
    "mkdtemp": 3,
    "sockets": 4,
    "chdir": 0,
-   "wall": 0.49
+   "wall": 0.525
   },
   {
    "id": "test_guest.NetprobeVerdict",
@@ -5757,7 +8215,7 @@
    "mkdtemp": 29,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.226
+   "wall": 0.214
   },
   {
    "id": "test_guest.NoConsoleWindow",
@@ -5783,7 +8241,7 @@
    "mkdtemp": 13,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.092
+   "wall": 0.095
   },
   {
    "id": "test_guest.OrdinaryPathRefusesValidation",
@@ -5796,7 +8254,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.01
+   "wall": 0.009
   },
   {
    "id": "test_guest.P5Scan",
@@ -5809,7 +8267,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.053
+   "wall": 0.052
   },
   {
    "id": "test_guest.Ports",
@@ -5848,7 +8306,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.052
+   "wall": 0.071
   },
   {
    "id": "test_guest.ProviderKeySearch",
@@ -5861,7 +8319,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.642
+   "wall": 0.607
   },
   {
    "id": "test_guest.ProvisionedInspect",
@@ -5874,7 +8332,7 @@
    "mkdtemp": 33,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.367
+   "wall": 0.368
   },
   {
    "id": "test_guest.QmpClient",
@@ -5887,7 +8345,7 @@
    "mkdtemp": 0,
    "sockets": 2,
    "chdir": 0,
-   "wall": 0.015
+   "wall": 0.001
   },
   {
    "id": "test_guest.QuiesceInspect",
@@ -5900,7 +8358,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.004
+   "wall": 0.003
   },
   {
    "id": "test_guest.Refusals",
@@ -5913,7 +8371,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.184
+   "wall": 0.169
   },
   {
    "id": "test_guest.RenderArgv",
@@ -5927,6 +8385,19 @@
    "sockets": 0,
    "chdir": 0,
    "wall": 0.001
+  },
+  {
+   "id": "test_guest.RepositoryTests",
+   "suite": "tools",
+   "category": "integration",
+   "source": "class",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 1,
+   "mkdtemp": 22,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.77
   },
   {
    "id": "test_guest.RunGit",
@@ -5952,7 +8423,7 @@
    "mkdtemp": 12,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.488
+   "wall": 0.461
   },
   {
    "id": "test_guest.StampedRecords",
@@ -5965,7 +8436,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.037
+   "wall": 0.044
   },
   {
    "id": "test_guest.StartInspect",
@@ -5991,7 +8462,7 @@
    "mkdtemp": 45,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.307
+   "wall": 0.298
   },
   {
    "id": "test_guest.XsaveDetector",
@@ -6017,7 +8488,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.046
+   "wall": 0.064
   },
   {
    "id": "test_guest_drill.DefectiveControl",
@@ -6030,7 +8501,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.023
+   "wall": 0.032
   },
   {
    "id": "test_guest_drill.DrillOnlyOnDrillInstances",
@@ -6056,7 +8527,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.008
+   "wall": 0.009
   },
   {
    "id": "test_guest_drill.DrillRuns",
@@ -6069,7 +8540,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.068
+   "wall": 0.067
   },
   {
    "id": "test_guest_drill.DrillSeed",
@@ -6082,7 +8553,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.036
+   "wall": 0.034
   },
   {
    "id": "test_guest_drill.FailClosedChecks",
@@ -6108,7 +8579,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.016
+   "wall": 0.012
   },
   {
    "id": "test_guest_drill.HelperScan",
@@ -6121,7 +8592,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.005
+   "wall": 0.002
   },
   {
    "id": "test_guest_drill.RestartSeries",
@@ -6147,7 +8618,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.002
+   "wall": 0.003
   },
   {
    "id": "test_guest_drill.StoredStateAlterations",
@@ -6199,7 +8670,85 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.006
+   "wall": 0.005
+  },
+  {
+   "id": "test_image_inspect_text.Globs",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_image_inspect_text.ListsAndExcerpts",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_image_inspect_text.Operation",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.011
+  },
+  {
+   "id": "test_image_inspect_text.PyInstaller",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.005
+  },
+  {
+   "id": "test_image_inspect_text.Requests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_image_inspect_text.Searches",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.005
   },
   {
    "id": "test_inference_forward.BrokerAccessAndForwardControl",
@@ -6225,7 +8774,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.008
+   "wall": 0.01
   },
   {
    "id": "test_inference_forward.ForwardCommand",
@@ -6238,7 +8787,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.492
+   "wall": 0.5
   },
   {
    "id": "test_inference_forward.ForwardRecords",
@@ -6251,7 +8800,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.083
+   "wall": 0.081
   },
   {
    "id": "test_inference_forward.ForwardSpawned",
@@ -6264,7 +8813,33 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.279
+   "wall": 0.309
+  },
+  {
+   "id": "test_inference_forward.JobScriptAgainstTheTunnel",
+   "suite": "tools",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 2,
+   "mkdtemp": 0,
+   "sockets": 5,
+   "chdir": 0,
+   "wall": 0.708
+  },
+  {
+   "id": "test_inference_forward.NativeForward",
+   "suite": "tools",
+   "category": "integration",
+   "source": "class",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 2,
+   "mkdtemp": 16,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.124
   },
   {
    "id": "test_inference_forward.RecreateAndDestroy",
@@ -6277,7 +8852,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.012
+   "wall": 0.011
   },
   {
    "id": "test_inference_forward.TokenScriptAgainstTheBroker",
@@ -6290,7 +8865,7 @@
    "mkdtemp": 3,
    "sockets": 6,
    "chdir": 0,
-   "wall": 0.275
+   "wall": 0.292
   },
   {
    "id": "test_launch_census.Detection",
@@ -6316,7 +8891,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.572
+   "wall": 2.909
   },
   {
    "id": "test_launch_census.WindowDetection",
@@ -6329,7 +8904,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.014
+   "wall": 0.003
   },
   {
    "id": "test_module_code.Load",
@@ -6342,7 +8917,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.007
+   "wall": 0.008
   },
   {
    "id": "test_msys2_lock.EntryTests",
@@ -6355,7 +8930,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.026
+   "wall": 0.025
   },
   {
    "id": "test_msys2_lock.InstallTests",
@@ -6368,7 +8943,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.13
+   "wall": 0.127
   },
   {
    "id": "test_msys2_lock.ResolverTests",
@@ -6410,6 +8985,71 @@
    "wall": 0.0
   },
   {
+   "id": "test_native_qualification_driver.AttemptProbe",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.451
+  },
+  {
+   "id": "test_native_qualification_driver.DriverRun",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 41,
+   "discovered": 41,
+   "launches": 0,
+   "mkdtemp": 67,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 16.022
+  },
+  {
+   "id": "test_native_qualification_driver.NativeTokenContract",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.003
+  },
+  {
+   "id": "test_native_qualification_driver.OwnerValues",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
+  },
+  {
+   "id": "test_native_qualification_driver.TunnelView",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
    "id": "test_nocloud_seed.Compositions",
    "suite": "tools",
    "category": "contract",
@@ -6420,7 +9060,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.03
+   "wall": 0.032
   },
   {
    "id": "test_nocloud_seed.Determinism",
@@ -6433,7 +9073,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.147
+   "wall": 0.149
   },
   {
    "id": "test_nocloud_seed.ProvisionManifest",
@@ -6446,7 +9086,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.208
+   "wall": 0.203
   },
   {
    "id": "test_nocloud_seed.Refusals",
@@ -6459,7 +9099,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.291
+   "wall": 0.332
   },
   {
    "id": "test_nocloud_seed.RoundTrip",
@@ -6472,7 +9112,124 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.084
+   "wall": 0.086
+  },
+  {
+   "id": "test_plan_commitment.BacklogCheckTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 16,
+   "discovered": 16,
+   "launches": 0,
+   "mkdtemp": 16,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.418
+  },
+  {
+   "id": "test_plan_commitment.BacklogReaderTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.14
+  },
+  {
+   "id": "test_plan_commitment.BacklogStatusTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.22
+  },
+  {
+   "id": "test_plan_commitment.ClosureAndReadinessTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.041
+  },
+  {
+   "id": "test_plan_commitment.CommittedPlanTests",
+   "suite": "tools",
+   "category": "contract",
+   "source": "class",
+   "tests": 9,
+   "discovered": 9,
+   "launches": 0,
+   "mkdtemp": 8,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.51
+  },
+  {
+   "id": "test_plan_commitment.LeavesClosureTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.057
+  },
+  {
+   "id": "test_plan_commitment.PinnedBacklogTests",
+   "suite": "tools",
+   "category": "e2e",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_plan_commitment.RefusalTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.032
+  },
+  {
+   "id": "test_plan_commitment.StatusParsingTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.002
   },
   {
    "id": "test_provision.AdmissionSeed",
@@ -6485,7 +9242,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.022
+   "wall": 0.024
   },
   {
    "id": "test_provision.AgentServerSeed",
@@ -6498,7 +9255,20 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.021
+   "wall": 0.022
+  },
+  {
+   "id": "test_provision.ContainmentHostSeed",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.035
   },
   {
    "id": "test_provision.ConversationFactsSeed",
@@ -6511,7 +9281,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.013
+   "wall": 0.012
   },
   {
    "id": "test_provision.EgressRouteSeed",
@@ -6524,7 +9294,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.028
+   "wall": 0.025
   },
   {
    "id": "test_provision.InferenceCompositionSeed",
@@ -6550,20 +9320,20 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.237
+   "wall": 0.244
   },
   {
    "id": "test_provision.ProvisionOperation",
    "suite": "tools",
    "category": "unit",
    "source": "module",
-   "tests": 8,
-   "discovered": 8,
+   "tests": 10,
+   "discovered": 10,
    "launches": 0,
-   "mkdtemp": 8,
+   "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.483
+   "wall": 0.565
   },
   {
    "id": "test_provision.QuiesceSeed",
@@ -6576,7 +9346,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.022
+   "wall": 0.028
   },
   {
    "id": "test_provision.ReadinessWait",
@@ -6589,7 +9359,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.016
+   "wall": 0.017
   },
   {
    "id": "test_provision.SeededRootStep",
@@ -6602,7 +9372,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.024
+   "wall": 0.023
   },
   {
    "id": "test_provision.SmokeAndCli",
@@ -6615,7 +9385,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.023
+   "wall": 0.055
   },
   {
    "id": "test_provision_fetch.CommittedLock",
@@ -6628,7 +9398,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.001
+   "wall": 0.002
   },
   {
    "id": "test_provision_fetch.ProvisionFetch",
@@ -6641,7 +9411,7 @@
    "mkdtemp": 18,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.446
+   "wall": 0.421
   },
   {
    "id": "test_publication_gate.ExistingCommands",
@@ -6654,7 +9424,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.338
+   "wall": 0.529
   },
   {
    "id": "test_publication_gate.FailsClosed",
@@ -6667,7 +9437,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 8.532
+   "wall": 8.07
   },
   {
    "id": "test_publication_gate.ScanWindows",
@@ -6680,7 +9450,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.011
+   "wall": 0.01
   },
   {
    "id": "test_publication_gate.WithRealScanner",
@@ -6693,20 +9463,20 @@
    "mkdtemp": 16,
    "sockets": 0,
    "chdir": 0,
-   "wall": 15.366
+   "wall": 14.7
   },
   {
    "id": "test_pytest_conftest.Configuration",
    "suite": "tools",
    "category": "contract",
    "source": "class",
-   "tests": 7,
-   "discovered": 7,
+   "tests": 8,
+   "discovered": 8,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.012
+   "wall": 0.02
   },
   {
    "id": "test_pytest_conftest.GeneratedProject",
@@ -6726,13 +9496,13 @@
    "suite": "tools",
    "category": "contract",
    "source": "class",
-   "tests": 8,
-   "discovered": 8,
+   "tests": 9,
+   "discovered": 9,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.004
+   "wall": 0.006
   },
   {
    "id": "test_qualify_intent_skill.CheckerRefusesSilentPromotion",
@@ -6745,7 +9515,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.002
+   "wall": 0.003
   },
   {
    "id": "test_qualify_intent_skill.CommittedRuns",
@@ -6758,7 +9528,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.014
+   "wall": 0.016
   },
   {
    "id": "test_qualify_intent_skill.Corpus",
@@ -6771,7 +9541,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.004
+   "wall": 0.005
   },
   {
    "id": "test_qualify_intent_skill.OpenSpecArtifacts",
@@ -6784,7 +9554,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.005
+   "wall": 0.006
   },
   {
    "id": "test_qualify_intent_skill.Prompts",
@@ -6797,7 +9567,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.003
+   "wall": 0.004
   },
   {
    "id": "test_qualify_intent_skill.RunWithFakeModel",
@@ -6810,7 +9580,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.695
+   "wall": 0.676
   },
   {
    "id": "test_resolve_sources.ResolveTarget",
@@ -6849,7 +9619,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.011
+   "wall": 0.012
   },
   {
    "id": "test_resolve_sources.WithoutDulwich",
@@ -6863,6 +9633,32 @@
    "sockets": 0,
    "chdir": 0,
    "wall": 0.029
+  },
+  {
+   "id": "test_run_tests.RealSuitesTests",
+   "suite": "tools",
+   "category": "integration",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 3,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.228
+  },
+  {
+   "id": "test_run_tests.RunnerTests",
+   "suite": "tools",
+   "category": "unit",
+   "source": "module",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.05
   },
   {
    "id": "test_test_profile.AggregationTests",
@@ -6901,7 +9697,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.332
+   "wall": 0.306
   },
   {
    "id": "test_test_profile.ProgramKeyTests",
@@ -6940,7 +9736,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.122
+   "wall": 0.181
   },
   {
    "id": "test_test_profile.TaskfileSuitesTests",
@@ -6969,6 +9765,19 @@
    "wall": 0.0
   },
   {
+   "id": "test_tunnel_guest_side.GuestSideIdentity",
+   "suite": "tools",
+   "category": "contract",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.006
+  },
+  {
    "id": "test_verify_seed.BaselineMode",
    "suite": "tools",
    "category": "contract",
@@ -6979,7 +9788,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 3.17
+   "wall": 3.108
   },
   {
    "id": "test_verify_seed.DefaultMode",
@@ -6992,7 +9801,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.792
+   "wall": 2.863
   },
   {
    "id": "test_verify_seed.RealBootstrapBaseline",
@@ -7005,7 +9814,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.137
+   "wall": 0.141
   },
   {
    "id": "test_conversation_store.Identity",
@@ -7239,7 +10048,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.659
+   "wall": 0.628
   },
   {
    "id": "test_catalog.Citations",
@@ -7294,6 +10103,97 @@
    "wall": 0.0
   },
   {
+   "id": "test_dispatch.BeforeAnything",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 1,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.687
+  },
+  {
+   "id": "test_dispatch.Census",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 1,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.377
+  },
+  {
+   "id": "test_dispatch.Delivery",
+   "suite": "agentfixture",
+   "category": "unit",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 2,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 3.482
+  },
+  {
+   "id": "test_dispatch.Dispatched",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_dispatch.PinnedCommit",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.008
+  },
+  {
+   "id": "test_dispatch.Pull",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.845
+  },
+  {
+   "id": "test_live_bytes.LiveBytes",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 11,
+   "mkdtemp": 7,
+   "sockets": 4,
+   "chdir": 0,
+   "wall": 1.992
+  },
+  {
    "id": "test_process.Census",
    "suite": "agentfixture",
    "category": "unit",
@@ -7317,7 +10217,7 @@
    "mkdtemp": 1,
    "sockets": 2,
    "chdir": 0,
-   "wall": 0.571
+   "wall": 0.575
   },
   {
    "id": "test_process.ProcessWithTheDocument",
@@ -7343,7 +10243,7 @@
    "mkdtemp": 0,
    "sockets": 11,
    "chdir": 0,
-   "wall": 2.034
+   "wall": 2.518
   },
   {
    "id": "test_result.Answer",
@@ -7356,7 +10256,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.953
+   "wall": 1.832
   },
   {
    "id": "test_result.G7RealShell",
@@ -7369,7 +10269,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.187
+   "wall": 1.134
   },
   {
    "id": "test_result.OverTheListener",
@@ -7382,7 +10282,7 @@
    "mkdtemp": 2,
    "sockets": 11,
    "chdir": 0,
-   "wall": 0.846
+   "wall": 0.822
   },
   {
    "id": "test_result.Refused",
@@ -7395,7 +10295,7 @@
    "mkdtemp": 13,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.938
+   "wall": 1.741
   },
   {
    "id": "test_scenarios.LostAcknowledgement",
@@ -7447,7 +10347,7 @@
    "mkdtemp": 0,
    "sockets": 17,
    "chdir": 0,
-   "wall": 0.22
+   "wall": 0.223
   },
   {
    "id": "test_served.CallLog",
@@ -7460,7 +10360,7 @@
    "mkdtemp": 0,
    "sockets": 9,
    "chdir": 0,
-   "wall": 0.219
+   "wall": 0.225
   },
   {
    "id": "test_served.Cors",
@@ -7471,9 +10371,9 @@
    "discovered": 4,
    "launches": 0,
    "mkdtemp": 0,
-   "sockets": 74,
+   "sockets": 75,
    "chdir": 0,
-   "wall": 1.104
+   "wall": 1.131
   },
   {
    "id": "test_served.Faces",
@@ -7486,7 +10386,7 @@
    "mkdtemp": 0,
    "sockets": 99,
    "chdir": 0,
-   "wall": 0.991
+   "wall": 1.0
   },
   {
    "id": "test_served.Failed",
@@ -7499,7 +10399,7 @@
    "mkdtemp": 0,
    "sockets": 9,
    "chdir": 0,
-   "wall": 0.221
+   "wall": 0.226
   },
   {
    "id": "test_served.LostAcknowledgement",
@@ -7525,7 +10425,7 @@
    "mkdtemp": 0,
    "sockets": 11,
    "chdir": 0,
-   "wall": 2.203
+   "wall": 2.243
   },
   {
    "id": "test_served.Robustness",
@@ -7538,7 +10438,7 @@
    "mkdtemp": 0,
    "sockets": 43,
    "chdir": 0,
-   "wall": 0.661
+   "wall": 0.679
   },
   {
    "id": "test_served.Running",
@@ -7551,7 +10451,7 @@
    "mkdtemp": 0,
    "sockets": 31,
    "chdir": 0,
-   "wall": 0.221
+   "wall": 0.225
   },
   {
    "id": "test_served.Socket",
@@ -7564,7 +10464,7 @@
    "mkdtemp": 0,
    "sockets": 43,
    "chdir": 0,
-   "wall": 1.107
+   "wall": 1.131
   },
   {
    "id": "test_served.SourceDerived",
@@ -7577,7 +10477,7 @@
    "mkdtemp": 0,
    "sockets": 31,
    "chdir": 0,
-   "wall": 0.664
+   "wall": 0.676
   },
   {
    "id": "test_served.Unknown",
@@ -7603,7 +10503,7 @@
    "mkdtemp": 0,
    "sockets": 7,
    "chdir": 0,
-   "wall": 0.221
+   "wall": 0.226
   },
   {
    "id": "test_served.Validated",
@@ -7751,17 +10651,134 @@
    "wall": 0.0
   },
   {
+   "id": "test_dispatch",
+   "suite": "agentfixture",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 19,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.512
+  },
+  {
    "id": "test_scenarios",
    "suite": "agentfixture",
    "category": "integration",
    "source": "module",
    "tests": 0,
    "discovered": 0,
-   "launches": 4,
-   "mkdtemp": 2,
+   "launches": 0,
+   "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.378
+   "wall": 0.072
+  },
+  {
+   "id": "test_attempt_run",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.137
+  },
+  {
+   "id": "test_dispatcher_lock",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.083
+  },
+  {
+   "id": "test_live_resolution",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 19,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.534
+  },
+  {
+   "id": "test_manifest_promotion",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 19,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.592
+  },
+  {
+   "id": "test_non_overlap",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.078
+  },
+  {
+   "id": "test_restart_matrix",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.095
+  },
+  {
+   "id": "test_restart_recovery",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.117
+  },
+  {
+   "id": "test_result_receipts",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 0,
+   "discovered": 0,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.082
   }
  ],
  "suites_added": [
@@ -7799,6 +10816,41 @@
     "python": "3.12.10"
    },
    "note": "Registered later (E-01.7, the engineering manager's ruling 6 of dispatch 24 of unit I1) from a profile of this suite alone (tools/test_profile.py run --runs 3 --suite agentfixture; check_test_budget.py record and propose), without AIEH_LOCKED_OPENAPI, so the five tests that need the locked openapi.json are recorded skipped; every other suite, category and total is unchanged and keeps its own recording. Re-measured for this suite only at 8545c51 (E-01.7's review fixes; the second round's ruling 6)."
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "0a99b545f8fd0a8f8a72efcba223a7b826c5f3c8",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Re-measured for these suites only at 0a99b54 (E-01.8 and its review fixes: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
+  },
+  {
+   "suites": [
+    "tools",
+    "dispatch"
+   ],
+   "revision": "d3a2d300275ddf2f2dbe7cab3e9a2d1d820a827a",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Re-measured for these suites only at d3a2d30 (E-01.8 and its review fixes: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
   }
  ]
 }

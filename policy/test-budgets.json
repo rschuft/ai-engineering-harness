@@ -32,10 +32,10 @@
  },
  "suites": {
   "tools": {
-   "tests": 1310,
-   "launches": 311,
-   "mkdtemp": 560,
-   "wall_s": 74.1
+   "tests": 1684,
+   "launches": 310,
+   "mkdtemp": 949,
+   "wall_s": 112.7
   },
   "store": {
    "tests": 84,
@@ -92,10 +92,10 @@
    "wall_s": 2.4
   },
   "dispatch": {
-   "tests": 153,
-   "launches": 15,
-   "mkdtemp": 126,
-   "wall_s": 7.7
+   "tests": 887,
+   "launches": 419,
+   "mkdtemp": 1246,
+   "wall_s": 219.1
   },
   "repository": {
    "tests": 106,
@@ -122,10 +122,10 @@
    "wall_s": 8.2
   },
   "agentfixture": {
-   "tests": 74,
-   "launches": 27,
-   "mkdtemp": 33,
-   "wall_s": 19.7
+   "tests": 89,
+   "launches": 55,
+   "mkdtemp": 47,
+   "wall_s": 27.4
   }
  },
  "categories": {
@@ -182,6 +182,29 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Registered later (E-01.7, the engineering manager's ruling 6 of dispatch 24 of unit I1) from a profile of this suite alone (tools/test_profile.py run --runs 3 --suite agentfixture; check_test_budget.py record and propose), without AIEH_LOCKED_OPENAPI, so the five tests that need the locked openapi.json are recorded skipped; every other suite, category and total is unchanged and keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "0a99b545f8fd0a8f8a72efcba223a7b826c5f3c8",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 0a99b54 (E-01.8 and its review fixes: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "tools",
+    "dispatch"
+   ],
+   "revision": "d3a2d300275ddf2f2dbe7cab3e9a2d1d820a827a",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at d3a2d30 (E-01.8 and its review fixes: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
