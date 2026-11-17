@@ -430,14 +430,14 @@
   {
    "name": "ownerhost",
    "start_dir": "integrations/ownerhost/tests",
-   "tests": 74,
+   "tests": 295,
    "outcomes": {
-    "ok": 74
+    "ok": 295
    },
    "successful": true,
-   "launches": 6,
-   "mkdtemp": 43,
-   "sockets": 350,
+   "launches": 1375,
+   "mkdtemp": 335,
+   "sockets": 1453,
    "chdir": 0,
    "unattributed": {
     "launches": 0,
@@ -447,12 +447,12 @@
    },
    "wall": {
     "runs": [
-     8.187,
-     8.059,
-     8.417
+     79.638,
+     79.555,
+     79.952
     ],
-    "median": 8.187,
-    "discovery_median": 0.113
+    "median": 79.638,
+    "discovery_median": 1.498
    }
   },
   {
@@ -9921,6 +9921,149 @@
    "wall": 0.058
   },
   {
+   "id": "test_acceptance.CardChecks",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 8,
+   "discovered": 8,
+   "launches": 56,
+   "mkdtemp": 8,
+   "sockets": 46,
+   "chdir": 0,
+   "wall": 1.861
+  },
+  {
+   "id": "test_acceptance.ChallengeRefusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 99,
+   "mkdtemp": 7,
+   "sockets": 70,
+   "chdir": 0,
+   "wall": 2.349
+  },
+  {
+   "id": "test_acceptance.CodeParity",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_acceptance.ConfigurationRefusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 33,
+   "mkdtemp": 3,
+   "sockets": 26,
+   "chdir": 0,
+   "wall": 0.881
+  },
+  {
+   "id": "test_acceptance.MintOnce",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 35,
+   "mkdtemp": 5,
+   "sockets": 38,
+   "chdir": 0,
+   "wall": 1.483
+  },
+  {
+   "id": "test_acceptance.NoModelNoSocket",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 6,
+   "mkdtemp": 2,
+   "sockets": 4,
+   "chdir": 0,
+   "wall": 0.351
+  },
+  {
+   "id": "test_acceptance.OutcomeUnknown",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 32,
+   "mkdtemp": 3,
+   "sockets": 28,
+   "chdir": 0,
+   "wall": 0.995
+  },
+  {
+   "id": "test_acceptance.RaceWindow",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 32,
+   "mkdtemp": 3,
+   "sockets": 20,
+   "chdir": 0,
+   "wall": 0.998
+  },
+  {
+   "id": "test_acceptance.RepositoryStateRefusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 12,
+   "discovered": 12,
+   "launches": 201,
+   "mkdtemp": 12,
+   "sockets": 92,
+   "chdir": 0,
+   "wall": 5.192
+  },
+  {
+   "id": "test_acceptance.SessionBindingVerifier",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 6,
+   "mkdtemp": 2,
+   "sockets": 8,
+   "chdir": 0,
+   "wall": 0.302
+  },
+  {
+   "id": "test_acceptance.SessionRefusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 53,
+   "mkdtemp": 3,
+   "sockets": 34,
+   "chdir": 0,
+   "wall": 1.079
+  },
+  {
    "id": "test_app.EveryRequestNeedsTheCredential",
    "suite": "ownerhost",
    "category": "contract",
@@ -9929,9 +10072,9 @@
    "discovered": 6,
    "launches": 0,
    "mkdtemp": 6,
-   "sockets": 170,
+   "sockets": 376,
    "chdir": 0,
-   "wall": 0.111
+   "wall": 0.226
   },
   {
    "id": "test_app.HostAndOrigin",
@@ -9944,20 +10087,280 @@
    "mkdtemp": 3,
    "sockets": 38,
    "chdir": 0,
-   "wall": 0.04
+   "wall": 0.048
   },
   {
    "id": "test_app.Refusals",
    "suite": "ownerhost",
    "category": "contract",
    "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 84,
+   "chdir": 0,
+   "wall": 0.1
+  },
+  {
+   "id": "test_bound_authority.Constants",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "class",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_bound_authority.Divergence",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 4,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.429
+  },
+  {
+   "id": "test_bound_authority.Equivalence",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 0,
+   "mkdtemp": 19,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.485
+  },
+  {
+   "id": "test_capture.BidiControls",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 115,
+   "mkdtemp": 2,
+   "sockets": 56,
+   "chdir": 0,
+   "wall": 1.582
+  },
+  {
+   "id": "test_capture.CrashWindows",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 33,
+   "mkdtemp": 6,
+   "sockets": 16,
+   "chdir": 0,
+   "wall": 1.129
+  },
+  {
+   "id": "test_capture.HarnessDefault",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_capture.Identity",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 92,
+   "mkdtemp": 5,
+   "sockets": 40,
+   "chdir": 0,
+   "wall": 1.43
+  },
+  {
+   "id": "test_capture.IdentityClasses",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
    "tests": 4,
    "discovered": 4,
-   "launches": 0,
+   "launches": 24,
    "mkdtemp": 4,
-   "sockets": 72,
+   "sockets": 6,
    "chdir": 0,
-   "wall": 0.064
+   "wall": 0.483
+  },
+  {
+   "id": "test_capture.NoModelNoSocket",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 9,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.304
+  },
+  {
+   "id": "test_capture.OneMessageOneChange",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 22,
+   "mkdtemp": 3,
+   "sockets": 12,
+   "chdir": 0,
+   "wall": 0.579
+  },
+  {
+   "id": "test_capture.OriginatesEdge",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 7,
+   "mkdtemp": 1,
+   "sockets": 2,
+   "chdir": 0,
+   "wall": 0.278
+  },
+  {
+   "id": "test_capture.Principal",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 50,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.75
+  },
+  {
+   "id": "test_capture.Records",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
+  },
+  {
+   "id": "test_capture.Refusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 10,
+   "discovered": 10,
+   "launches": 174,
+   "mkdtemp": 10,
+   "sockets": 74,
+   "chdir": 0,
+   "wall": 2.681
+  },
+  {
+   "id": "test_capture.SameIntent",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 24,
+   "mkdtemp": 2,
+   "sockets": 12,
+   "chdir": 0,
+   "wall": 0.544
+  },
+  {
+   "id": "test_capture.Settlement",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 61,
+   "mkdtemp": 7,
+   "sockets": 16,
+   "chdir": 0,
+   "wall": 1.783
+  },
+  {
+   "id": "test_capture.StoreAndRecordRefusals",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 30,
+   "mkdtemp": 5,
+   "sockets": 14,
+   "chdir": 0,
+   "wall": 0.77
+  },
+  {
+   "id": "test_capture.TheHarnessIsNotTheProject",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 41,
+   "mkdtemp": 4,
+   "sockets": 8,
+   "chdir": 0,
+   "wall": 0.98
+  },
+  {
+   "id": "test_capture.TheRecord",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 32,
+   "mkdtemp": 5,
+   "sockets": 10,
+   "chdir": 0,
+   "wall": 1.026
+  },
+  {
+   "id": "test_capture.WorkTreeAfterACrash",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 8,
+   "mkdtemp": 2,
+   "sockets": 4,
+   "chdir": 0,
+   "wall": 0.357
   },
   {
    "id": "test_enroll.Guard",
@@ -9970,10 +10373,10 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.041
+   "wall": 0.004
   },
   {
-   "id": "test_enroll.RealConsole",
+   "id": "test_enroll.GuardScope",
    "suite": "ownerhost",
    "category": "integration",
    "source": "class",
@@ -9983,20 +10386,228 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.208
+   "wall": 0.209
+  },
+  {
+   "id": "test_history_listener.HistoryOverTheService",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 2,
+   "mkdtemp": 2,
+   "sockets": 24,
+   "chdir": 0,
+   "wall": 2.519
+  },
+  {
+   "id": "test_history_routes.History",
+   "suite": "ownerhost",
+   "category": "contract",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 7,
+   "sockets": 108,
+   "chdir": 0,
+   "wall": 0.163
+  },
+  {
+   "id": "test_history_routes.Threads",
+   "suite": "ownerhost",
+   "category": "contract",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 36,
+   "chdir": 0,
+   "wall": 0.06
   },
   {
    "id": "test_listener.Listener",
    "suite": "ownerhost",
    "category": "integration",
    "source": "module",
-   "tests": 13,
-   "discovered": 13,
-   "launches": 2,
+   "tests": 18,
+   "discovered": 18,
+   "launches": 9,
    "mkdtemp": 1,
-   "sockets": 70,
+   "sockets": 88,
    "chdir": 0,
-   "wall": 5.325
+   "wall": 14.31
+  },
+  {
+   "id": "test_outbound_guard.ArmedServerProcess",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 1,
+   "mkdtemp": 1,
+   "sockets": 8,
+   "chdir": 0,
+   "wall": 0.789
+  },
+  {
+   "id": "test_outbound_guard.InThisProcess",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 1,
+   "sockets": 2,
+   "chdir": 0,
+   "wall": 0.016
+  },
+  {
+   "id": "test_pending_decision.PendingDecisionAcrossRestarts",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 6,
+   "discovered": 6,
+   "launches": 3,
+   "mkdtemp": 1,
+   "sockets": 16,
+   "chdir": 0,
+   "wall": 6.319
+  },
+  {
+   "id": "test_projection.EndMapping",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 13,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.419
+  },
+  {
+   "id": "test_projection.EndToEnd",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 23,
+   "mkdtemp": 11,
+   "sockets": 10,
+   "chdir": 0,
+   "wall": 5.282
+  },
+  {
+   "id": "test_projection.ExitClaims",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 1,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.372
+  },
+  {
+   "id": "test_projection.Labels",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 0,
+   "mkdtemp": 21,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.884
+  },
+  {
+   "id": "test_projection.Outcome",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 7,
+   "discovered": 7,
+   "launches": 18,
+   "mkdtemp": 24,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 2.112
+  },
+  {
+   "id": "test_projection.ReadOnly",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 7,
+   "mkdtemp": 6,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.431
+  },
+  {
+   "id": "test_projection.Route",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 2,
+   "mkdtemp": 8,
+   "sockets": 22,
+   "chdir": 0,
+   "wall": 0.415
+  },
+  {
+   "id": "test_projection.Rules",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "class",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
+   "id": "test_projection.StateTable",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 14,
+   "discovered": 14,
+   "launches": 26,
+   "mkdtemp": 37,
+   "sockets": 3,
+   "chdir": 0,
+   "wall": 4.775
+  },
+  {
+   "id": "test_service.CaptureConfiguration",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 4,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.006
   },
   {
    "id": "test_service.Environment",
@@ -10012,6 +10623,19 @@
    "wall": 0.001
   },
   {
+   "id": "test_service.Instance",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.007
+  },
+  {
    "id": "test_service.Readiness",
    "suite": "ownerhost",
    "category": "unit",
@@ -10022,7 +10646,33 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.008
+   "wall": 0.011
+  },
+  {
+   "id": "test_service.SharedRecord",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 5,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.044
+  },
+  {
+   "id": "test_service.Transitions",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 0,
+   "mkdtemp": 3,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.343
   },
   {
    "id": "test_service.Verbs",
@@ -10042,13 +10692,13 @@
    "suite": "ownerhost",
    "category": "unit",
    "source": "module",
-   "tests": 10,
-   "discovered": 10,
+   "tests": 11,
+   "discovered": 11,
    "launches": 0,
-   "mkdtemp": 10,
+   "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.129
+   "wall": 0.164
   },
   {
    "id": "test_session.Enrollment",
@@ -10061,7 +10711,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.061
+   "wall": 0.063
   },
   {
    "id": "test_session.Shape",
@@ -10077,6 +10727,19 @@
    "wall": 0.001
   },
   {
+   "id": "test_structure.ExclusiveListener",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "class",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 2,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
    "id": "test_structure.ImportCensus",
    "suite": "ownerhost",
    "category": "integration",
@@ -10087,20 +10750,33 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.571
+   "wall": 0.778
+  },
+  {
+   "id": "test_structure.NewModules",
+   "suite": "ownerhost",
+   "category": "unit",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.711
   },
   {
    "id": "test_structure.NoClientSocket",
    "suite": "ownerhost",
    "category": "unit",
    "source": "module",
-   "tests": 6,
-   "discovered": 6,
+   "tests": 9,
+   "discovered": 9,
    "launches": 0,
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.135
+   "wall": 4.424
   },
   {
    "id": "test_structure.OnePort",
@@ -10113,7 +10789,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.117
+   "wall": 0.882
   },
   {
    "id": "test_catalog.Answers",
@@ -10965,6 +11641,23 @@
     "python": "3.12.10"
    },
    "note": "Re-measured for these suites only at 9b6be63 (E-01.8 round 3: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "592ef79dc4b0138b7a70542ba779b00ddd1d6d9a",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Re-measured for these suites only at 592ef79 (U-04.1: the outcome projection's tests) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
   }
  ]
 }

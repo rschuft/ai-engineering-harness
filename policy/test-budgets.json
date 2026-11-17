@@ -116,10 +116,10 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 74,
-   "launches": 6,
-   "mkdtemp": 43,
-   "wall_s": 8.2
+   "tests": 295,
+   "launches": 1375,
+   "mkdtemp": 335,
+   "wall_s": 79.7
   },
   "agentfixture": {
    "tests": 90,
@@ -229,6 +229,17 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at 9b6be63 (E-01.8 round 3: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "592ef79dc4b0138b7a70542ba779b00ddd1d6d9a",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 592ef79 (U-04.1: the outcome projection's tests) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
