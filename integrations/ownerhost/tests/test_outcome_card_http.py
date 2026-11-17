@@ -116,8 +116,10 @@ class CardOverHttp(F.Exporter):
                 given = {'port': server.port, 'credential': app.credential, 'outcome': F.OUTCOME_ID,
                          'report': str(report), 'commit': published.receipt['commit']}
                 env = dict(os.environ, AIEH_OUTCOME_CARD_HTTP=json.dumps(given))
-                ran = subprocess.run([NODE, str(VITEST), 'run', CARD_TEST, '--no-color'], cwd=APP, env=env,
-                                     capture_output=True, timeout=CEILING_S, creationflags=NO_WINDOW)
+                # without Vitest's caches: nothing is written under node_modules (as owner-host:test:if-node)
+                argv = [NODE, str(VITEST), 'run', CARD_TEST, '--no-color', '--no-cache', '--no-fsModuleCache']
+                ran = subprocess.run(argv, cwd=APP, env=env, capture_output=True, timeout=CEILING_S,
+                                     creationflags=NO_WINDOW)
             finally:
                 server.stop()
         output = (ran.stdout + ran.stderr).decode('utf-8', 'replace')
