@@ -93,6 +93,18 @@ describe("the derived build", () => {
     expect(() => compareDerived(source, dir)).toThrow(/CANVAS_BUILD_UNEXPECTED/);
   });
 
+  it("refuses a second changed stylesheet, and a policy that did not reach index.html", () => {
+    const source = fakeBuild();
+    writeFileSync(join(source, "assets", "zz.css"), ".z{}");
+    const { dir } = deriveBuild(source, tmp());
+    writeFileSync(join(dir, "assets", "zz.css"), ".z{color:blue}");
+    expect(() => compareDerived(source, dir)).toThrow(/expected exactly one stylesheet to differ, found: assets\/root.css, assets\/zz.css/);
+    const other = fakeBuild();
+    const plain = deriveBuild(other, tmp());
+    expect(() => compareDerived(other, plain.dir, { csp: "default-src 'self'" }))
+      .toThrow(/expected exactly one stylesheet and index\.html to differ, found: assets\/root\.css$/);
+  });
+
   it("refuses a package whose stylesheet has another number of remote imports, or one not from Google Fonts", () => {
     const one = fakeBuild();
     writeFileSync(join(one, "assets", "root.css"), `${FONT_A}.a{}`);

@@ -25,9 +25,12 @@ class Block(unittest.TestCase):
     def test_off_loopback_and_escaped_read_the_network_log(self):
         log = [{'url': 'http://127.0.0.1:1/a', 'status': 200}, {'url': 'about:blank', 'status': None},
                {'url': 'https://cdn.example/x', 'status': None, 'failed': 'net::ERR_BLOCKED_BY_CLIENT'},
-               {'url': 'https://cdn.example/y', 'status': 200}, {'url': 'data:,x', 'status': 200}]
-        self.assertEqual([r['url'] for r in B.off_loopback(log)], ['https://cdn.example/x', 'https://cdn.example/y'])
-        self.assertEqual([r['url'] for r in B.escaped(log)], ['https://cdn.example/y'])
+               {'url': 'https://cdn.example/y', 'status': 200}, {'url': 'data:,x', 'status': 200},
+               {'url': 'https://cdn.example/z', 'status': 200, 'failed': 'net::ERR_ABORTED'}]
+        self.assertEqual([r['url'] for r in B.off_loopback(log)],
+                         ['https://cdn.example/x', 'https://cdn.example/y', 'https://cdn.example/z'])
+        # a response that arrived and then failed still left loopback
+        self.assertEqual([r['url'] for r in B.escaped(log)], ['https://cdn.example/y', 'https://cdn.example/z'])
 
     def test_the_probe_is_a_request_the_block_must_stop(self):
         self.assertFalse(B.allowed(B.PROBE_URL))
