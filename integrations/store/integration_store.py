@@ -923,7 +923,8 @@ class IntegrationStore:
         names = [d[0] for d in cursor.description]
         return [dict(zip(names, row)) for row in cursor.fetchall()]
 
-    def reconcile(self, oracle: Callable[[Reservation], str], *, actor: str) -> dict:
+    def reconcile(self, oracle: Callable[[Reservation], str], *, actor: str,
+                  label: Callable[[Reservation], Mapping] | None = None) -> dict:
         """Resolve attempts whose outcome a restore (or a lost acknowledgement) made uncertain.
 
         While a restore epoch is open, every ``dispatched`` attempt first moves to
@@ -933,21 +934,30 @@ class IntegrationStore:
         ``failed``, ``'indeterminate'`` -> stays ``unknown`` and nothing else is
         done for it. Uses only the F-05.1 transitions. The real oracle (the
         OpenHands conversation lookup) is E-01.4.x; tests use a fixture.
+
+        ``label(reservation)``, when given (E-01.8: the attempt's bound authority, R11), is
+        each transition's ``detail``; without it, or when it returns an empty mapping, the
+        detail is None, as before. It is called before its transition is written: when it
+        raises, that attempt is not moved and the exception propagates, as an oracle's does
+        (the transitions already written stay; each is its own transaction).
         """
+        def detail(attempt):
+            return (label(attempt) or None) if label is not None else None
+
         report = {'confirmed': [], 'failed': [], 'still_unknown': []}
         if self.open_epochs():
             for attempt in self.attempts(['dispatched']):
                 self.transition(attempt.operation_key, 'unknown', actor=actor, expected_from='dispatched',
-                                reason='restore epoch: outcome uncertain after restore')
+                                reason='restore epoch: outcome uncertain after restore', detail=detail(attempt))
         for attempt in self.attempts(['unknown']):
             verdict = oracle(attempt)
             if verdict == 'performed':
                 self.transition(attempt.operation_key, 'confirmed', actor=actor, expected_from='unknown',
-                                reason='reconciled: observed in the external system')
+                                reason='reconciled: observed in the external system', detail=detail(attempt))
                 report['confirmed'].append(attempt.operation_key)
             elif verdict == 'not_performed':
                 self.transition(attempt.operation_key, 'failed', actor=actor, expected_from='unknown',
-                                reason='reconciled: not present in the external system')
+                                reason='reconciled: not present in the external system', detail=detail(attempt))
                 report['failed'].append(attempt.operation_key)
             elif verdict == 'indeterminate':
                 report['still_unknown'].append(attempt.operation_key)

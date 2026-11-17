@@ -443,6 +443,11 @@ trigger (`attempt_reservation_gate`). Reads continue. Then:
 
 The real oracle, a lookup in OpenHands, is E-01.4.x. The tests use a fixture.
 
+`reconcile(oracle, actor=..., label=...)` (E-01.8): given `label(reservation)`, each transition it writes carries that
+mapping as its detail (the dispatcher passes the attempt's bound authority, so a fixture attempt's records say so);
+without it, or when it returns an empty mapping, the detail stays NULL, as before. A label that raises is called before
+its transition: that attempt is not moved and the exception propagates, as an oracle's does.
+
 **Retention.** `store.prune_backups(keep_last=N, older_than_days=None)` deletes
 old backup copies and their manifests. It never deletes the newest copy, the
 source of an open epoch, or anything in `backups/superseded/`. Canonical rows are

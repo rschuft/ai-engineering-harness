@@ -118,6 +118,23 @@ class LiveBytes(TA.Bound):
         commit = remote.repo[published.receipt['commit'].encode('ascii')]
         self.assertEqual(commit.author, f'{AR.BOT_NAME} <{AR.BOT_EMAIL}>'.encode(), 'decision 0024 point 4, unchanged')
 
+    def test_a_live_attempts_reconcile_and_recovery_write_no_authority(self):
+        """The store's reconcile, given recover's and reconcile_creates' label, writes no detail for a live attempt."""
+        def lost(method, path, body=None, **kwargs):
+            answer = self.core(method, path, body, **kwargs)
+            if (method, path) == ('POST', '/api/conversations'):
+                raise OSError('the answer was lost')
+            return answer
+        with self.assertRaises(OSError):
+            self.dispatch(lost, provider(), profile=ci.REAL, manifest=self.approve_real())
+        [attempt] = self.store.attempts()
+        report = TA.RR.RC.reconcile_creates(self.store, transport=self.core, actor=ACTOR,
+                                            read_artifact=self.read_artifact)
+        self.assertEqual(report['confirmed'], [attempt.operation_key])
+        [last] = self.store.events(attempt.operation_key)[-1:]
+        self.assertEqual((last.to_state, last.detail_json), ('confirmed', None))
+        self.assertUnlabelled()
+
     def test_a_live_attempts_end_journal_and_record_carry_no_authority(self):
         result = self.dispatch(self.core, provider(), profile=ci.REAL, manifest=self.approve_real())
         stop = {'kind': 'containment-stop', 'code': 'INSPECTION_FAILED', 'ref': f'attempt:{result.attempt_id}#x'}

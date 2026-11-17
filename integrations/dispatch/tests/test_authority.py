@@ -397,10 +397,10 @@ class Labels(Bound):
 
 
 class Recovery(Bound):
-    """The review's item 1: the transitions the dispatch modules write outside ``dispatch`` carry the bound authority
-    (``restart_recovery``'s moves). The store's own reconcile (``IntegrationStore.reconcile``, its generic
-    ``unknown -> confirmed | failed``) writes no detail at all: labelling it needs the store's generic code, which is
-    the engineering manager's STOP, reported and not built; those two transitions are asserted as they are."""
+    """The review's item 1: the transitions written outside ``dispatch`` carry the bound authority:
+    ``restart_recovery``'s moves, and the store's reconcile (``unknown -> confirmed | failed``), given the label of
+    ``dispatch_inputs.bound_label`` by ``recover`` and ``reconcile_creates`` (the engineering manager's ruling (a) on
+    the STOP: reconcile's optional ``label``)."""
 
     def moves(self, key):
         return [(e.to_state, e.reason, json.loads(e.detail_json) if e.detail_json else None)
@@ -424,7 +424,7 @@ class Recovery(Bound):
         moves = self.moves(attempt.operation_key)
         self.assertEqual([(to, (d or {}).get('authority')) for to, _, d in moves],
                          [('reserved', None), ('dispatched', 'fixture'), ('unknown', 'fixture'),
-                          ('confirmed', None)], 'recover\'s own move labelled; the store\'s reconcile writes no detail')
+                          ('confirmed', 'fixture')], 'recover\'s move and the store\'s reconcile, both labelled')
         self.assertEqual(moves[2][1], RR.REASON_CREATE_UNKNOWN)
 
     def test_an_unanswered_create_is_labelled_and_reconciled(self):
@@ -439,7 +439,21 @@ class Recovery(Bound):
                             read_artifact=self.read_artifact)
         self.assertEqual(report['held'], [])
         self.assertEqual([(to, (d or {}).get('authority')) for to, _, d in self.moves(attempt.operation_key)],
-                         [('reserved', None), ('dispatched', 'fixture'), ('unknown', 'fixture'), ('failed', None)])
+                         [('reserved', None), ('dispatched', 'fixture'), ('unknown', 'fixture'), ('failed', 'fixture')])
+
+    def test_reconcile_creates_labels_what_it_settles(self):
+        def no_answer(method, path, body=None, **kwargs):
+            if (method, path) == ('POST', '/api/conversations'):
+                self.core(method, path, body, **kwargs)           # the create reaches the core
+                raise OSError('the answer was lost')
+            return self.core(method, path, body, **kwargs)
+        with self.assertRaises(OSError):
+            self.dispatch(Seam(no_answer, 'fixture'), provider('fixture'))
+        [attempt] = self.store.attempts()
+        report = RR.RC.reconcile_creates(self.store, transport=Seam(self.core, 'fixture'), actor=ACTOR,
+                                         read_artifact=self.read_artifact)
+        self.assertEqual(report['confirmed'], [attempt.operation_key])
+        self.assertEqual(self.moves(attempt.operation_key)[-1][::2], ('confirmed', {'authority': 'fixture'}))
 
     def test_a_reserved_attempt_recover_fails_carries_the_label(self):
         held = provider('fixture')

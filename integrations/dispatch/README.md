@@ -1858,9 +1858,10 @@ attempt's pinned allowlist can be read: when it cannot, there is no bound author
 `recover`'s own moves (`dispatched -> unknown`, a reserved attempt's `reserved -> failed`; `bound_label`), the turn journal, the delivery, pull and intake receipts, the verified
 result's record, the result journal's receipt, the Owner report and the pull request body, the launch receipt, the end
 journal and record, and the stop receipts written with the reader. A live record is byte for byte what it was (`integrations/agentfixture/tests/test_live_bytes.py`: a live attempt end
-to end and an ended one, no `authority` key anywhere). **Not labelled:** the store's own reconcile (`IntegrationStore.reconcile`)
-writes `unknown -> confirmed | failed` with no detail at all; labelling it needs the store's generic code, which this
-leaf does not change (reported to the engineering manager). An attempt whose bound authority is not `live` takes the
+to end and an ended one, no `authority` key anywhere). The store's own reconcile (`IntegrationStore.reconcile`) takes an optional
+`label` (the engineering manager's ruling (a) on the review's STOP): `recover` and `reconcile_creates` give it
+`bound_label`, so its `dispatched -> unknown` (a restore epoch's sweep), `unknown -> confirmed` and `unknown -> failed`
+are labelled too; a live attempt's label is empty, and its detail stays NULL. An attempt whose bound authority is not `live` takes the
 commissioning user's identity for its result commit: without one, `run_attempt`, `resume_result` and `prepare`
 refuse `RESULT_IDENTITY_REQUIRED` before any call, never the bot's; given the reader, `intake_result` checks the
 authority it is given against the binding (`RESULT_AUTHORITY_MISMATCH`). The dispatch modules compare declared

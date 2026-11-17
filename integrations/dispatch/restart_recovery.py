@@ -265,7 +265,9 @@ class _Recovery:
         for _ in range(len(self.store.attempts()) + 1):
             last[0] = None
             try:
-                self.store.reconcile(once, actor=self.actor)
+                self.store.reconcile(once, actor=self.actor, label=lambda reservation: di.bound_label(
+                    self.store, turn_attempt(self.store, reservation) or reservation.operation_key,
+                    self.read_artifact))
                 break
             except store.IllegalTransition as exc:
                 key = last[0]
