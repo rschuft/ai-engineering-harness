@@ -49,6 +49,16 @@ has ``recorded`` (the entry, its date, the harness revision and its network ``or
 false``) in place of ``shown`` (``owner_decision.py``) and its commit message says that no challenge was
 shown.
 
+**The owner-ui channel** (plan leaf P-04.4; decision 0025 point 9; the I1 integration design, R6): a statement
+whose ``channel`` is ``owner-ui`` is admitted only with a **session-binding verifier** passed to ``record`` in process
+(``session_binding``, a callable of the statement and the challenge that answers None when the statement is bound to
+the authenticated Owner UI session making the request, else the reason). The Integration process passes it
+(``integrations/ownerhost/acceptance.py``): the statement is a user message of that session, read from the Owner
+conversation store with that digest, and the challenge was issued to that session. Without a verifier ``owner-ui``
+is refused (``SESSION_BINDING_REQUIRED``), so the command line, which has none, cannot declare it, and
+``record_from_log`` refuses it the same way; a verifier that answers a reason is ``SESSION_BINDING_REFUSED``. A
+verifier is for that channel only. Every other check is unchanged and applies to ``owner-ui`` as to any channel.
+
 Usage (from the repository root, under the tools interpreter: Dulwich is required):
 
     <tools python> -I -B integrations/owner/acceptance_recorder.py prepare --project DIR \\
@@ -111,6 +121,7 @@ SCP_LIKE = re.compile(r'^[^/@:]+@(?P<rest>[^/:]+:.*)$')
 ORIGIN_SCHEMES = ('https', 'http', 'ssh', 'git')  # an origin the record keeps (recordable_origin)
 NAME_CHAR = '[A-Za-z0-9_.-]'  # a name's characters: a whole-token match is bounded by anything else
 NAME_MIN = 3  # a shorter change or repository name never names the statement's subject
+OWNER_UI = 'owner-ui'  # the channel admitted only with a session-binding verifier (P-04.4)
 
 REMEDIES = {
     'PROJECT_UNAVAILABLE': 'name the work tree of the project repository, with a commit on a branch, and run '
@@ -169,6 +180,12 @@ REMEDIES = {
                                   'project repository it accepts',
     'HARNESS_NOT_ON_MAIN': 'check out main in the harness repository (HEAD the symbolic reference '
                            'refs/heads/main), then record again',
+    # The owner-ui channel (plan leaf P-04.4).
+    'SESSION_BINDING_REQUIRED': 'the owner-ui channel is bound to the Owner\'s authenticated Owner UI session: record '
+                                'the acceptance in the Owner host, whose Integration process verifies the session in '
+                                'process; it cannot be declared here',
+    'SESSION_BINDING_REFUSED': 'the statement is not bound to the authenticated session that makes the request: '
+                               'accept in the Owner host, in the session that was shown the challenge',
 }
 
 
@@ -341,6 +358,25 @@ def _check_statement(statement):
                             'Owner message or an accepted decision record')
 
 
+def _check_channel(statement, session_binding):
+    """The owner-ui rule, before anything is read: that channel needs a session-binding verifier
+    (SESSION_BINDING_REQUIRED without one), and a verifier is for that channel only."""
+    if statement['channel'] == OWNER_UI:
+        if session_binding is None:
+            raise RecorderError('SESSION_BINDING_REQUIRED', f'channel {OWNER_UI} is admitted only with the session '
+                                'binding the Integration process verifies in process')
+    elif session_binding is not None:
+        raise ValueError(f'a session binding is for the {OWNER_UI} channel only')
+
+
+def _check_binding(statement, challenge, session_binding):
+    """The verifier's answer on STATEMENT and CHALLENGE (owner-ui only): None admits it."""
+    if session_binding is not None:
+        refused = session_binding(statement, challenge)
+        if refused is not None:
+            raise RecorderError('SESSION_BINDING_REFUSED', str(refused))
+
+
 def _check_challenge(challenge):
     if challenge is None:
         raise RecorderError('CHALLENGE_MISSING', 'no challenge was given')
@@ -383,16 +419,19 @@ def _recorded_decisions(repo, commit, base):
 
 
 def record(project, challenge, statement, *, recorded_by, identity, amend=False, now=None,
-           new_outcome=None, new_decision_id=None):
+           new_outcome=None, new_decision_id=None, session_binding=None):
     """Record the Owner's acceptance STATEMENT on CHALLENGE (``prepare``'s) in the project
     repository and commit it. Returns ``{decision, outcome, minted, commit, path, reference}``.
-    NEW_OUTCOME and NEW_DECISION_ID (callables) stand in for the random UUIDs in tests."""
+    NEW_OUTCOME and NEW_DECISION_ID (callables) stand in for the random UUIDs in tests.
+    SESSION_BINDING is the owner-ui channel's verifier (the module's docstring)."""
     _check_statement(statement)
+    _check_channel(statement, session_binding)
     if not isinstance(recorded_by, str) or not D.ATTRIBUTION.match(recorded_by):
         raise RecorderError('RECORDED_BY_INVALID', f'{recorded_by!r} is not owner, agent:<id> or person:<id>')
     if not isinstance(identity, str) or not ra.IDENTITY.fullmatch(identity):
         raise RecorderError('IDENTITY_INVALID', f'{identity!r} is not "Name <email>"')
     _check_challenge(challenge)
+    _check_binding(statement, challenge, session_binding)
     now = now or utc_now()
     subject, shown = challenge['subject'], challenge['shown']
     if now >= _parse_timestamp(shown['expiresAt']):
@@ -680,6 +719,7 @@ def record_from_log(project, change, item, statement, *, recorded_by, identity, 
     No challenge is shown: the record rests on the recorded statement (``recorded``, never ``shown``). Returns
     what ``record`` returns. NEW_OUTCOME and NEW_DECISION_ID (callables) stand in for the random UUIDs in tests."""
     _check_owner(statement)
+    _check_channel(statement, None)
     reference = statement['reference']
     anchor = _log_anchor(reference)
     if not isinstance(recorded_by, str) or not D.ATTRIBUTION.match(recorded_by):
