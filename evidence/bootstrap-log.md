@@ -5469,6 +5469,56 @@ act's row in the Owner actions table and against the gated leaves' task dependen
   - **Planning's confirmation request answered: no I1 scenario ends an attempt after its message.** E-01.8 dispatches once and takes the result in. U-04.1's failed states (a refused create, the gate's not-launched) both come before the message, and the inspection end reads an empty log.
   - **Discovered work (planning's):** `integrations/gitea/gitea_host.py` writes its polled run record with the same `os.replace` pattern that raced in ownerhost.
   - **Not verified:** Linux and macOS lock behaviour; anything live; the upstream line citations, which no repository test checks because the wheels are not in the repository.
+- <a id="u-02-1-u-02-2-verdict-2026-11-16"></a>**2026-11-16: U-02.1 PASS and U-02.2 PASS, the engineering manager's verdicts (decision 0018 point 1).** Offline, against the design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R4, R5, slices 4 and 6, N10, gates G2 and G11) and decision 0025 (Accepted).
+  - **Commits, all pushed by this entry:**
+    - U-02.1: `a40020d` (gate G2), `d188a7a`, `07f1b77`, `f6f44b6`, `9ef0ac7`, `a34ce77`;
+    - U-02.2: `4565bfa`, `feee494`, `6dec8e3`, `c5a7f90`, `a1b8c74`;
+    - the combined review's fixes: `7e76383`, `fd5441f`, `8f5bd63`.
+  - **U-02.1, "Reload returns exact messages in order without duplicate IDs".** The Owner conversation store (`integrations/conversation/`, migrations 0001 to 0003) keeps threads and messages append-only.
+    - Message ids are assistant-ui's own; `seq` is assigned per thread at first append.
+    - A reload through the Integration process's history route returns the same messages, ids, parents and bytes in `seq` order.
+    - A repeated append adds nothing. A conflicting id is `MESSAGE_ID_CONFLICT`, a changed Owner statement is `MESSAGE_IMMUTABLE`, and a thread delete is refused.
+    - Since `8f5bd63`, an insert never replaces a row. Migration 0003 adds a `BEFORE INSERT` trigger on each table, refusing `INSERT OR REPLACE`, `REPLACE` and `ON CONFLICT DO UPDATE`. The store's open check adds three invariants: a user message has exactly revision 1, `seq` is contiguous, and a parent precedes its child.
+    - Suites: conversation (45) and ownerhost (116). The shell's adapters are tested in jsdom.
+  - **U-02.1, "Quotes are filled mechanically from the durable source (D2); a quote that differs from its source span is a failure".**
+    - Quotes are cut from the stored UTF-8 bytes with `lineage.span_reference` and checked by `check_message_content`, unchanged.
+    - The lineage tests for a digest mismatch, a quote missing from its source and an ambiguous span now run against the real store, with their codes unchanged (`SPAN_DIGEST_MISMATCH`, `QUOTE_NOT_IN_SOURCE`, `QUOTE_SPAN_AMBIGUOUS`).
+    - The example projection's Q1 quote is verified with its span.
+  - **U-02.2, "Original thread including pending state survives close/reopen without duplication; original U-02 proof satisfied".**
+    - **Browser reopen** (`pending-decision.test.tsx`, jsdom): the chat is unmounted and remounted twice. One pending card comes back each time, and nothing is written. The answer is an update of the same message id.
+    - **Service restart** (`integrations/ownerhost/tests/test_pending_decision.py`): a real Integration process, started by the test on a free port and a scratch store, is stopped and started twice; three distinct processes were observed. The recorded requests replay. The pending call comes back once, a reconnect adds nothing, and the answer is revision 2 with revision 1 kept.
+    - The two halves are bridged by the recorded wire fixture's equality. A real browser and a killed process are not exercised, and the READMEs say so.
+  - **U-02.2, "The lineage message and statement resolvers resolve, and archived tasks resolve; an unresolved message, statement or archived-task reference is a failure".**
+    - `lineage_resolve.py` resolves `message` and `conversation` against the real store with mode `authoritative`. It opens the store read-only (`open_read_only`, `query_only`, `check_current`), and both kinds are `implemented` in `lineage_schema.json` (N10).
+    - A `message` that is an assistant row is `MESSAGE_NOT_A_STATEMENT`.
+    - Since `7e76383`, a `conversation` reference stands for an Owner statement only when its anchor is an Owner-authored user message: the pinned message, or for an unpinned reference the last one. Otherwise it is missing, `CONVERSATION_NOT_A_STATEMENT`, or `CONVERSATION_EMPTY` for an empty thread. This applies R5: "no resolver or recorder treats [an assistant row] as a statement".
+    - Archived tasks: gate G11 showed that the pinned Backlog.md 1.55.3 answers `task view <id> --json` for an archived task (`"archived": true`). The work resolver resolves one both from that recorded output and live, and a removed one is `WORK_MISSING`.
+    - Each kind of unresolved reference fails, and the command line exits 1.
+  - **Review.** One fresh read-only review of both leaves (dispatch 16) found:
+    - 1 blocker: an assistant message or an empty thread could stand as a resolved statement through a `conversation` reference;
+    - 4 should-fix findings: a direct-SQL `INSERT OR REPLACE` path, a test that did not reach its digest check, the P-03.2 example, and the archived-task wording;
+    - 8 notes.
+    All were fixed or disclosed, and the reviewer's probes now show the corrected behaviour; the engineering manager re-ran them.
+  - **Validation:**
+    - Mutants, all killed: 13 at build; 4 for the statement rule; 9 for migration 0003 and its invariants; the reviewer's digest mutant. One equivalent mutant survived: the shell without `unstable_humanToolNames`, which does not pause a run in the pinned runtime.
+    - Full `tools/run_tests.py` (15 suites) passed at `a1b8c74`, `fd5441f` and `8f5bd63`.
+    - Shell: 80 tests, plus a typecheck.
+    - `verify_seed` PASS.
+    - The engineering manager re-ran the conversation and lineage suites at `8f5bd63`: OK.
+  - **Changed lineage assertions.** These are the planned end of the statement sample (R5, N10). Each one is listed with its reason in the review record, dispatch 16. None weakens what the tests prove: coverage moved from the sample to the real store.
+  - **The P-03.2 example, a current-fact note on its verdict row** (that row is unchanged). Since `7e76383`, `example()` traces the outcome at a commit that cites store-held statements. Both statements resolve authoritatively, Q1's quote is verified with its span, and the recorded proposal pointer shows `superseded`.
+    - The sample projection is 11 authoritative and 2 sample nodes (the attempts, until E-01.5).
+    - The real-registry projection resolves the statements and keeps the attempts `authority-unavailable`.
+    - The row's "9 authoritative and 4 sample" describes the state at 2026-11-07.
+  - **Delegated decisions:**
+    - The `conversation` anchor rule above, with codes `CONVERSATION_NOT_A_STATEMENT` and `CONVERSATION_EMPTY`.
+    - A pinned reference's `current` is freshness only, and answers at the last message whatever its role.
+    - Migration 0003 and its three invariants.
+    - A credential refused on any authenticated route signs the shell out.
+    - The P-03.2 example cites store statements (the review's option A′).
+    - Decision answers are last-writer-wins, as display state, disclosed.
+  - **Discovered work (planning's):** the lineage traversal reaches an archived task only through a reservation that cites the outcome. Without one, the task is omitted silently, because `task list --json` does not list archived tasks. The lineage README and the schema now say so.
+  - **Not verified:** a real browser; a killed-process restart; migration 0003 on the Owner's own store, which applies at its next open; a decision asked by a real producer (none yet; P-04.4 is the first); Linux and macOS.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 

@@ -1,9 +1,10 @@
 ---
 id: TASK-5
 title: 'U-02.2: Restore tool and decision state after reconnect'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-17T01:16:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -22,6 +23,12 @@ Plan contract: leaf U-02.2 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Original thread including pending state survives close/reopen without duplication; original U-02 proof satisfied.
-- [ ] #2 The lineage message and statement resolvers resolve, and archived tasks resolve; an unresolved message, statement or archived-task reference is a failure.
+- [x] #1 Original thread including pending state survives close/reopen without duplication; original U-02 proof satisfied.
+- [x] #2 The lineage message and statement resolvers resolve, and archived tasks resolve; an unresolved message, statement or archived-task reference is a failure.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+U-02.2 PASS, the engineering manager's verdict (decision 0018 point 1): evidence/bootstrap-log.md#u-02-1-u-02-2-verdict-2026-11-16.
+<!-- SECTION:FINAL_SUMMARY:END -->
