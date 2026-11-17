@@ -430,14 +430,15 @@
   {
    "name": "ownerhost",
    "start_dir": "integrations/ownerhost/tests",
-   "tests": 325,
+   "tests": 332,
    "outcomes": {
-    "ok": 325
+    "ok": 331,
+    "skip": 1
    },
    "successful": true,
-   "launches": 1423,
-   "mkdtemp": 425,
-   "sockets": 1459,
+   "launches": 1472,
+   "mkdtemp": 492,
+   "sockets": 1500,
    "chdir": 0,
    "unattributed": {
     "launches": 0,
@@ -447,12 +448,12 @@
    },
    "wall": {
     "runs": [
-     92.117,
-     94.198,
-     94.068
+     97.032,
+     96.761,
+     97.215
     ],
-    "median": 94.068,
-    "discovery_median": 1.437
+    "median": 97.032,
+    "discovery_median": 1.408
    }
   },
   {
@@ -9996,7 +9997,7 @@
    "mkdtemp": 8,
    "sockets": 46,
    "chdir": 0,
-   "wall": 1.984
+   "wall": 1.867
   },
   {
    "id": "test_acceptance.ChallengeRefusals",
@@ -10009,7 +10010,7 @@
    "mkdtemp": 7,
    "sockets": 70,
    "chdir": 0,
-   "wall": 2.53
+   "wall": 2.405
   },
   {
    "id": "test_acceptance.CodeParity",
@@ -10035,7 +10036,7 @@
    "mkdtemp": 3,
    "sockets": 26,
    "chdir": 0,
-   "wall": 0.968
+   "wall": 0.9
   },
   {
    "id": "test_acceptance.MintOnce",
@@ -10048,7 +10049,7 @@
    "mkdtemp": 5,
    "sockets": 38,
    "chdir": 0,
-   "wall": 1.689
+   "wall": 1.555
   },
   {
    "id": "test_acceptance.NoModelNoSocket",
@@ -10061,7 +10062,7 @@
    "mkdtemp": 2,
    "sockets": 4,
    "chdir": 0,
-   "wall": 0.371
+   "wall": 0.355
   },
   {
    "id": "test_acceptance.OutcomeUnknown",
@@ -10074,7 +10075,7 @@
    "mkdtemp": 3,
    "sockets": 28,
    "chdir": 0,
-   "wall": 1.089
+   "wall": 1.03
   },
   {
    "id": "test_acceptance.RaceWindow",
@@ -10087,7 +10088,7 @@
    "mkdtemp": 3,
    "sockets": 20,
    "chdir": 0,
-   "wall": 1.09
+   "wall": 1.022
   },
   {
    "id": "test_acceptance.RepositoryStateRefusals",
@@ -10100,7 +10101,7 @@
    "mkdtemp": 12,
    "sockets": 92,
    "chdir": 0,
-   "wall": 5.759
+   "wall": 5.321
   },
   {
    "id": "test_acceptance.SessionBindingVerifier",
@@ -10113,7 +10114,7 @@
    "mkdtemp": 2,
    "sockets": 8,
    "chdir": 0,
-   "wall": 0.33
+   "wall": 0.314
   },
   {
    "id": "test_acceptance.SessionRefusals",
@@ -10126,7 +10127,7 @@
    "mkdtemp": 3,
    "sockets": 34,
    "chdir": 0,
-   "wall": 1.233
+   "wall": 1.126
   },
   {
    "id": "test_app.EveryRequestNeedsTheCredential",
@@ -10139,7 +10140,7 @@
    "mkdtemp": 6,
    "sockets": 376,
    "chdir": 0,
-   "wall": 0.204
+   "wall": 0.196
   },
   {
    "id": "test_app.HostAndOrigin",
@@ -10152,7 +10153,7 @@
    "mkdtemp": 3,
    "sockets": 38,
    "chdir": 0,
-   "wall": 0.052
+   "wall": 0.047
   },
   {
    "id": "test_app.Refusals",
@@ -10165,7 +10166,7 @@
    "mkdtemp": 5,
    "sockets": 84,
    "chdir": 0,
-   "wall": 0.098
+   "wall": 0.095
   },
   {
    "id": "test_bound_authority.Constants",
@@ -10191,7 +10192,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.53
+   "wall": 0.524
   },
   {
    "id": "test_bound_authority.Equivalence",
@@ -10204,7 +10205,7 @@
    "mkdtemp": 22,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.589
+   "wall": 0.559
   },
   {
    "id": "test_capture.BidiControls",
@@ -10217,7 +10218,7 @@
    "mkdtemp": 2,
    "sockets": 56,
    "chdir": 0,
-   "wall": 1.8
+   "wall": 1.614
   },
   {
    "id": "test_capture.CrashWindows",
@@ -10230,7 +10231,7 @@
    "mkdtemp": 6,
    "sockets": 16,
    "chdir": 0,
-   "wall": 1.319
+   "wall": 1.159
   },
   {
    "id": "test_capture.HarnessDefault",
@@ -10256,7 +10257,7 @@
    "mkdtemp": 5,
    "sockets": 40,
    "chdir": 0,
-   "wall": 1.63
+   "wall": 1.461
   },
   {
    "id": "test_capture.IdentityClasses",
@@ -10269,7 +10270,7 @@
    "mkdtemp": 4,
    "sockets": 6,
    "chdir": 0,
-   "wall": 0.557
+   "wall": 0.492
   },
   {
    "id": "test_capture.NoModelNoSocket",
@@ -10282,7 +10283,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.329
+   "wall": 0.324
   },
   {
    "id": "test_capture.OneMessageOneChange",
@@ -10295,7 +10296,7 @@
    "mkdtemp": 3,
    "sockets": 12,
    "chdir": 0,
-   "wall": 0.653
+   "wall": 0.602
   },
   {
    "id": "test_capture.OriginatesEdge",
@@ -10308,7 +10309,7 @@
    "mkdtemp": 1,
    "sockets": 2,
    "chdir": 0,
-   "wall": 0.314
+   "wall": 0.285
   },
   {
    "id": "test_capture.Principal",
@@ -10321,7 +10322,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.876
+   "wall": 0.792
   },
   {
    "id": "test_capture.Records",
@@ -10347,7 +10348,7 @@
    "mkdtemp": 10,
    "sockets": 74,
    "chdir": 0,
-   "wall": 2.963
+   "wall": 2.751
   },
   {
    "id": "test_capture.SameIntent",
@@ -10360,7 +10361,7 @@
    "mkdtemp": 2,
    "sockets": 12,
    "chdir": 0,
-   "wall": 0.594
+   "wall": 0.569
   },
   {
    "id": "test_capture.Settlement",
@@ -10373,7 +10374,7 @@
    "mkdtemp": 7,
    "sockets": 16,
    "chdir": 0,
-   "wall": 1.99
+   "wall": 1.833
   },
   {
    "id": "test_capture.StoreAndRecordRefusals",
@@ -10386,7 +10387,7 @@
    "mkdtemp": 5,
    "sockets": 14,
    "chdir": 0,
-   "wall": 0.877
+   "wall": 0.797
   },
   {
    "id": "test_capture.TheHarnessIsNotTheProject",
@@ -10399,7 +10400,7 @@
    "mkdtemp": 4,
    "sockets": 8,
    "chdir": 0,
-   "wall": 1.077
+   "wall": 1.002
   },
   {
    "id": "test_capture.TheRecord",
@@ -10412,7 +10413,7 @@
    "mkdtemp": 5,
    "sockets": 10,
    "chdir": 0,
-   "wall": 1.083
+   "wall": 1.0
   },
   {
    "id": "test_capture.WorkTreeAfterACrash",
@@ -10425,7 +10426,7 @@
    "mkdtemp": 2,
    "sockets": 4,
    "chdir": 0,
-   "wall": 0.368
+   "wall": 0.349
   },
   {
    "id": "test_enroll.Guard",
@@ -10438,7 +10439,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.004
+   "wall": 0.003
   },
   {
    "id": "test_enroll.GuardScope",
@@ -10451,7 +10452,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.218
+   "wall": 0.206
   },
   {
    "id": "test_history_listener.HistoryOverTheService",
@@ -10464,7 +10465,7 @@
    "mkdtemp": 2,
    "sockets": 24,
    "chdir": 0,
-   "wall": 2.574
+   "wall": 2.544
   },
   {
    "id": "test_history_routes.History",
@@ -10490,7 +10491,7 @@
    "mkdtemp": 3,
    "sockets": 36,
    "chdir": 0,
-   "wall": 0.061
+   "wall": 0.058
   },
   {
    "id": "test_listener.Listener",
@@ -10503,7 +10504,7 @@
    "mkdtemp": 1,
    "sockets": 88,
    "chdir": 0,
-   "wall": 13.597
+   "wall": 14.021
   },
   {
    "id": "test_outbound_guard.ArmedServerProcess",
@@ -10516,7 +10517,7 @@
    "mkdtemp": 1,
    "sockets": 8,
    "chdir": 0,
-   "wall": 0.796
+   "wall": 0.787
   },
   {
    "id": "test_outbound_guard.InThisProcess",
@@ -10532,6 +10533,45 @@
    "wall": 0.017
   },
   {
+   "id": "test_outcome_card_fixtures.Committed",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.011
+  },
+  {
+   "id": "test_outcome_card_fixtures.Regenerated",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 49,
+   "mkdtemp": 67,
+   "sockets": 42,
+   "chdir": 0,
+   "wall": 8.628
+  },
+  {
+   "id": "test_outcome_card_http.CardOverHttp",
+   "suite": "ownerhost",
+   "category": "integration",
+   "source": "module",
+   "tests": 1,
+   "discovered": 1,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.0
+  },
+  {
    "id": "test_pending_decision.PendingDecisionAcrossRestarts",
    "suite": "ownerhost",
    "category": "integration",
@@ -10542,7 +10582,7 @@
    "mkdtemp": 1,
    "sockets": 16,
    "chdir": 0,
-   "wall": 6.372
+   "wall": 6.323
   },
   {
    "id": "test_projection.EndMapping",
@@ -10555,7 +10595,7 @@
    "mkdtemp": 13,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.437
+   "wall": 0.425
   },
   {
    "id": "test_projection.EndToEnd",
@@ -10566,9 +10606,9 @@
    "discovered": 3,
    "launches": 23,
    "mkdtemp": 11,
-   "sockets": 10,
+   "sockets": 9,
    "chdir": 0,
-   "wall": 5.457
+   "wall": 4.161
   },
   {
    "id": "test_projection.ExitClaims",
@@ -10581,7 +10621,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.394
+   "wall": 0.371
   },
   {
    "id": "test_projection.Labels",
@@ -10594,7 +10634,7 @@
    "mkdtemp": 21,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.947
+   "wall": 0.878
   },
   {
    "id": "test_projection.Latest",
@@ -10607,7 +10647,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.316
+   "wall": 0.3
   },
   {
    "id": "test_projection.MoreRows",
@@ -10620,7 +10660,7 @@
    "mkdtemp": 46,
    "sockets": 6,
    "chdir": 0,
-   "wall": 6.581
+   "wall": 6.26
   },
   {
    "id": "test_projection.Outcome",
@@ -10633,7 +10673,7 @@
    "mkdtemp": 24,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.142
+   "wall": 2.094
   },
   {
    "id": "test_projection.ReadOnly",
@@ -10646,7 +10686,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.432
+   "wall": 0.42
   },
   {
    "id": "test_projection.Restore",
@@ -10659,7 +10699,7 @@
    "mkdtemp": 33,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.61
+   "wall": 2.522
   },
   {
    "id": "test_projection.Route",
@@ -10672,7 +10712,7 @@
    "mkdtemp": 8,
    "sockets": 22,
    "chdir": 0,
-   "wall": 0.413
+   "wall": 0.409
   },
   {
    "id": "test_projection.Rules",
@@ -10685,7 +10725,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.001
+   "wall": 0.0
   },
   {
    "id": "test_projection.StateTable",
@@ -10698,7 +10738,7 @@
    "mkdtemp": 37,
    "sockets": 3,
    "chdir": 0,
-   "wall": 5.043
+   "wall": 4.81
   },
   {
    "id": "test_service.CaptureConfiguration",
@@ -10737,7 +10777,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.007
+   "wall": 0.01
   },
   {
    "id": "test_service.Readiness",
@@ -10763,7 +10803,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.046
+   "wall": 0.048
   },
   {
    "id": "test_service.Transitions",
@@ -10776,7 +10816,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.342
+   "wall": 0.347
   },
   {
    "id": "test_service.Verbs",
@@ -10802,7 +10842,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.164
+   "wall": 0.168
   },
   {
    "id": "test_session.Enrollment",
@@ -10815,7 +10855,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.066
+   "wall": 0.065
   },
   {
    "id": "test_session.Shape",
@@ -10854,7 +10894,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.798
+   "wall": 0.779
   },
   {
    "id": "test_structure.NewModules",
@@ -10867,7 +10907,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.718
+   "wall": 0.696
   },
   {
    "id": "test_structure.NoClientSocket",
@@ -10880,7 +10920,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 4.672
+   "wall": 4.367
   },
   {
    "id": "test_structure.OnePort",
@@ -10893,7 +10933,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.911
+   "wall": 0.913
   },
   {
    "id": "test_browser_cdp.Block",
@@ -11943,6 +11983,23 @@
     "python": "3.12.10"
    },
    "note": "Re-measured for these suites only at fd92c21 (U-01.2: c289951's census test, the UI face's bootstrap answers, the real-browser driver and its gated G5 test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "eeba87eaa7f220f90b03049cc4d4a285da491891",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cpus": 32,
+    "python": "3.12.10"
+   },
+   "note": "Re-measured for these suites only at eeba87e (U-04.2: the outcome card's fixture pin and its end-to-end test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording."
   }
  ]
 }

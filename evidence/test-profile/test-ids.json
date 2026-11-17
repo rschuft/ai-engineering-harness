@@ -3391,6 +3391,13 @@
     "test_outbound_guard.ArmedServerProcess.test_the_process_keeps_serving_its_ordinary_routes",
     "test_outbound_guard.InThisProcess.test_an_outbound_refusal_is_answered_with_its_stable_code",
     "test_outbound_guard.InThisProcess.test_the_test_process_has_not_armed_the_guard",
+    "test_outcome_card_fixtures.Committed.test_each_fixture_names_its_source_and_holds_only_the_projection_s_values",
+    "test_outcome_card_fixtures.Committed.test_every_scenario_is_committed_and_nothing_else",
+    "test_outcome_card_fixtures.Committed.test_the_schema_is_the_projection_s_constants",
+    "test_outcome_card_fixtures.Committed.test_the_shape_comparison_sees_a_key_added_removed_or_retyped",
+    "test_outcome_card_fixtures.Committed.test_together_they_cover_what_the_card_must_show",
+    "test_outcome_card_fixtures.Regenerated.test_each_fixture_is_what_the_projection_answers_now",
+    "test_outcome_card_http.CardOverHttp.test_the_card_renders_the_served_projection_of_a_published_fixture_attempt_and_again_after_a_reload",
     "test_pending_decision.PendingDecisionAcrossRestarts.test_a_real_process_was_started_three_times_on_a_free_port_and_stopped",
     "test_pending_decision.PendingDecisionAcrossRestarts.test_a_reconnect_that_sends_the_same_requests_again_adds_nothing",
     "test_pending_decision.PendingDecisionAcrossRestarts.test_the_answer_is_an_update_of_the_same_message_and_survives_a_restart_once",
@@ -3533,7 +3540,9 @@
     "test_structure.NoClientSocket.test_the_uvicorn_server_is_given_the_listener_and_no_host",
     "test_structure.OnePort.test_the_port_is_the_census_s_and_the_matrix_s"
    ],
-   "skipped": []
+   "skipped": [
+    "test_outcome_card_http.CardOverHttp.test_the_card_renders_the_served_projection_of_a_published_fixture_attempt_and_again_after_a_reload"
+   ]
   },
   "agentfixture": {
    "tests": [

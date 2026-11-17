@@ -116,10 +116,10 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 325,
-   "launches": 1423,
-   "mkdtemp": 425,
-   "wall_s": 94.1
+   "tests": 332,
+   "launches": 1472,
+   "mkdtemp": 492,
+   "wall_s": 97.1
   },
   "agentfixture": {
    "tests": 104,
@@ -307,6 +307,17 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at fd92c21 (U-01.2: c289951's census test, the UI face's bootstrap answers, the real-browser driver and its gated G5 test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "eeba87eaa7f220f90b03049cc4d4a285da491891",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at eeba87e (U-04.2: the outcome card's fixture pin and its end-to-end test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
