@@ -114,10 +114,32 @@ class Base(TA.Bound):
                 (key,) = [r.operation_key for r in rows if r.operation_key.startswith(store_mod.KEY_PREFIX)]
             typed = held.attempt_identity(key)
             return P.attempt_view(held.get(key), rows, held.events, identity=typed.identity if typed else None,
-                                  read_artifact=self.read_artifact)
+                                  read_artifact=self.read_artifact, epoch=bool(P.open_epochs(held)))
+
+    def restore(self, backup):
+        """The store restored from BACKUP (``store.backup``'s manifest), a restore epoch left open."""
+        path = Path(self.store.path)
+        self.store.close()
+        store_mod.restore_store(path, path.parent / 'backups' / (backup['backup_file'] + '.manifest.json'),
+                                actor='owner', accept_rollback=True)
+        self.store = store_mod.open_store(path)
+        self.addCleanup(self.store.close)
+        self.assertTrue(self.store.open_epochs())
+
+    def turn(self, result, authority='fixture', states=('dispatched', 'confirmed'), detail=None):
+        """A turn journal by the dispatcher's own intent builder and transitions (test_authority's ``turned``)."""
+        base = self.project_for(di.stored_inputs(self.store, result.operation_key, state='confirmed'))[1]
+        key = AR.TURN_KEY.format(attempt_id=result.attempt_id)
+        self.store.reserve(key, AR.turn_intent(result.operation_key, base, 'text', authority, TA.IDENTITY), actor=ACTOR)
+        moves = {'dispatched': ('reserved', 'send-message', None), 'confirmed': ('dispatched', 'sent', {'status': 200})}
+        for state in states:
+            before, reason, given = moves[state]
+            di._mark(self.store, key, before, state, ACTOR, reason, given if detail is None else detail)
+        return key
 
     def assertStatus(self, view, status, code, authority='fixture'):
-        self.assertEqual((view['status'], view['code']), (status, code), json.dumps(view, indent=1)[:3000])
+        self.assertEqual((view['executionStatus'], view['executionCode']), (status, code),
+                         json.dumps(view, indent=1)[:3000])
         self.assertEqual(view['authority']['shown'], authority, view['authority'])
 
     def fixture(self) -> bool:
@@ -200,9 +222,20 @@ class Base(TA.Bound):
                     published = RP.publish_result(self.store, result.operation_key, verified=outcome.result,
                                                   native=native, provider=bot, target=target, actor=ACTOR,
                                                   report_dir=report, read_artifact=self.read_artifact)
-                except di.DispatchRefused as refusal:
+                except (di.DispatchRefused, Crash) as refusal:
                     published = refusal
         return result, outcome, published, report
+
+
+def strings(value):
+    """Every string in VALUE (parsed JSON)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in strings(v)]
+    return []
 
 
 def at_phase(name):
@@ -350,8 +383,7 @@ class StateTable(Base):
         self.addCleanup(self.store.close)
         RR.RC.reconcile_creates(self.store, transport=TA.Seam(raiser(OSError('down')), 'fixture'), actor=ACTOR,
                                 read_artifact=self.read_artifact)
-        view = self.view()
-        self.assertEqual(view['status'], 'unknown', view)
+        self.assertStatus(self.view(), 'unknown', 'CREATE_OUTCOME_UNKNOWN', authority='fixture')
 
 
 @unittest.skipIf(tar.BASH is None, 'no Git Bash (Windows) or bash: RESULT runs the harness\'s script')
@@ -391,9 +423,14 @@ class EndToEnd(Base):
         # referenced, not copied: no text of the diff, the test output or the commit message is in the projection
         data = json.loads(report_json)
         text = json.dumps(view)
-        copies = [data['diff']['text'], data['tests']['output'], data['commitMessage']]
+        subject = data['commitMessage'].splitlines()[0]
+        title = receipt['pullRequest']['title']
+        sent = [s for call in self.core.messages(result.conversation_id) for s in strings(call[2]) if len(s) > 20]
+        self.assertTrue(sent, 'the message the run sent')
+        copies = [data['diff']['text'], data['tests']['output'], data['commitMessage'], subject, title,
+                  title[len('WIP: '):], *sent]
         for copied in copies:
-            self.assertTrue(isinstance(copied, str) and len(copied) > 20)
+            self.assertTrue(isinstance(copied, str) and len(copied) > 12, copied)
             self.assertFalse(copied in text or json.dumps(copied)[1:-1] in text, 'a copy of the result is in the view')
         for line in [l for l in data['diff']['text'].splitlines() if len(l) > 12][:20]:
             self.assertFalse(line in text, 'a line of the diff is in the view')
@@ -426,12 +463,24 @@ class EndToEnd(Base):
         outcome = Outcome.build(self, 'listed')
         projection = outcome.project(self)
         [attempt] = [a for a in projection['attempts'] if a['operationKey'] == result.operation_key]
-        self.assertEqual((attempt['status'], attempt['code']), ('succeeded', 'RESULT_PUBLISHED'))
+        self.assertEqual((attempt['executionStatus'], attempt['executionCode']), ('succeeded', 'RESULT_PUBLISHED'))
         self.assertEqual(attempt['evidence']['commit']['commit'], published.receipt['commit'])
         [task] = [t for t in projection['tasks'] if t['reference'] == f'backlog:{WORK}']
         self.assertEqual(task['execution'], {'status': 'succeeded', 'code': 'RESULT_PUBLISHED',
                                              'attempt': result.operation_key})
         self.assertEqual(projection['coverage'], P.COVERAGE)
+        # the review's ruling 2: a fixture-published outcome is never complete, and the uncertainty is shown, not
+        # dropped: the attempt node's own (no Agent Server is asked) and the fixture authority's
+        node = attempt['executionRef']
+        self.assertEqual(projection['lineageVerdict'], 'incomplete')
+        held = {(u['reference'], u['code']) for u in projection['lineageUncertainties']}
+        self.assertIn((node, 'FIXTURE_AUTHORITY'), held)
+        self.assertIn((node, 'RESOLVER_NOT_CONFIGURED'), held)
+        self.assertIn((node, 'RESOLVER_NOT_CONFIGURED'),
+                      {(u['reference'], u['code']) for u in projection['lineage']['uncertainties']})
+        self.assertNotIn('verdict', projection, 'the lineage verdict is named as such')
+        self.assertEqual({u['code'] for u in projection['lineageUncertainties'] if u['reference'] == node},
+                         {'RESOLVER_NOT_CONFIGURED', 'FIXTURE_AUTHORITY'})
 
 
 @unittest.skipIf(tar.BASH is None, 'no Git Bash (Windows) or bash: RESULT runs the harness\'s script')
@@ -443,7 +492,7 @@ class ExitClaims(Base):
         result, ended, _, _ = self.go(observe=at_phase('after-turn'), publish=False)
         self.assertIsInstance(ended, Crash)
         view = self.view(result.operation_key)
-        self.assertNotEqual(view['status'], 'succeeded')
+        self.assertNotEqual(view['executionStatus'], 'succeeded')
         self.assertStatus(view, 'running', 'TURN_SENT')
 
     def test_the_projection_makes_no_agent_server_call(self):
@@ -498,14 +547,6 @@ class EndMapping(Base):
 
 class Labels(Base):
     """R11's reader rule: the attempt's authority is its binding; a label that disagrees is unknown, shown as neither."""
-
-    def turn(self, result, authority):
-        """A turn journal written by the dispatcher's own intent builder and transitions, with AUTHORITY's label."""
-        base = self.project_for(di.stored_inputs(self.store, result.operation_key, state='confirmed'))[1]
-        key = AR.TURN_KEY.format(attempt_id=result.attempt_id)
-        self.store.reserve(key, AR.turn_intent(result.operation_key, base, 'text', authority, TA.IDENTITY), actor=ACTOR)
-        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'send-message', None)
-        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'sent', {'status': 200})
 
     def test_a_fixture_answered_attempt_is_shown_fixture_never_live(self):
         result = self.fixture_attempt()
@@ -569,6 +610,271 @@ class Labels(Base):
         self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_AUTHORITY_UNBOUND', authority='unknown')
 
 
+@unittest.skipIf(tar.BASH is None, 'no Git Bash (Windows) or bash: RESULT runs the harness\'s script')
+class MoreRows(Base):
+    """The rows the first build's tests did not reach (the review of U-04.1, ruling 5), each from records the
+    dispatcher's own writers made, or shaped as they write them (``di._mark`` over a writer's intent)."""
+
+    def test_result_publishing_is_never_succeeded(self):
+        class Dies:
+            def __init__(self, gitea):
+                self.gitea = gitea
+
+            def __call__(self, port, path, *args, **kwargs):
+                if kwargs.get('method') == 'POST' and path.endswith('/pulls'):
+                    raise Crash('the dispatcher died opening the pull request')
+                return self.gitea(port, path, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self.gitea, name)
+        result, outcome, published, _ = self.go(gitea_fail=Dies)
+        self.assertIsInstance(published, Crash)
+        self.assertEqual(self.store.get(RP.RESULT_KEY.format(attempt_id=result.attempt_id)).state, 'dispatched')
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'running', 'RESULT_PUBLISHING')
+        self.assertIsNone(view['evidence'])
+
+    def journal(self):
+        """An attempt run to its intake, its result journal reserved by the hook (nothing published)."""
+        result, outcome, _, _ = self.go(publish=False)
+        return result, RP.RESULT_KEY.format(attempt_id=result.attempt_id)
+
+    def test_a_confirmed_journal_without_its_receipt_is_unreadable(self):
+        result, key = self.journal()
+        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'push', {'push': True})
+        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'read-back', {'format': 'other', 'authority': 'fixture'})
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'RECORD_UNREADABLE')
+
+    def test_result_failed(self):
+        result, key = self.journal()
+        di._mark(self.store, key, 'reserved', 'failed', ACTOR, 'RESULT_EMPTY_CHANGE',
+                 {'code': 'RESULT_EMPTY_CHANGE', 'tree': 'd' * 40})
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'failed', 'RESULT_FAILED')
+        self.assertEqual(view['cause'], 'RESULT_EMPTY_CHANGE')
+
+    def test_a_result_receipt_without_its_label_is_unknown(self):
+        result, key = self.journal()
+        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'push', {'push': True})
+        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'read-back',
+                 {'format': RP.RECEIPT_FORMAT, 'commit': 'c' * 40})
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_MISSING', authority='unknown')
+
+    def test_a_result_journal_carrying_another_top_level_label_is_unknown(self):
+        result = self.fixture_attempt()
+        self.store.reserve(RP.RESULT_KEY.format(attempt_id=result.attempt_id),
+                           {'format': RP.JOURNAL_FORMAT, 'operationKey': result.operation_key,
+                            'attemptId': result.attempt_id, 'result': {'authority': 'fixture'}, 'authority': 'elsewhere'},
+                           actor=ACTOR)
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_MISMATCH', authority='unknown')
+
+    def end_journal(self, result, record_label=True):
+        key = AE.END_KEY.format(attempt_id=result.attempt_id)
+        self.store.reserve(key, {'format': AE.END_JOURNAL_FORMAT, 'operationKey': result.operation_key,
+                                 'attemptId': result.attempt_id, 'conversationId': result.conversation_id,
+                                 'authority': 'fixture'}, actor=ACTOR)
+        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'stop-runtime',
+                 {'trigger': AE.ATTEMPT_STOPPED, 'dispatcherRecords': []})
+        return key
+
+    def test_attempt_ending_and_its_end_unsettled(self):
+        result = self.fixture_attempt()
+
+        def dies(method, path):
+            if method == 'DELETE':
+                raise Crash('the dispatcher died stopping the runtime')
+        with self.assertRaises(Crash):
+            AE.end_interrupted_attempt(self.store, result.operation_key,
+                                       transport=Wire(self.core, self.scratch, 'fixture', fail=dies), actor=ACTOR,
+                                       trigger=AE.ATTEMPT_STOPPED, read_artifact=self.read_artifact)
+        key = AE.END_KEY.format(attempt_id=result.attempt_id)
+        self.assertEqual(self.store.get(key).state, 'dispatched')
+        self.assertStatus(self.view(result.operation_key), 'running', 'ATTEMPT_ENDING')
+        di._mark(self.store, key, 'dispatched', 'unknown', ACTOR, 'restore epoch: outcome uncertain',
+                 {'authority': 'fixture'})
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_END_UNSETTLED')
+
+    def test_an_end_record_without_its_label_is_unknown(self):
+        result = self.fixture_attempt()
+        key = self.end_journal(result)
+        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'unclassified',
+                 {'format': AE.END_FORMAT, 'classification': 'unclassified'})
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_MISSING', authority='unknown')
+
+    def test_message_sending(self):
+        def dies(method, path):
+            if method == 'POST' and path.endswith('/events'):
+                raise Crash('the dispatcher died sending the message')
+        result, ended, _, _ = self.go(fail=dies, publish=False)
+        self.assertIsInstance(ended, Crash)
+        self.assertStatus(self.view(result.operation_key), 'running', 'MESSAGE_SENDING')
+
+    def test_turn_failed(self):
+        def refused(method, path, answer):
+            if method == 'POST' and path.endswith('/events'):
+                return {**answer, 'status': 400, 'body': {'detail': 'refused'}}
+            return answer
+        result, ended, _, _ = self.go(edit=refused, publish=False)
+        self.assertEqual(getattr(ended, 'code', None), 'TURN_REFUSED')
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'failed', 'TURN_FAILED')
+        self.assertEqual(view['cause'], 'refused')
+
+    def test_message_reserved(self):
+        result = self.fixture_attempt()
+        self.turn(result, states=())
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'pending', 'MESSAGE_RESERVED')
+        self.assertIn('no message is recorded sent', view['detail'])
+
+    def test_a_not_launched_gate_whose_admitted_values_cannot_be_read(self):
+        """The review's probe p5, after launch_gate's fix: the receipt carries the bound authority."""
+        result = self.fixture_attempt()
+        gate = LG.gate(self.store, result.operation_key, inspect_source=self.core.container_inspect, source=SOURCE,
+                       actor=ACTOR, read_profile=raiser(OSError('the approved profile cannot be read')),
+                       read_artifact=self.read_artifact)
+        self.assertTrue(gate(result.conversation_id))
+        self.assertEqual(LG.launch_record(self.store, result.attempt_id)['authority'], 'fixture')
+        self.assertStatus(self.view(result.operation_key), 'failed', 'LAUNCH_NOT_LAUNCHED')
+
+    def test_a_stop_after_a_published_result_is_disclosed_not_a_failure(self):
+        result, _, published, _ = self.go()
+        self.assertEqual(published.outcome, 'confirmed')
+        stop = {'kind': 'containment-stop', 'code': 'INSPECTION_FAILED', 'ref': f'attempt:{result.attempt_id}#x'}
+        [stop_key] = AE.record_stop(self.store, result.operation_key, [stop], actor=ACTOR,
+                                    read_artifact=self.read_artifact)
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'succeeded', 'RESULT_PUBLISHED')
+        self.assertEqual([d['record'] for d in view['disclosed']], [stop_key])
+
+    def test_an_unsettled_result_step_receipt_is_unknown(self):
+        result = self.fixture_attempt()
+        for kind, key, form in (('delivery', AR.DELIVERY_KEY, AR.DELIVERY_FORMAT), ('pull', AR.PULL_KEY, AR.PULL_FORMAT),
+                                ('intake', AR.INTAKE_KEY, AR.INTAKE_FORMAT)):
+            with self.subTest(kind=kind):
+                record = key.format(attempt_id=result.attempt_id)
+                intent = {'format': form, 'attemptId': result.attempt_id, 'authority': 'fixture'}
+                if kind == 'intake':
+                    intent['record'] = {'format': AR.RESULT_FORMAT, 'authority': 'fixture'}
+                self.store.reserve(record, intent, actor=ACTOR)
+                di._mark(self.store, record, 'reserved', 'dispatched', ACTOR, 'record', None)
+                di._mark(self.store, record, 'dispatched', 'unknown', ACTOR, 'restore epoch: outcome uncertain',
+                         {'authority': 'fixture'})
+                view = self.view(result.operation_key)
+                self.assertStatus(view, 'unknown', 'RESULT_RECEIPT_UNSETTLED')
+
+    def test_the_intake_s_nested_record_label_must_agree(self):
+        for nested, code in (({'authority': 'live'}, 'ATTEMPT_LABEL_MISMATCH'), ({}, 'ATTEMPT_LABEL_MISSING')):
+            with self.subTest(code=code):
+                self.doCleanups()
+                self.setUp()
+                result = self.fixture_attempt()
+                AR._receipt(self.store, AR.INTAKE_KEY.format(attempt_id=result.attempt_id),
+                            {'format': AR.INTAKE_FORMAT, 'record': {'format': AR.RESULT_FORMAT, **nested},
+                             'staged': 'nowhere', 'verifyRepo': 'nowhere', 'authority': 'fixture'}, ACTOR)
+                self.assertStatus(self.view(result.operation_key), 'unknown', code, authority='unknown')
+
+    def test_every_other_record_is_kept_whole_and_label_checked(self):
+        result = self.fixture_attempt()
+        keys = [f'dispatch/attempt/{result.attempt_id}/inference-revocation/{n}' for n in (1, 2)]
+        for key in keys:
+            self.store.reserve(key, {'format': 'ai-engineering-harness/dispatch/inference-revocation/v1',
+                                     'authority': 'fixture'}, actor=ACTOR)
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'pending', 'CREATED')
+        self.assertTrue(set(keys) <= set(view['records']))
+        third = f'dispatch/attempt/{result.attempt_id}/inference-revocation/3'
+        self.store.reserve(third, {'format': 'x', 'authority': 'elsewhere'}, actor=ACTOR)
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_MISMATCH', authority='unknown')
+
+    def test_a_live_attempt_s_labelled_record_transition_is_unknown(self):
+        result = self.dispatched(live=True)
+        self.turn(result, 'live', detail={'status': 200, 'authority': 'fixture'})
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_ON_LIVE', authority='unknown')
+
+
+@unittest.skipIf(tar.BASH is None, 'no Git Bash (Windows) or bash: RESULT runs the harness\'s script')
+class Restore(Base):
+    """Absence after a restore is not "not sent" (the review's ruling 1; decision 0004 point 7): while a restore epoch
+    is open, a row that rests on the absence of a later record is unknown, with its own code; outside one it states only
+    what is recorded."""
+
+    def test_p3_a_message_sent_after_the_backup_is_unknown_not_created(self):
+        result = self.fixture_attempt()
+        backup = self.store.backup(actor='owner')
+        self.turn(result)
+        self.assertStatus(self.view(result.operation_key), 'running', 'TURN_SENT')
+        self.restore(backup)
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'unknown', 'CREATED_UNPROVEN')
+        self.assertEqual(view['restoredRow'], 'CREATED')
+
+    def test_p4_a_reserved_turn_held_by_recover_is_unknown(self):
+        result = self.fixture_attempt()
+        key = self.turn(result, states=())
+        backup = self.store.backup(actor='owner')
+        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'send-message', None)
+        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'sent', {'status': 200})
+        self.restore(backup)
+        report = RR.recover(self.store, transport=TA.Seam(self.core, 'fixture'), actor=ACTOR,
+                            read_artifact=self.read_artifact)
+        self.assertIn(RR.TURN_RESERVED_UNPROVEN, [h['code'] for h in report['held']])
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'MESSAGE_RESERVED_UNPROVEN')
+
+    def test_a_reserved_attempt_and_a_launched_one_inside_an_epoch(self):
+        held = BACKEND.FixtureCredentials()
+        held.get = raiser(Crash('the dispatcher died reading the entry'))
+        with self.assertRaises(Crash):
+            self.dispatched(credentials=held)
+        backup = self.store.backup(actor='owner')
+        self.restore(backup)
+        self.assertStatus(self.view(), 'unknown', 'ATTEMPT_RESERVED_UNPROVEN')
+
+    def test_launched_inside_an_epoch(self):
+        result, ended, _, _ = self.go(observe=at_phase('before-message'), publish=False)
+        backup = self.store.backup(actor='owner')
+        self.restore(backup)
+        self.assertStatus(self.view(result.operation_key), 'unknown', 'LAUNCHED_UNPROVEN')
+
+    def test_outside_an_epoch_the_rows_state_only_what_is_recorded(self):
+        result = self.fixture_attempt()
+        backup = self.store.backup(actor='owner')
+        self.restore(backup)
+        self.store.close_restore_epoch(actor='owner')
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'pending', 'CREATED')
+        self.assertIn('recorded', view['detail'])
+        for words in ('not sent', 'nothing is sent', 'was sent'):
+            self.assertNotIn(words, view['detail'])
+        self.turn(result, states=())
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'pending', 'MESSAGE_RESERVED')
+        self.assertNotIn('not sent', view['detail'])
+
+
+class Latest(Base):
+    """The review's ruling 3: a task's latest attempt is the store's last reservation, not its highest ordinal
+    (ordinals restart per work item, design revision and stage)."""
+
+    def test_the_latest_attempt_is_the_last_reserved_not_the_highest_ordinal(self):
+        TBA = T._load('test_bound_authority', Path(__file__).resolve().parent / 'test_bound_authority.py')
+        work = Path(tempfile.mkdtemp(prefix='u41-lat-'))
+        self.addCleanup(shutil.rmtree, work, True)
+        profile = TBA.Profile(work, {'authority': 'fixture', 'kind': 'loopback-fixture'})
+        keys = []
+        for commit, ordinal in (('a' * 40, 1), ('a' * 40, 2), ('b' * 40, 1)):
+            resolved = profile.resolved(WORK, change='qual-02', design_commit=commit, outcome_ref=OUTCOME,
+                                        ordinal=ordinal)
+            self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor=ACTOR)
+            keys.append(resolved.attempt_identity().operation_key)
+            if len(keys) == 1:
+                di._mark(self.store, keys[0], 'reserved', 'failed', ACTOR, 'test', {'code': 'TEST'})
+        projection = Outcome.build(self, 'listed').project(self)
+        [task] = [t for t in projection['tasks'] if t['reference'] == f'backlog:{WORK}']
+        self.assertEqual(task['attempts'], keys)
+        self.assertEqual(task['execution']['attempt'], keys[2], 'the last reserved, ordinal 1, not ordinal 2')
+
+
 class Rules(unittest.TestCase):
     """The state table's order and the record constants, on the projection's own functions."""
     category = 'unit'
@@ -587,8 +893,9 @@ class Rules(unittest.TestCase):
         self.assertTrue(AE.STOP_KEY.startswith(P.RECORD_PREFIX + '{attempt_id}/stop/'))
 
     def test_the_rows_are_read_in_order(self):
-        """Rows 5 to 7 (the launch's not-launched, a stop, the end) precede row 10 (a published result), each over the
-        rows after it, on records shaped as the writers write them."""
+        """A published result (row 5) is succeeded whatever is recorded beside it, which is disclosed (the review's
+        ruling 7); without one the launch's not-launched, a stop and the end are read in that order. Records shaped as
+        the writers write them."""
         def record(key, kind, state, intent, details=()):
             row = store_mod.Reservation(key, '0' * 64, json.dumps(intent), 'c', state, 'none', len(details), 'x', 'x')
             events = [store_mod.Event(n + 1, key, n, None, to, 'none', 'test', 'r', None if d is None else json.dumps(d),
@@ -604,13 +911,17 @@ class Rules(unittest.TestCase):
                       [('dispatched', None), ('confirmed', None)])
         end = record('dispatch/attempt/a/end', 'end', 'confirmed', {'format': P.FORMATS['end']},
                      [('dispatched', {}), ('confirmed', {'format': P.END_FORMAT})])
-        for records, code in (({'result': published, 'stop': []}, 'RESULT_PUBLISHED'),
-                              ({'result': published, 'end': end, 'stop': []}, 'ATTEMPT_ENDED'),
-                              ({'result': published, 'end': end, 'stop': [stop]}, 'ATTEMPT_STOPPED'),
-                              ({'result': published, 'end': end, 'launch': launch, 'stop': [stop]},
-                               'LAUNCH_NOT_LAUNCHED')):
-            with self.subTest(code=code):
-                self.assertEqual(P.state_of(typed, records)['code'], code)
+        cases = (({'result': published}, 'RESULT_PUBLISHED', 0),
+                 ({'result': published, 'stop': [stop]}, 'RESULT_PUBLISHED', 1),
+                 ({'result': published, 'end': end, 'launch': launch, 'stop': [stop]}, 'RESULT_PUBLISHED', 3),
+                 ({'end': end}, 'ATTEMPT_ENDED', 0),
+                 ({'end': end, 'stop': [stop]}, 'ATTEMPT_STOPPED', 0),
+                 ({'end': end, 'launch': launch, 'stop': [stop]}, 'LAUNCH_NOT_LAUNCHED', 0))
+        for records, code, disclosed in cases:
+            with self.subTest(code=code, disclosed=disclosed):
+                decided = P.state_of(typed, {'stop': [], 'other': [], **records})
+                self.assertEqual(decided['executionCode'], code)
+                self.assertEqual(len(decided.get('disclosed', [])), disclosed)
 
     def test_the_backlog_pin_is_the_component_lock_s(self):
         lock = json.loads((REPO / 'composition' / 'lock' / 'npm' / 'package.json').read_text(encoding='utf-8'))
@@ -640,21 +951,21 @@ class Outcome(Base):
         projection = Outcome.build(self, 'listed').project(self)
         self.assertEqual(projection['format'], 'outcome-projection/v1')
         self.assertEqual(projection['failures'], [])
-        self.assertNotEqual(projection['verdict'], 'failed')
+        self.assertNotEqual(projection['lineageVerdict'], 'failed')
         self.assertTrue(projection['statements'])
         for node in projection['statements']:
             self.assertEqual((node['kind'] in ('message', 'conversation'), node['resolution']['outcome']),
                              (True, 'resolved'), node['reference'])
         self.assertEqual(projection['objective']['resolution']['outcome'], 'resolved')
         [attempt] = projection['attempts']
-        self.assertEqual((attempt['operationKey'], attempt['status'], attempt['code']),
+        self.assertEqual((attempt['operationKey'], attempt['executionStatus'], attempt['executionCode']),
                          (result.operation_key, 'pending', 'CREATED'))
         self.assertEqual(projection['coverage'], P.COVERAGE)
 
     def test_an_unresolved_message_or_statement_reference_is_a_failure(self):
         self.fixture_attempt()
         projection = Outcome.build(self, 'listed', statements=False).project(self)
-        self.assertEqual(projection['verdict'], 'failed')
+        self.assertEqual(projection['lineageVerdict'], 'failed')
         failed = {(f['role'], f['outcome'], f['code']) for f in projection['failures']}
         self.assertTrue(failed)
         self.assertTrue(all(role == 'statement' for role, _, _ in failed), failed)
@@ -672,7 +983,7 @@ class Outcome(Base):
     def test_a_removed_archived_task_is_a_failure(self):
         self.fixture_attempt()
         projection = Outcome.build(self, 'deleted').project(self)
-        self.assertEqual(projection['verdict'], 'failed')
+        self.assertEqual(projection['lineageVerdict'], 'failed')
         self.assertIn({'reference': f'backlog:{WORK}', 'role': 'work', 'kind': 'work', 'outcome': 'missing',
                        'code': 'WORK_MISSING'},
                       [{k: f[k] for k in ('reference', 'role', 'kind', 'outcome', 'code')}
@@ -703,7 +1014,7 @@ class Outcome(Base):
                 self.assertEqual(projection['coverage'], {
                     'archivedTasksEnumerable': False, 'code': 'ARCHIVED_TASKS_NOT_ENUMERABLE',
                     'basis': 'Backlog.md 1.55.3 task list --json', 'detail': P.COVERAGE['detail']})
-                self.assertFalse([u for u in projection['uncertainties']
+                self.assertFalse([u for u in projection['lineageUncertainties']
                                   if u['code'] == 'ARCHIVED_TASKS_NOT_ENUMERABLE'], 'not a node uncertainty')
 
 

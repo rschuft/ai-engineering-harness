@@ -41,7 +41,7 @@ no dispatch endpoint.
 | `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals (bidirectional controls included); the crash windows, the commit id recorded before the branch moves, and settlement through every branch and parent (a branch switch, a merge without fast-forward, packed references, a rewritten history); a confirmed receipt under another configuration; the work-tree flag; the store's refusals; the commit identity, its placeholder classes and the session's principal; the harness checkout refused as the project; no socket, no process, no model (integration) |
 | `tests/test_acceptance.py` | P-04.4's proof in throwaway stores and a throwaway project repository whose change the capture made: the outcome minted once and resolved, the statement resolved to the Owner's message, a re-acceptance keeping the id, author and committer; every refusal (challenge, session, statement, card, layout, repository state, configuration) changing neither the project repository nor either store; the verifier clause by clause; the race window and settlement; the shell's code list; no socket, no process (integration) |
 | `tests/test_projection.py` | U-04.1's proof over attempts the dispatcher's own writers made on a throwaway store (the dispatch suite's `test_authority.Bound`): every status of the state table, the exit claims, the end mapping, R11's label rule, a fixture and a live attempt run to a published receipt, the outcome-level join, archived, deleted and reused task ids from Backlog.md's recorded output, read-only stores and reads, the route's guards and refusals (integration) |
-| `tests/test_bound_authority.py` | The authority reader pinned to `dispatch_inputs.attempt_authority` and `bound_label` case by case, the known divergence, the shared constants (integration, unit) |
+| `tests/test_bound_authority.py` | The authority reader compared with `dispatch_inputs.attempt_authority` and `bound_label` on each case of its list, the known divergence (each admission code beside the pin's), the shared constants (integration, unit) |
 | `tests/fixtures/backlog-archive/` | Backlog.md 1.55.3's own `task list --json` and `task view --json` output in a throwaway project (recorded 2026-11-17): `TASK-2` archived (`archived/`), then deleted (`deleted/`: its view fails), then its id taken by a new task (`reused/`) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
@@ -329,19 +329,21 @@ exercised.
 `GET /outcomes/{outcome_id}` answers the read-only projection of `outcome:<outcome_id>` (`projection.py`), behind
 the session, Host and Origin guards like every route. It runs on the event loop, as the capture does.
 
-**The schema, `outcome-projection/v1`:**
+**The schema, `outcome-projection/v1`.** Two fields that are easy to confuse are kept apart and named so:
+`lineageVerdict` is about the references (do the outcome's objective, statements and tasks resolve, and what is
+uncertain), and each attempt's `executionStatus` is about what the dispatcher's records show it did.
 
 | Key | What |
 |---|---|
 | `format`, `outcome` | `outcome-projection/v1`; the outcome reference |
-| `verdict` | `failed` when an objective, statement (`message`, `conversation`) or task (`work`, archived ones included) reference does not resolve; else `incomplete` when the lineage carries an uncertainty; else `complete`. An attempt node's lineage resolution is never asked here (its authority is the Agent Server: `RESOLVER_NOT_CONFIGURED`), so that uncertainty does not count: the attempt's state is the dispatcher's records |
+| `lineageVerdict` | `failed` when an objective, statement (`message`, `conversation`) or task (`work`, archived ones included) reference does not resolve; else `incomplete` when `lineageUncertainties` holds anything; else `complete`. It is never `complete` while the outcome has an attempt: an attempt node's lineage resolution is never asked here (`RESOLVER_NOT_CONFIGURED`), and a fixture-bound attempt adds `FIXTURE_AUTHORITY` (R11). U-06.1's item 8 is judged from the dispatcher-side trace in its run record (R6; PB-5), never from this verdict |
+| `lineageUncertainties` | The lineage's own uncertainties, unfiltered, and one `fixture-authority` (`FIXTURE_AUTHORITY`) per fixture-bound attempt node |
 | `objective`, `statements`, `designs` | The lineage nodes of those roles, as `lineage-projection/v1` has them |
-| `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts, and `execution`: its latest attempt's status and code (by ordinal); `pending` `NO_ATTEMPT` when the store was read and holds none; `unknown` `STORE_UNAVAILABLE` when it could not be read |
-| `attempts` | Per attempt: its ids, `status`, `code`, `detail` and `shownBy` (the record, its state and its last event that decided it); `authority` (`shown`: `live`, `fixture` or `unknown`, and its code); `result` and `evidence` (below); the records it read |
+| `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts in reservation order, and `execution`: its latest attempt's execution status and code. The latest is the last reserved, by the typed attempt's reservation event (the store's `attempt_event.event_id`, an `INTEGER PRIMARY KEY` of an append-only table, so monotonic), never by ordinal: ordinals restart per work item, design revision and stage. `pending` `NO_ATTEMPT` when the store was read and holds none; `unknown` `STORE_UNAVAILABLE` when it could not be read |
+| `attempts` | Per attempt: its ids and `reservedEventId`; `executionStatus`, `executionCode`, `detail` and `shownBy` (the record, its state and its last event that decided it), and where a row says so `cause`, `end`, `stops`, `disclosed` (records beside a published result) or `restoredRow` (the row a restore epoch made unproven); `authority` (`shown`: `live`, `fixture` or `unknown`; `bound`: the pinned allowlist's declaration, or none; its code); `result` and `evidence` (below); every record of the attempt it read |
 | `failures` | Each unresolved objective, statement or task reference: role, kind, outcome, code |
-| `uncertainties` | The lineage's, but for the attempt nodes' `RESOLVER_NOT_CONFIGURED` |
 | `coverage` | Always present: `{"archivedTasksEnumerable": false, "code": "ARCHIVED_TASKS_NOT_ENUMERABLE", "basis": "Backlog.md 1.55.3 task list --json", "detail": ...}` |
-| `sources`, `lineage` | The traversal's sources and whether the integration store was read; the whole `lineage-projection/v1` |
+| `sources`, `lineage` | The traversal's sources, whether the integration store was read and whether a restore epoch is open; the whole `lineage-projection/v1`, its own verdict and uncertainties included |
 
 Refusals, each changing nothing: `OUTCOME_INVALID` (400: not an outcome id, or a pinned one), and 503 for
 `PROJECTION_PROJECT_UNCONFIGURED`, `PROJECTION_CONFIG_INVALID` (`components.owner_host`, read as the capture reads
@@ -360,14 +362,26 @@ records do not determine is `unknown`, never a guess. Each status names the reco
 typed attempt `attempt/v1/<...>` (its state and its transitions' details) and, under `dispatch/attempt/<attempt id>/`:
 the turn journal `turn`, the launch receipt `launch`, the result step's receipts `delivery`, `pull` and `intake`, the
 result journal `result` (its confirmed detail is the result receipt, `result-receipt/v1`), the end journal `end` (its
-confirmed detail is the end record, `attempt-end/v1`) and the stop receipts `stop/<kind>/<code>`.
+confirmed detail is the end record, `attempt-end/v1`) and the stop receipts `stop/<kind>/<code>`. Every other record
+of the attempt (`auth-cause`, `end-cause`, `escalation`, `inference-grant`, `inference-revocation/<n>`, ...) is kept
+whole under its full key and label-checked; it decides no row.
 
-The rows are read in order, and the first that matches decides. Two changes from the table first written (`73d9e9f`):
-the unreadable-record row is read right after the authority row, not last; and among the failed rows of a confirmed
-attempt the launch receipt is read before the stops and the end, because the gate's `not-launched` causes the end that
-follows it. Rows 5 to 7 against row 10 are unchanged: a published attempt writes no end and no stop record (the result
-path refuses an ended or stopped attempt, the end refuses a result handed on, and `EndToEnd` reads every record of a
-published run: `turn`, `launch`, `delivery`, `pull`, `intake` and `result`).
+The rows are read in order, and the first that matches decides. Changes from the table first written (`73d9e9f`):
+the unreadable-record row is read right after the authority row; a published result (row 5) is read before the
+launch's not-launched, the stops and the end, which are disclosed beside it (`disclosed`), because a published result
+is an observed effect (the review's ruling 7: a stop recorded after it does not unpublish it; the writers refuse a
+result after an end or a stop, and an end after a result handed on, so only a later stop can stand beside one);
+among the failed rows the launch's not-launched is read before the stops and the end it causes; and a result-step
+receipt left `unknown` or `failed` is `unknown` (row 16).
+
+**Absence after a restore is not "not sent"** (decision 0004 point 7; the review's ruling 1). While a restore epoch
+is open (`IntegrationStore.open_epochs`), every `pending` or `running` row rests on the absence of a later record that
+the restored history cannot prove: it is `unknown`, with the row's own code and the suffix `_UNPROVEN`
+(`ATTEMPT_RESERVED_UNPROVEN`, `CREATE_SENT_UNPROVEN`, `TURN_SENT_UNPROVEN`, `MESSAGE_RESERVED_UNPROVEN`,
+`LAUNCHED_UNPROVEN`, `CREATED_UNPROVEN`, ...; `restoredRow` names the row). `recover` holds a reserved turn inside an
+epoch as `TURN_RESERVED_UNPROVEN` in its report only (it records no hold), so the projection applies the same
+condition, the open epoch, and shows `MESSAGE_RESERVED_UNPROVEN`. Outside an epoch the absence rows keep their status,
+and their detail states only what is recorded ("no create is recorded"), never that something was not sent.
 
 | # | Records | Status | Code |
 |---|---|---|---|
@@ -375,41 +389,50 @@ published run: `turn`, `launch`, `delivery`, `pull`, `intake` and `result`).
 | 0 | Fixture-bound, and a record the writers label lacks `authority: fixture` | `unknown` | `ATTEMPT_LABEL_MISSING` |
 | 0 | Fixture-bound, and a record carries another label | `unknown` | `ATTEMPT_LABEL_MISMATCH` |
 | 0 | Live-bound, and a record carries a label | `unknown` | `ATTEMPT_LABEL_ON_LIVE` |
-| 0b | A record of a kind the table reads in a state or format it does not name, or not strict JSON | `unknown` | `RECORD_UNREADABLE` |
-| 1 | Typed attempt `reserved`: no create sent | `pending` | `ATTEMPT_RESERVED` |
-| 2 | Typed attempt `dispatched`: the create sent, its answer not recorded | `running` | `CREATE_SENT` |
+| 0b | A record in a state the store does not name, not strict JSON, or of a kind the table reads in another format (a confirmed result or end journal without its receipt or record included) | `unknown` | `RECORD_UNREADABLE` |
+| 1 | Typed attempt `reserved`: no create is recorded | `pending` | `ATTEMPT_RESERVED` |
+| 2 | Typed attempt `dispatched`: the create is recorded sent, its answer is not | `running` | `CREATE_SENT` |
 | 3 | Typed attempt `unknown`: the create's answer lost (E-01.4.1 settles it) | `unknown` | `CREATE_OUTCOME_UNKNOWN` |
 | 4 | Typed attempt `failed`: a refused create, an admission or seam refusal, a reconciled 404 (the failed move's code in `cause`) | `failed` | `ATTEMPT_FAILED` |
-| 5 | Confirmed, and the launch receipt's verdict is `not-launched` (the gate) | `failed` | `LAUNCH_NOT_LAUNCHED` |
-| 6 | Confirmed, and a stop receipt is confirmed (decision 0024 point 7) | `failed` | `ATTEMPT_STOPPED` |
-| 7 | Confirmed, and the end record is written (its trigger, classification, causes and the conversation's execution status the dispatcher surfaced: an `error`, `stuck` or `paused` turn ends here, decision 0024 point 7.5) | `failed` | `ATTEMPT_ENDED` |
-| 8 | Confirmed, and the end journal is `unknown` | `unknown` | `ATTEMPT_END_UNSETTLED` |
-| 9 | Confirmed, and the end journal is `reserved` or `dispatched` | `running` | `ATTEMPT_ENDING` |
-| 10 | Confirmed, and the result journal is `confirmed` with its result receipt | `succeeded` | `RESULT_PUBLISHED` |
+| 5 | Confirmed, and the result journal is `confirmed` with its result receipt (any launch not-launched, stop or end disclosed beside it) | `succeeded` | `RESULT_PUBLISHED` |
+| 6 | Confirmed, and the launch receipt's verdict is `not-launched` (the gate) | `failed` | `LAUNCH_NOT_LAUNCHED` |
+| 7 | Confirmed, and a stop receipt is confirmed (decision 0024 point 7) | `failed` | `ATTEMPT_STOPPED` |
+| 8 | Confirmed, and the end record is written (its trigger, classification, causes and the conversation's execution status the dispatcher surfaced: an `error`, `stuck` or `paused` turn ends here, decision 0024 point 7.5) | `failed` | `ATTEMPT_ENDED` |
+| 9 | Confirmed, and the end journal is `unknown` | `unknown` | `ATTEMPT_END_UNSETTLED` |
+| 10 | Confirmed, and the end journal is `reserved` or `dispatched` | `running` | `ATTEMPT_ENDING` |
 | 11 | Confirmed, and the result journal is `failed` (its code, for example `RESULT_EMPTY_CHANGE`) | `failed` | `RESULT_FAILED` |
 | 12 | Confirmed, and the result journal is `unknown`: a write refused or its answer lost | `unknown` | `RESULT_WRITE_UNSETTLED` |
 | 13 | Confirmed, and the result journal is `dispatched` | `running` | `RESULT_PUBLISHING` |
-| 14 | Confirmed, and the result journal is `reserved`, or an intake receipt exists: the host verified the result, nothing is published | `running` | `RESULT_VERIFIED` |
-| 15 | Confirmed, and a pull or delivery receipt exists: the result is reported, not yet verified | `running` | `RESULT_DELIVERED` |
-| 16 | Confirmed, and the turn journal is `unknown`: the message's answer lost | `unknown` | `TURN_OUTCOME_UNKNOWN` |
-| 17 | Confirmed, and the turn journal is `failed` (refused, or the run did not start) | `failed` | `TURN_FAILED` |
-| 18 | Confirmed, and the turn journal is `confirmed` (the message delivered) or `dispatched` (being sent) | `running` | `TURN_SENT`, `MESSAGE_SENDING` |
-| 19 | Confirmed, and the turn journal is `reserved`, or the launch receipt says `launched`, or nothing follows the create | `pending` | `MESSAGE_RESERVED`, `LAUNCHED`, `CREATED` |
+| 14 | Confirmed, and the result journal is `reserved`: the host verified the result, no publication is recorded | `running` | `RESULT_VERIFIED` |
+| 15 | Confirmed, and an intake, pull or delivery receipt is recorded (read in that order): verified (intake), or reported and not verified (pull, delivery) | `running` | `RESULT_VERIFIED`, `RESULT_DELIVERED` |
+| 16 | Confirmed, and that receipt is `unknown` or `failed` (a restore sweep's, for example) | `unknown` | `RESULT_RECEIPT_UNSETTLED` |
+| 17 | Confirmed, and the turn journal is `unknown`: the message's answer lost | `unknown` | `TURN_OUTCOME_UNKNOWN` |
+| 18 | Confirmed, and the turn journal is `failed` (refused, or the run did not start) | `failed` | `TURN_FAILED` |
+| 19 | Confirmed, and the turn journal is `confirmed` (recorded delivered) or `dispatched` (recorded being sent) | `running` | `TURN_SENT`, `MESSAGE_SENDING` |
+| 20 | Confirmed, and the turn journal is `reserved`, or the launch receipt says `launched`, or no later record | `pending` | `MESSAGE_RESERVED`, `LAUNCHED`, `CREATED` |
 
 **R11's labels (row 0).** The bound authority is read by `bound_authority.py` from the reservation's pinned route
 allowlist. The dispatcher's own reader (`dispatch_inputs.attempt_authority`) lives beside the Agent Server client,
-which the Integration process may not load (R2), so this one reads the same records in the same order, and
-`tests/test_bound_authority.py` pins it to `attempt_authority` and `bound_label` case by case. **The known
-divergence:** the dispatcher validates the whole admission policy before it reads the pin, this reader only the pin.
-A record whose other admission values are invalid while its digests hold is bound here and refused there. The
-dispatcher cannot reserve such a record (admission runs before the reservation, and the record is bound by its
-digests); `Divergence` shows the difference on one built for it. The labels are read where E-01.8's writers put
-them: the top-level `authority` of each `turn`, `launch`, `delivery`, `pull`, `intake`, `end` and stop record's
-intent; `result.authority` of the result journal's intent; the result receipt and the end record; and every
+which the Integration process may not load (R2), so this one reads the same records in the same order.
+`tests/test_bound_authority.py` compares the two, and `bound_label`, on each case of its list (the checked-in
+profiles; the declarations; a drifted, missing, non-object and duplicate-key allowlist; each defect of the pin; the
+policy's digest, format and profile; records that are not the dispatcher's, an approval of another schema and an
+ordinal that is not an integer among them): what is pinned is that list, not every input. **The known divergence:**
+the dispatcher validates the whole admission policy before it reads the pin, this reader only the pin. A record whose
+other admission values are invalid while its digests hold is bound here and refused there, with each admission code
+but the pin's (`PROFILE_ADMISSION_INVALID` for a missing cap, `RUNTIME_NOT_DOCKER`, `ROUTE_NOT_ALLOWLISTED`,
+`WORKING_DIR_NOT_ALLOWED`, `CAPS_ABOVE_CEILING`, `MOUNT_POLICY_INVALID`: `Divergence` shows each); the dispatcher cannot
+reserve such a record (admission runs before the reservation, and the record is bound by its digests). The pin's own
+defects are refused by both (`PROFILE_ADMISSION_INVALID`, `BINDING_ADMISSION_INVALID`). The labels are read where
+E-01.8's writers put them: the top-level `authority` of each `turn`, `launch`, `delivery`, `pull`, `intake`, `end`
+and stop record's intent; the intake's `record.authority` too (the verified result's own record); `result.authority`
+of the result journal's intent, and a top-level one if present; the result receipt and the end record; and every
 transition of the typed attempt after its reservation. On a fixture-bound attempt each of those must carry
-`fixture`; on a live-bound one none may carry a label. Other records of the attempt (the engineering manager's
-`auth-cause`, `end-cause` and `escalation`, a brokered grant's journals) are written without one by design and must
-only not carry another. A fixture-answered attempt that passes is shown `fixture`, never `live`.
+`fixture`; on a live-bound one no record may carry a label anywhere, a transition's detail included. Every other
+record of the attempt is written without one by design (the engineering manager's `auth-cause`, `end-cause` and
+`escalation`, a brokered grant's journals) and must only not carry another. A fixture-answered attempt that passes is
+shown `fixture`, never `live`. Since this slice's review, a `not-launched` launch receipt whose admitted values could
+not be read carries the bound authority as well (`launch_gate.py`, a writer gap of E-01.8; live receipts unchanged).
 
 **Reported and verified are kept apart.** `succeeded` comes only from the result receipt: the host computed the
 commit itself over the pulled bundle (the intake) and read the branch and the draft pull request back (the result
@@ -430,7 +453,7 @@ each named by its digest, and the receipt holds nothing more.
 included, and an unresolved one is a failure. Backlog.md 1.55.3's `task list --json` does not list an archived task,
 and no read command enumerates one (observed 2026-11-17 in a throwaway project: no `task list` option, status, search
 or label filter lists it), so a task archived with no attempt citing the outcome is not reached. That limit is the
-`coverage` field, on every projection; it is not a lineage uncertainty and does not by itself change the verdict (the
+`coverage` field, on every projection; it is not a lineage uncertainty and does not by itself change the lineage verdict (the
 engineering manager's ruling on U-04.1). An attempt's task is always reached, archived or not, through the reservation
 that cites the outcome. A known hazard of the pin, shown by a test and not fixed: `task delete` releases an archived
 task's id and the next task takes it, so a reference to the deleted task resolves to the later one (a work reference

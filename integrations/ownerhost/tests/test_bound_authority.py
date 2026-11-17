@@ -182,11 +182,45 @@ class Equivalence(TA.Bound):
                                        'sha256': hashlib.sha256(raw).hexdigest()}
         key, _ = self.reserved(profile, 3)
         self.agree('allowlist not an object', self.store, key, profile.read_artifact, 'BINDING_ALLOWLIST_INVALID')
+        # pinned bytes with a duplicate key: strict JSON on both sides
+        profile = Profile(self.work / 'file-duplicate', {'authority': 'fixture', 'kind': 'loopback-fixture'})
+        raw = b'{"transport": null, "transport": null}\n'
+        (profile.root / 'profiles' / FA.PROFILE / 'agent-server' / 'dup.json').write_bytes(raw)
+        profile.admission['routes'] = {'path': f'profiles/{FA.PROFILE}/agent-server/dup.json',
+                                       'sha256': hashlib.sha256(raw).hexdigest()}
+        key, _ = self.reserved(profile, 4)
+        self.agree('allowlist with a duplicate key', self.store, key, profile.read_artifact,
+                   'BINDING_ALLOWLIST_INVALID')
+
+    def test_the_route_allowlist_pin_s_own_defects(self):
+        """The pin the reader reads: each defect is the dispatcher's PROFILE_ADMISSION_INVALID and the reader's
+        BINDING_ADMISSION_INVALID."""
+        def pinned(**change):
+            def edit(admission):
+                admission['routes'] = {**admission['routes'], **change}
+                return admission
+            return edit
+        cases = [('a pin outside the profile\'s directory', pinned(path='profiles/other/agent-server/routes.json')),
+                 ('a sha256 of another shape', pinned(sha256='A' * 64)),
+                 ('a pin with another key', pinned(extra='x')),
+                 ('a pin naming a device name', pinned(path=f'profiles/{FA.PROFILE}/agent-server/CON.json'))]
+        for n, (name, edit) in enumerate(cases):
+            profile = Profile(self.work / f'pin-{n}', {'authority': 'fixture', 'kind': 'loopback-fixture'},
+                              admission=edit)
+            key, _ = self.reserved(profile, n + 1)
+            self.agree(f'pin: {name}', self.store, key, profile.read_artifact, 'BINDING_ADMISSION_INVALID')
+            self.assertEqual(dispatcher(self.store.get(key), profile.read_artifact),
+                             (None, 'PROFILE_ADMISSION_INVALID'))
 
     def test_a_policy_digest_mismatch_and_a_policy_of_another_profile(self):
         profile = Profile(self.work / 'policy', {'authority': 'fixture', 'kind': 'loopback-fixture'})
         resolved = profile.resolved('TASK-1', change='qual-02', design_commit='a' * 40, outcome_ref=OUTCOME)
+        def other_format(record):
+            policy = {**record['policy_inputs'], 'format': 'ai-engineering-harness/dispatch/policy-inputs/v1'}
+            record.update(policy_inputs=policy,
+                          policy_digest=hashlib.sha256(di._canonical(policy).encode()).hexdigest())
         for n, (name, edit) in enumerate((
+                ('policy of another format', other_format),
                 ('policy digest mismatch', lambda r: r['policy_inputs'].update(extra=1)),
                 ('policy of another profile', lambda r: r.update(
                     policy_inputs={**r['policy_inputs'], 'profile': {'id': 'other', 'sha256': '0' * 64}},
@@ -213,7 +247,12 @@ class Equivalence(TA.Bound):
                 ('a record of another format', di._canonical({**good, di.INTENT_KEY: {
                     **good[di.INTENT_KEY], 'format': 'ai-engineering-harness/dispatch/resolved-inputs/v1'}})),
                 ('a record with an extra key', di._canonical({**good, di.INTENT_KEY: {
-                    **good[di.INTENT_KEY], 'extra': 1}})))):
+                    **good[di.INTENT_KEY], 'extra': 1}})),
+                ('an approval of another schema', di._canonical({**good, di.INTENT_KEY: {
+                    **good[di.INTENT_KEY], 'approval': {**good[di.INTENT_KEY]['approval'],
+                                                       'manifest_schema': 'other'}}})),
+                ('an ordinal that is not an integer', di._canonical({**good, di.INTENT_KEY: {
+                    **good[di.INTENT_KEY], 'ordinal': '1'}})))):
             intent_json = text if text is not None else di._canonical(good)
             digest = '0' * 64 if text is None else di._sha256(intent_json)
             reservation = store_mod.Reservation(f'u41/not/{n}', digest, intent_json, 'c', 'reserved', 'none', 0,
@@ -225,8 +264,42 @@ class Equivalence(TA.Bound):
 class Divergence(TA.Bound):
     """The known divergence, stated in bound_authority.py and the README: the dispatcher validates the whole admission
     policy before it reads the pin, the reader only the pin. A record whose other admission values are invalid while
-    its digests hold is bound by the reader and refused by the dispatcher. The dispatcher cannot reserve such a record
-    (its admission runs before the reservation), so this is built by its constructors for the test only."""
+    its digests hold is bound by the reader and refused by the dispatcher, with each of the admission codes but the
+    pin's (``Equivalence.test_the_route_allowlist_pin_s_own_defects``). The dispatcher cannot reserve such a record
+    (its admission runs before the reservation), so these are built by its constructors for the test only."""
+
+    def test_each_admission_code_beside_the_pin_is_the_dispatcher_s_alone(self):
+        work = Path(tempfile.mkdtemp(prefix='u41-div-'))
+        self.addCleanup(shutil.rmtree, work, True)
+
+        def setting(path, value):
+            def edit(admission):
+                held = admission
+                for part in path[:-1]:
+                    held = held[part]
+                if value is ABSENT:
+                    del held[path[-1]]
+                else:
+                    held[path[-1]] = value
+                return admission
+            return edit
+        cases = [('PROFILE_ADMISSION_INVALID', setting(('caps', 'pids_limit'), ABSENT)),
+                 ('RUNTIME_NOT_DOCKER', setting(('runtime',), {'conversation_runtime': 'process', 'selectable': False})),
+                 ('ROUTE_NOT_ALLOWLISTED', setting(('route',), {'method': 'POST', 'path': '/api/other'})),
+                 ('WORKING_DIR_NOT_ALLOWED', setting(('workspace',), {'category': 'workspaces',
+                                                                      'working_dir': '/elsewhere'})),
+                 ('CAPS_ABOVE_CEILING', setting(('caps', 'memory'), '999g')),
+                 ('MOUNT_POLICY_INVALID', setting(('mounts', 'forbidden_sources'), []))]
+        self.assertEqual(sorted(code for code, _ in cases), sorted(ADMISSION_CODES))
+        for n, (code, edit) in enumerate(cases):
+            with self.subTest(code=code):
+                profile = Profile(work / str(n), {'authority': 'fixture', 'kind': 'loopback-fixture'}, admission=edit)
+                resolved = profile.resolved(f'TASK-{n + 1}', change='qual-02', design_commit='a' * 40,
+                                            outcome_ref=OUTCOME)
+                self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor=ACTOR)
+                reservation = self.store.get(resolved.attempt_identity().operation_key)
+                self.assertEqual(dispatcher(reservation, profile.read_artifact), (None, code))
+                self.assertEqual(reader(reservation, profile.read_artifact), ('fixture', None))
 
     def test_caps_above_the_ceilings_are_the_dispatcher_s_refusal_and_not_the_reader_s(self):
         work = Path(tempfile.mkdtemp(prefix='u41-div-'))

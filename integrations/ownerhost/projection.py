@@ -23,7 +23,7 @@ stable code and its authority is shown as neither (``unknown``).
 
 **Failures and coverage.** An unresolved objective, statement (``message``, ``conversation``) or task (``work``,
 archived ones included: Backlog.md's ``task view`` reads an archived task) reference is a failure, and the
-projection's verdict is ``failed``. Backlog.md 1.55.3's ``task list`` cannot enumerate archived tasks, so a task
+projection's lineage verdict is ``failed``. Backlog.md 1.55.3's ``task list`` cannot enumerate archived tasks, so a task
 archived with no attempt citing the outcome is not reached: the projection says so in its ``coverage`` field, always.
 
 Read-only throughout: the integration store and the Owner conversation store are opened read-only (SQLite
@@ -101,7 +101,12 @@ CODES = (*AUTHORITY_CODES, 'RECORD_UNREADABLE', 'ATTEMPT_RESERVED', 'CREATE_SENT
          'ATTEMPT_FAILED', 'LAUNCH_NOT_LAUNCHED', 'ATTEMPT_STOPPED', 'ATTEMPT_ENDED', 'ATTEMPT_END_UNSETTLED',
          'ATTEMPT_ENDING', 'RESULT_PUBLISHED', 'RESULT_FAILED', 'RESULT_WRITE_UNSETTLED', 'RESULT_PUBLISHING',
          'RESULT_VERIFIED', 'RESULT_DELIVERED', 'TURN_OUTCOME_UNKNOWN', 'TURN_FAILED', 'TURN_SENT', 'MESSAGE_SENDING',
-         'MESSAGE_RESERVED', 'LAUNCHED', 'CREATED', 'NO_ATTEMPT', 'STORE_UNAVAILABLE')
+         'MESSAGE_RESERVED', 'LAUNCHED', 'CREATED', 'NO_ATTEMPT', 'STORE_UNAVAILABLE', 'RESULT_RECEIPT_UNSETTLED')
+# While a restore epoch is open (decision 0004 point 7), a pending or running row rests on the absence of a later record
+# that the restored history cannot prove: it is unknown, its code the row's own with this suffix (ATTEMPT_RESERVED ->
+# ATTEMPT_RESERVED_UNPROVEN, MESSAGE_RESERVED -> MESSAGE_RESERVED_UNPROVEN, CREATED -> CREATED_UNPROVEN, ...).
+UNPROVEN = '_UNPROVEN'
+FIXTURE_AUTHORITY = 'FIXTURE_AUTHORITY'
 
 # The coverage limit (the engineering manager's ruling 4, as ruled on the STOP): stated on every projection.
 BACKLOG_PIN = 'Backlog.md 1.55.3'
@@ -112,7 +117,6 @@ COVERAGE = {'archivedTasksEnumerable': False, 'code': 'ARCHIVED_TASKS_NOT_ENUMER
                       'cite the outcome or its design) or when an attempt reservation cites it and the outcome, '
                       'archived or not: a task archived with no attempt citing the outcome is not shown.'}
 FAILURE_ROLES = ('objective', 'statement', 'work')
-UNCONFIGURED = 'RESOLVER_NOT_CONFIGURED'
 
 
 def _sha256(text: str) -> str:
@@ -167,18 +171,29 @@ class Record:
 
 
 def records_of(rows, events_of, attempt_id: str) -> dict:
-    """{kind: Record} of the attempt ATTEMPT_ID's records among ROWS (``stop`` holds a list)."""
+    """{kind: Record} of the attempt ATTEMPT_ID's records among ROWS, for the kinds the table reads (one each: their
+    key is ``dispatch/attempt/<id>/<kind>``); ``stop`` holds the stop receipts and ``other`` every other record of the
+    attempt (``auth-cause``, ``inference-revocation/<n>``, ...), each kept whole under its full key suffix, so that
+    no two collide and every one is label-checked."""
     prefix = f'{RECORD_PREFIX}{attempt_id}/'
-    found = {'stop': []}
+    found = {'stop': [], 'other': []}
     for row in rows:
         if row.operation_key.startswith(prefix):
-            kind = row.operation_key[len(prefix):].split('/')[0]
+            suffix = row.operation_key[len(prefix):]
+            kind = suffix.split('/')[0]
             record = Record(row, events_of(row.operation_key), kind)
             if kind == 'stop':
                 found['stop'].append(record)
-            else:
+            elif kind in FORMATS and suffix == kind:
                 found[kind] = record
+            else:
+                found['other'].append(record)
     return found
+
+
+def every(records: dict) -> list:
+    """Every record of RECORDS (``records_of``), the table's kinds first."""
+    return [r for k, r in records.items() if k not in ('stop', 'other')] + records['stop'] + records['other']
 
 
 def _labels_of(record: Record):
@@ -197,6 +212,13 @@ def _labels_of(record: Record):
         carried = False
     if 'authority' in intent and record.kind == 'result':
         found.append((f'{record.key} intent authority', intent['authority']))
+    if record.kind == 'intake':
+        # the verified result's own record (attempt_run.VerifiedResult.to_json) carries the label too
+        nested = intent.get('record') if isinstance(intent.get('record'), dict) else {}
+        if 'authority' in nested:
+            found.append((f'{record.key} intent record.authority', nested['authority']))
+        else:
+            carried = False
     for seq, _id, to, _reason, detail in record.events:
         if isinstance(detail, dict) and 'authority' in detail:
             found.append((f'{record.key} #{seq} {to}', detail['authority']))
@@ -210,7 +232,7 @@ def _labels_of(record: Record):
 def label_rule(bound: str, typed: Record, records: dict):
     """R11 over the attempt's records: (code, detail) when a label disagrees with the binding, else None."""
     found, missing = [], []
-    for record in [typed, *[r for k, r in records.items() if k != 'stop'], *records['stop']]:
+    for record in [typed, *every(records)]:
         labels, carried = _labels_of(record)
         found += labels
         if not carried:
@@ -228,20 +250,35 @@ def label_rule(bound: str, typed: Record, records: dict):
 
 
 def _decide(status, code, shown, detail='', **extra):
-    return {'status': status, 'code': code, 'shownBy': shown, 'detail': detail, **extra}
+    return {'executionStatus': status, 'executionCode': code, 'shownBy': shown, 'detail': detail, **extra}
 
 
-def state_of(typed: Record, records: dict) -> dict:
-    """The state table's rows 1 to 20 (README.md) over the typed attempt and its records."""
-    for record in [typed, *[r for k, r in records.items() if k != 'stop'], *records['stop']]:
+def state_of(typed: Record, records: dict, *, epoch: bool = False) -> dict:
+    """The state table (README.md) over the typed attempt and its records. EPOCH: a restore epoch is open, so a
+    pending or running row, which rests on the absence of a later record, is unknown (``<code>_UNPROVEN``)."""
+    decided = _rows(typed, records)
+    if epoch and decided['executionStatus'] in (PENDING, RUNNING):
+        return {**decided, 'executionStatus': UNKNOWN, 'executionCode': decided['executionCode'] + UNPROVEN,
+                'restoredRow': decided['executionCode'],
+                'detail': 'a restore epoch is open: the restored history proves nothing about what followed '
+                          f'({decided["detail"]})'}
+    return decided
+
+
+def _unsettled(record: Record):
+    return record.state in ('unknown', 'failed')
+
+
+def _rows(typed: Record, records: dict) -> dict:
+    for record in [typed, *every(records)]:
         problem = record.problem()
         if problem:
             return _decide(UNKNOWN, 'RECORD_UNREADABLE', record.shown(), problem)
     state = typed.state
     if state == 'reserved':
-        return _decide(PENDING, 'ATTEMPT_RESERVED', typed.shown(), 'reserved: no create was sent')
+        return _decide(PENDING, 'ATTEMPT_RESERVED', typed.shown(), 'reserved: no create is recorded')
     if state == 'dispatched':
-        return _decide(RUNNING, 'CREATE_SENT', typed.shown(), 'the create was sent; its answer is not recorded')
+        return _decide(RUNNING, 'CREATE_SENT', typed.shown(), 'the create is recorded sent; its answer is not recorded')
     if state == 'unknown':
         return _decide(UNKNOWN, 'CREATE_OUTCOME_UNKNOWN', typed.shown(), 'the create\'s answer was lost')
     if state == 'failed':
@@ -252,10 +289,17 @@ def state_of(typed: Record, records: dict) -> dict:
     if state != 'confirmed':
         return _decide(UNKNOWN, 'RECORD_UNREADABLE', typed.shown(), f'the typed attempt is {state!r}')
     launch, end, result = records.get('launch'), records.get('end'), records.get('result')
-    if launch is not None and launch.state == 'confirmed' and launch.intent.get('verdict') == NOT_LAUNCHED:
+    not_launched = launch is not None and launch.state == 'confirmed' and launch.intent.get('verdict') == NOT_LAUNCHED
+    stops = [r for r in records['stop'] if r.state == 'confirmed']
+    if result is not None and result.state == 'confirmed':
+        # a published result is an observed effect: whatever is recorded beside it is disclosed, never in its place
+        disclosed = [r.shown() for r in ([launch] if not_launched else []) + stops + ([end] if end else [])]
+        return _decide(SUCCEEDED, 'RESULT_PUBLISHED', result.shown(),
+                       'the host verified the result and read its branch and draft pull request back',
+                       **({'disclosed': disclosed} if disclosed else {}))
+    if not_launched:
         return _decide(FAILED, 'LAUNCH_NOT_LAUNCHED', launch.shown(), 'the launch gate did not launch it',
                        problems=len(launch.intent.get('problems') or ()))
-    stops = [r for r in records['stop'] if r.state == 'confirmed']
     if stops:
         return _decide(FAILED, 'ATTEMPT_STOPPED', stops[0].shown(), 'the dispatcher recorded a stop',
                        stops=[{'kind': r.intent.get('kind'), 'code': r.intent.get('code')} for r in stops])
@@ -273,9 +317,6 @@ def state_of(typed: Record, records: dict) -> dict:
             return _decide(RUNNING, 'ATTEMPT_ENDING', end.shown(), 'the attempt is being ended')
         return _decide(UNKNOWN, 'RECORD_UNREADABLE', end.shown(), f'the end journal is {end.state}')
     if result is not None:
-        if result.state == 'confirmed':
-            return _decide(SUCCEEDED, 'RESULT_PUBLISHED', result.shown(),
-                           'the host verified the result and read its branch and draft pull request back')
         if result.state == 'failed':
             detail = result.detail('failed')
             code = detail.get('code') if isinstance(detail, dict) else None
@@ -285,14 +326,20 @@ def state_of(typed: Record, records: dict) -> dict:
                            'a write of the result path was refused or its answer lost')
         if result.state == 'dispatched':
             return _decide(RUNNING, 'RESULT_PUBLISHING', result.shown(), 'the result is being published')
-        return _decide(RUNNING, 'RESULT_VERIFIED', result.shown(), 'the host verified the result; nothing is published')
-    if records.get('intake') is not None:
-        return _decide(RUNNING, 'RESULT_VERIFIED', records['intake'].shown(),
-                       'the host verified the result; nothing is published')
-    for kind in ('pull', 'delivery'):
-        if records.get(kind) is not None:
-            return _decide(RUNNING, 'RESULT_DELIVERED', records[kind].shown(),
-                           'the result is delivered (reported), not yet verified by the host')
+        return _decide(RUNNING, 'RESULT_VERIFIED', result.shown(),
+                       'the host verified the result; no publication is recorded')
+    for kind in ('intake', 'pull', 'delivery'):
+        receipt = records.get(kind)
+        if receipt is None:
+            continue
+        if _unsettled(receipt):
+            return _decide(UNKNOWN, 'RESULT_RECEIPT_UNSETTLED', receipt.shown(),
+                           f'the {kind} receipt is {receipt.state}: what the result step did is not recorded')
+        if kind == 'intake':
+            return _decide(RUNNING, 'RESULT_VERIFIED', receipt.shown(),
+                           'the host verified the result; no publication is recorded')
+        return _decide(RUNNING, 'RESULT_DELIVERED', receipt.shown(),
+                       'the result is recorded delivered (reported), not verified by the host')
     turn = records.get('turn')
     if turn is not None:
         if turn.state == 'unknown':
@@ -301,13 +348,16 @@ def state_of(typed: Record, records: dict) -> dict:
             return _decide(FAILED, 'TURN_FAILED', turn.shown(), f'the message failed ({turn.events[-1][3]})',
                            cause=turn.events[-1][3])
         if turn.state == 'confirmed':
-            return _decide(RUNNING, 'TURN_SENT', turn.shown(), 'the message was delivered; no result is recorded')
+            return _decide(RUNNING, 'TURN_SENT', turn.shown(),
+                           'the message is recorded delivered; no result is recorded')
         if turn.state == 'dispatched':
-            return _decide(RUNNING, 'MESSAGE_SENDING', turn.shown(), 'the message is being sent')
-        return _decide(PENDING, 'MESSAGE_RESERVED', turn.shown(), 'the message is not sent')
+            return _decide(RUNNING, 'MESSAGE_SENDING', turn.shown(),
+                           'the message is recorded being sent; its answer is not recorded')
+        return _decide(PENDING, 'MESSAGE_RESERVED', turn.shown(),
+                       'the turn journal is reserved; no message is recorded sent')
     if launch is not None and launch.state == 'confirmed' and launch.intent.get('verdict') == LAUNCHED:
-        return _decide(PENDING, 'LAUNCHED', launch.shown(), 'launched; the message is not sent')
-    return _decide(PENDING, 'CREATED', typed.shown(), 'the conversation is created; nothing is sent')
+        return _decide(PENDING, 'LAUNCHED', launch.shown(), 'launched; no message is recorded')
+    return _decide(PENDING, 'CREATED', typed.shown(), 'the create is recorded answered; no later record')
 
 
 def _digest(value) -> dict | None:
@@ -369,7 +419,7 @@ def evidence_of(records: dict) -> dict | None:
     }
 
 
-def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=None) -> dict:
+def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=None, epoch: bool = False) -> dict:
     """The typed status of the attempt RESERVATION from its records among ROWS (EVENTS_OF answers a key's
     transitions), with its authority, its result's claims and its evidence."""
     key = reservation.operation_key
@@ -380,24 +430,25 @@ def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=N
             'executionRef': f'{EXECUTION_REF_PREFIX}{conversation}',
             'workId': identity.work_id if identity else None, 'stage': identity.stage if identity else None,
             'ordinal': identity.ordinal if identity else None,
-            'records': sorted([r.key for k, r in records.items() if k != 'stop'] + [r.key for r in records['stop']])}
-    decided = state_of(typed, records)
+            'reservedEventId': typed.events[0][1] if typed.events else None,
+            'records': sorted(r.key for r in every(records))}
+    decided = state_of(typed, records, epoch=epoch)
     try:
         bound = binding.bound_authority(reservation, read_artifact)
     except binding.Unbound as exc:
         bound, unbound = None, exc
     if bound is None:
-        view['authority'] = {'shown': UNKNOWN, 'code': 'ATTEMPT_AUTHORITY_UNBOUND', 'reason': unbound.code,
-                             'detail': unbound.detail}
-        if decided['status'] != FAILED or decided['code'] != 'ATTEMPT_FAILED':
+        view['authority'] = {'shown': UNKNOWN, 'bound': None, 'code': 'ATTEMPT_AUTHORITY_UNBOUND',
+                             'reason': unbound.code, 'detail': unbound.detail}
+        if decided['executionStatus'] != FAILED or decided['executionCode'] != 'ATTEMPT_FAILED':
             # a failed attempt stays failed (nothing it did can be shown as live or fixture); anything else is unknown
             decided = _decide(UNKNOWN, 'ATTEMPT_AUTHORITY_UNBOUND', typed.shown(), unbound.detail)
     else:
         broken = label_rule(bound, typed, records)
         if broken is None:
-            view['authority'] = {'shown': bound, 'code': None}
+            view['authority'] = {'shown': bound, 'bound': bound, 'code': None}
         else:
-            view['authority'] = {'shown': UNKNOWN, 'code': broken[0], 'detail': broken[1]}
+            view['authority'] = {'shown': UNKNOWN, 'bound': bound, 'code': broken[0], 'detail': broken[1]}
             decided = _decide(UNKNOWN, broken[0], typed.shown(), broken[1])
     view.update(decided)
     view['result'] = result_of(records)
@@ -405,8 +456,18 @@ def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=N
     return view
 
 
-def _no_events(_key):
-    return []
+def latest(views: list):
+    """The latest of an attempt list by the store's own reservation order (the typed attempt's reservation event, whose
+    id the store assigns monotonically), never by ordinal: ordinals restart per work item, design revision and stage."""
+    ordered = sorted(views, key=lambda v: (v['reservedEventId'] is not None, v['reservedEventId'] or 0,
+                                           v['operationKey']))
+    return ordered[-1] if ordered else None
+
+
+def open_epochs(held) -> list:
+    """The store's restore epochs without a closure (``IntegrationStore.open_epochs``, read on the read-only view's
+    own connection)."""
+    return held._store.open_epochs()
 
 
 def project(outcome, *, project, backlog, store, conversations, read_artifact=None) -> dict:
@@ -418,7 +479,7 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
     lineage = trace_mod.trace(root, trace_mod.Authorities(registry), project=project, backlog=backlog, store=store)
     executed = [(e['from'], e['to'], p.get('operation_key')) for e in lineage['edges']
                 if e['relation'] == trace_mod.EXECUTED_BY for p in e['provenance']]
-    attempts, store_read, why = {}, False, None
+    attempts, store_read, why, epoch = {}, False, None, False
     if store is not None:
         try:
             with R.ReadOnlyIntegrationStore(store) as held:
@@ -430,12 +491,13 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
                     if key not in cache:
                         cache[key] = held.events(key)
                     return cache[key]
+                epoch = bool(open_epochs(held))
                 for _task, _node, key in executed:
                     if key in by_key and key not in attempts:
                         typed = held.attempt_identity(key)
                         attempts[key] = attempt_view(by_key[key], rows, events_of,
                                                      identity=typed.identity if typed else None,
-                                                     read_artifact=read_artifact)
+                                                     read_artifact=read_artifact, epoch=epoch)
                 store_read = True
         except (store_mod.StoreError, sqlite3.Error, OSError) as exc:
             why = f'{type(exc).__name__}: {exc}'
@@ -445,11 +507,11 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
     tasks = []
     for node in sorted((n for n in lineage['nodes'] if n['role'] == 'work'), key=lambda n: n['reference']):
         keys = [key for task, _n, key in executed if task == node['reference'] and key in attempts]
-        views = sorted((attempts[k] for k in dict.fromkeys(keys)),
-                       key=lambda v: (v['ordinal'] if v['ordinal'] is not None else -1, v['operationKey']))
-        if views:
-            latest = views[-1]
-            execution = {'status': latest['status'], 'code': latest['code'], 'attempt': latest['operationKey']}
+        views = [attempts[k] for k in dict.fromkeys(keys)]
+        last = latest(views)
+        if last is not None:
+            execution = {'status': last['executionStatus'], 'code': last['executionCode'],
+                         'attempt': last['operationKey']}
         elif store_read:
             execution = {'status': PENDING, 'code': 'NO_ATTEMPT', 'attempt': None}
         else:
@@ -460,28 +522,36 @@ def project(outcome, *, project, backlog, store, conversations, read_artifact=No
                       'code': node['resolution']['code'],
                       'reachedThrough': 'attempt' if reached and all(r == trace_mod.STORE_RECORD for r in reached)
                       else 'listing',
-                      'attempts': [v['operationKey'] for v in views], 'execution': execution})
+                      'attempts': [v['operationKey'] for v in sorted(views, key=lambda v: v['reservedEventId'] or 0)],
+                      'execution': execution})
     failures = [{'reference': n['reference'], 'role': n['role'], 'kind': n['kind'],
                  'outcome': n['resolution']['outcome'], 'code': n['resolution']['code'],
                  'detail': n['resolution']['detail']}
                 for n in lineage['nodes'] if n['role'] in FAILURE_ROLES and n['resolution']['outcome'] != L.RESOLVED]
-    attempt_nodes = {n['reference'] for n in lineage['nodes'] if n['role'] == 'attempt'}
-    # the attempt kind's authority is the Agent Server, which this process never asks: an attempt node is unresolved
-    # here by construction (RESOLVER_NOT_CONFIGURED), and its state is the dispatcher's records above
-    open_ = [u for u in lineage['uncertainties']
-             if not (u['reference'] in attempt_nodes and u['code'] == UNCONFIGURED)]
-    verdict = 'failed' if failures else 'incomplete' if open_ else 'complete'
+    # The lineage's own uncertainties, unfiltered: an attempt node is unresolved here by construction (its authority is
+    # the Agent Server, which this process never asks: RESOLVER_NOT_CONFIGURED), and stays so. Every attempt node whose
+    # attempt is bound to the fixture adds the fixture-authority uncertainty (R11: a projection that used a fixture is
+    # never complete). U-06.1's item 8 is judged from the dispatcher-side trace in its run record (R6, PB-5).
+    uncertainties = list(lineage['uncertainties'])
+    for view in sorted(attempts.values(), key=lambda v: v['executionRef']):
+        if view['authority'].get('bound') == FIXTURE:
+            uncertainties.append({'reference': view['executionRef'], 'reason': 'fixture-authority',
+                                  'code': FIXTURE_AUTHORITY,
+                                  'detail': 'the attempt is bound to the fixture authority by its pinned route '
+                                            'allowlist: no live authority was asked'})
+    lineage_verdict = 'failed' if failures else 'incomplete' if uncertainties else 'complete'
     return {
-        'format': FORMAT, 'outcome': root.text, 'verdict': verdict,
+        'format': FORMAT, 'outcome': root.text, 'lineageVerdict': lineage_verdict,
         'objective': nodes.get(root.text),
         'statements': [n for n in lineage['nodes'] if n['role'] == 'statement'],
         'designs': [n for n in lineage['nodes'] if n['role'] == 'design'],
         'tasks': tasks,
         'attempts': [attempts[k] for k in sorted(attempts)],
         'failures': failures,
-        'uncertainties': open_,
+        'lineageUncertainties': uncertainties,
         'coverage': dict(COVERAGE),
-        'sources': {**lineage['sources'], 'integrationStore': 'read' if store_read else why},
+        'sources': {**lineage['sources'], 'integrationStore': 'read' if store_read else why,
+                    'restoreEpochOpen': epoch},
         'lineage': lineage,
     }
 

@@ -2022,7 +2022,9 @@ from the dispatcher's own records in the integration store, never from an agent'
 Agent Server; the result receipt joined as evidence by reference and digest; the bound authority of
 each attempt read from its pinned route allowlist by a transport-free reader pinned to the
 dispatcher's; an unresolved objective, statement or task reference a failure; and a `coverage` field
-stating that the pinned Backlog.md cannot enumerate archived tasks. Read-only: both stores opened
+stating that the pinned Backlog.md cannot enumerate archived tasks. Its `lineageVerdict` is the references'
+(never `complete` while an attempt is projected), kept apart from each attempt's `executionStatus`; while a
+restore epoch is open, a status resting on the absence of a later record is `unknown` (`<code>_UNPROVEN`). Read-only: both stores opened
 read-only, Backlog.md asked `task list` and `task view` only, no process of its own, no socket.
 Refusals: `OUTCOME_INVALID` (400), `PROJECTION_PROJECT_UNCONFIGURED`, `PROJECTION_CONFIG_INVALID`,
 `PROJECTION_STORE_UNCONFIGURED`, `PROJECTION_BACKLOG_UNAVAILABLE` (503). Built 2026-11-17 (U-04.1, its
