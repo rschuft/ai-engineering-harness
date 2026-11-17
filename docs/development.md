@@ -1913,17 +1913,23 @@ the layout only (`CAPTURE_LAYOUT_INVALID`), reserves the write-ahead receipt
 `owner-ui/intent-capture/v1/<thread>/<message>` in the managed integration store and makes one
 commit in the project repository that adds `openspec/changes/<change>/` (an `intent-record/v1`
 proposal whose Original Quote is the whole message under its span anchor, the Owner's items exact
-spans of it, a suggestion a hypothesis; and `.openspec.yaml`). It is idempotent by message id: a
-receipt left by an interrupted capture is settled by reading the repository before anything is
-written again. The project repository's path and id, the Backlog.md command and each principal's
+spans of it, a suggestion a hypothesis; and `.openspec.yaml`). It is idempotent by message id: the
+receipt records the commit id before the branch moves, a confirmed receipt answers only the
+project, change and message it was made for, and a receipt left by an interrupted capture is
+settled by reading every local branch, through every parent, before anything is written again (a
+recorded commit no branch reaches is `CAPTURE_COMMIT_UNREACHABLE`, writing nothing). The project
+repository is never the harness's own checkout (`CAPTURE_PROJECT_IS_HARNESS`). A capture runs on
+the server's event loop, so it blocks the process's other routes while it runs. The project repository's path and id, the Backlog.md command and each principal's
 git identity are `components.owner_host` of `config.yml` (`example_config.yml`), which `service.py`
 reads and passes to the server.
 
 **Commit attribution.** The commissioning user is the author and the committer of the commits
 the harness makes on that user's behalf: the capture commits under the user's own git identity,
 configured explicitly per principal (`components.owner_host.git_identities`; never read from git
-configuration or the environment, never inferred, no default), and refuses without one
-(`COMMIT_IDENTITY_UNAVAILABLE`, `_INVALID`, `_PLACEHOLDER`), writing nothing. Agents get no git
+configuration or the environment, never inferred, no default), looked up by the principal of the
+authenticated session (`session_principal`), and refuses without one or with a placeholder
+(`COMMIT_IDENTITY_UNAVAILABLE`, `_INVALID`, `_PLACEHOLDER`: RFC 2606 names, local-network
+names, IP literals and single labels included), writing nothing. Agents get no git
 identities: provenance lives in the intent record (`normalized_by`), the lineage and the evidence.
 Decision 0024's result commit keeps its own rule. `write_commit` of the repository-access module
 takes an optional `author` beside the committer `identity` (one identity when it is not given).

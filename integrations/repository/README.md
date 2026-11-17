@@ -57,7 +57,7 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 | `clone(url, destination, credential=None)` | `git clone --bare` | F-10.6. Module function. |
 | `push(url, refspec, credential=None)` | `git push <url> <refspec>` | F-10.6. Returns `RefUpdate(name, old, new)`. |
 | `client_hooks()` | | The first client hook git would run (`core.hooksPath`, or a non-sample file under `hooks/`), or `None`; `push` and `write_commit` refuse when there is one. |
-| `write_commit(files, message, *, identity, expected_head, when=None, check=None)` | writing the files, then `git commit --only -- <paths>` | P-04.1 (decision 0014's `commit` write). See [Commits](#commits-p-041). Returns the new commit id. |
+| `write_commit(files, message, *, identity, expected_head, when=None, check=None, author=None)` | writing the files, then `git commit --only -- <paths>` | P-04.1 (decision 0014's `commit` write). See [Commits](#commits-p-041). Returns the new commit id. |
 
 Paths and names are `str`; the repository's bytes are decoded as UTF-8 (undecodable bytes with
 `surrogateescape`).
@@ -357,13 +357,14 @@ Dulwich's pool manager. At every Dulwich or urllib3 pin change, `test_repository
 
 ## Commits (P-04.1)
 
-`write_commit(files, message, *, identity, expected_head, when=None, check=None)` is the module's
+`write_commit(files, message, *, identity, expected_head, when=None, check=None, author=None)` is the module's
 one write to a repository's history (decision 0014 sections 6 and 8: "writes (`commit`) are added by
-the leaves that first need them"; the acceptance recorder, `integrations/owner/`, is the first and
-only caller). `files` maps repository-relative paths to bytes (regular, non-executable files, added
-or replaced). It answers as writing the files and running `git commit --only -- <paths>` with author
-and committer `identity` (`Name <email>`) at `when` (seconds, offset; now when `None`), except that
-no hook runs:
+the leaves that first need them"; the acceptance recorder, `integrations/owner/`, is the first
+caller, and the Owner host's capture, `integrations/ownerhost/capture.py` (P-01.3), the second). `files` maps repository-relative paths to bytes (regular, non-executable files, added
+or replaced). It answers as writing the files and running `git commit --only -- <paths>` with committer
+`identity` (`Name <email>`) and author `author` (`Name <email>`; `identity` when `None`, so that
+author and committer are one) at `when` (seconds, offset; now when `None`), except that no hook
+runs:
 
 - **Refused before anything is written:** `HOOKS_UNSUPPORTED` when the repository has a client
   hook (git would run `pre-commit` and `commit-msg`); `COMMIT_REFUSED` when HEAD is not a branch
