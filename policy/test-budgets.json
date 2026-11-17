@@ -32,10 +32,10 @@
  },
  "suites": {
   "tools": {
-   "tests": 1684,
+   "tests": 1685,
    "launches": 310,
    "mkdtemp": 949,
-   "wall_s": 112.7
+   "wall_s": 113.0
   },
   "store": {
    "tests": 88,
@@ -122,10 +122,10 @@
    "wall_s": 94.1
   },
   "agentfixture": {
-   "tests": 94,
+   "tests": 104,
    "launches": 55,
-   "mkdtemp": 58,
-   "wall_s": 27.8
+   "mkdtemp": 59,
+   "wall_s": 28.4
   }
  },
  "categories": {
@@ -295,6 +295,18 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at 8b33a23 (U-04.1's last review round: the restore-crossing rule, the lineage store's epoch read, and E-01.8's gate defect test in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture",
+    "tools"
+   ],
+   "revision": "fd92c21fef96b572d16e3a20dccb8095e2432dcb",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at fd92c21 (U-01.2: c289951's census test, the UI face's bootstrap answers, the real-browser driver and its gated G5 test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]

@@ -700,6 +700,7 @@
     "test_guest.HostCensus.test_loopback_listeners_pass",
     "test_guest.HostCensus.test_non_loopback_listener_fails",
     "test_guest.HostCensus.test_refused_cmdlets_are_unknown",
+    "test_guest.HostCensus.test_the_standalone_agent_canvas_server_port_is_censused_by_port",
     "test_guest.HostKeys.test_fingerprints_only_then_keyscan",
     "test_guest.HostKeys.test_incomplete_blocks_wait",
     "test_guest.HostKeys.test_key_not_vouched_refused",
@@ -3536,6 +3537,14 @@
   },
   "agentfixture": {
    "tests": [
+    "test_browser_cdp.Block.test_off_loopback_and_escaped_read_the_network_log",
+    "test_browser_cdp.Block.test_only_http_and_ws_to_127_0_0_1_and_hostless_urls_go_through",
+    "test_browser_cdp.Block.test_the_probe_is_a_request_the_block_must_stop",
+    "test_browser_cdp.CommandLine.test_headless_quiet_a_loopback_debugger_and_the_dead_proxy_for_everything_but_127_0_0_1",
+    "test_browser_cdp.CommandLine.test_the_browser_is_chrome_or_edge_from_program_files_or_the_named_one",
+    "test_browser_cdp.Profile.test_the_profile_must_be_new_or_empty",
+    "test_canvas_browser.GateG5.test_g5_with_the_content_security_policy_option",
+    "test_canvas_browser.GateG5.test_g5_without_the_content_security_policy",
     "test_catalog.Answers.test_each_answer_validates_against_the_catalogs_model_schemas",
     "test_catalog.Answers.test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served",
     "test_catalog.Answers.test_the_ui_statuses_are_only_those_a_live_run_reaches",
@@ -3619,6 +3628,8 @@
     "test_served.Robustness.test_a_body_that_parses_but_is_nested_deep_is_a_labelled_400_and_changes_nothing",
     "test_served.Robustness.test_a_long_core_call_runs_off_the_event_loop",
     "test_served.Running.test_the_ui_face_runs_for_its_own_reads_while_the_dispatchers_face_is_finished",
+    "test_served.Settings.test_the_server_info_the_ui_face_serves_carries_the_observed_version",
+    "test_served.Settings.test_the_ui_face_answers_settings_with_its_key_only_and_names_the_source_derived_fields",
     "test_served.Socket.test_a_socket_outside_the_catalog_is_refused_with_the_label",
     "test_served.Socket.test_an_inbound_message_is_refused_and_changes_nothing",
     "test_served.Socket.test_authentication_as_the_pinned_server_refuses_it",
@@ -3632,6 +3643,8 @@
     "test_served.Validated.test_a_valid_create_is_answered_201_and_an_invalid_one_never"
    ],
    "skipped": [
+    "test_canvas_browser.GateG5.test_g5_with_the_content_security_policy_option",
+    "test_canvas_browser.GateG5.test_g5_without_the_content_security_policy",
     "test_catalog.Answers.test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served",
     "test_catalog.Routes.test_g4_each_routes_presence_in_the_locked_document_is_as_recorded",
     "test_dispatch.Dispatched.test_a_live_provider_is_refused_and_the_attempt_is_never_recorded_as_live",
