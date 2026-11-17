@@ -830,6 +830,16 @@ class Restore(Base):
         self.restore(backup)
         self.assertStatus(self.view(), 'unknown', 'ATTEMPT_RESERVED_UNPROVEN')
 
+    def test_a_running_row_inside_an_epoch_is_unknown_too(self):
+        """TURN_SENT rests on the absence of a result record, which the restored history cannot prove either."""
+        result = self.fixture_attempt()
+        self.turn(result)
+        backup = self.store.backup(actor='owner')
+        self.restore(backup)
+        view = self.view(result.operation_key)
+        self.assertStatus(view, 'unknown', 'TURN_SENT_UNPROVEN')
+        self.assertEqual(view['restoredRow'], 'TURN_SENT')
+
     def test_launched_inside_an_epoch(self):
         result, ended, _, _ = self.go(observe=at_phase('before-message'), publish=False)
         backup = self.store.backup(actor='owner')
