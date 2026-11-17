@@ -49,9 +49,24 @@ hex by the admission's own rule (``dispatch_inputs._binds_for``). Each inspect i
 length of the call log at that moment), not in ``calls``: it is not a request to the Agent Server.
 
 SEED's answer is derived by running the harness's own ``integrations/dispatch/attempt_run.py`` ``SEED_SCRIPT`` (the
-script the production path sends, compared with it exactly) over the request's payload in a scratch directory, with no
-visible window (the shared no-window helper); its output's line ends are the guest's (``\\n``). Its 200 is served only
-for the script's exit 0: no record observes a 200 with another exit, so any other exit is refused with the label.
+script the production path sends, compared with it exactly; read from that file's source as data, so that the served
+fixture's process loads no dispatch module) over the request's payload in a scratch directory, with no visible window
+(the shared no-window helper); its output's line ends are the guest's (``\\n``). Its 200 is served only for the
+script's exit 0: no record observes a 200 with another exit, so any other exit is refused with the label.
+
+**RESULT** (E-01.7, ``result.py``): the harness's own ``RESULT_SCRIPT`` over D1's base and D1's recorded file changes,
+answered only when every input that determines its answer is pinned (``result.py``'s docstring); otherwise refused
+with the label. A command with an exchange delivery (``deliver``) is refused as before: the delivery is E-01.8's seam.
+
+**The UI face** (E-01.7, ``ui_answer`` and ``ui_session``): the read-only face a conversation's own server shows to
+the Owner UI and Agent Canvas (``GET /server_info``, ``GET /api/conversations/{id}``, ``GET .../events/search`` and the
+session socket's frames). Its answers are the ``served`` section's entries; every field the committed evidence does
+not observe is source-derived from the pinned upstream source, only in the statuses idle, running and finished, and
+named in the answer's label (``sourceDerived``). Its conversation status follows the dispatcher's face (idle until the
+message, then finished), except in the running scenario (``ui_running_reads``): there it is running for that many of
+the UI face's own conversation reads after the message, then finished. The two faces can then diverge in time: the
+dispatcher's face never serves a non-terminal status after the message (no record observes one), while the UI face
+may (source-derived). No value of the UI face is read by the dispatch path.
 Standard library only.
 """
 from __future__ import annotations
@@ -105,6 +120,17 @@ def _no_window():
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         sys.modules['aieh_no_window'] = module
+    return module
+
+
+def _result():
+    """integrations/agentfixture/result.py (RESULT's answer), loaded by path once per process."""
+    module = sys.modules.get('aieh_agentfixture_result')
+    if module is None:
+        spec = importlib.util.spec_from_file_location('aieh_agentfixture_result', HERE / 'result.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_agentfixture_result'] = module
     return module
 
 
@@ -399,12 +425,15 @@ class AgentServerCore:
     """The dispatcher's face of the Agent Server, answered from the catalog by route and state (the module
     docstring). ``transport(method, path, body, **kwargs)``-callable, as the dispatch path's transport is."""
 
-    def __init__(self, catalog: dict | None = None, *, scratch: Path | None = None):
+    def __init__(self, catalog: dict | None = None, *, scratch: Path | None = None, ui_running_reads: int = 0):
         self.catalog = load_catalog() if catalog is None else catalog
-        self.answers = self.catalog['answers']
-        self.served = {(row['answer'], path) for row in self.catalog['provenance'] if row['served']
-                       for path in field_paths(row['field'])}
+        served = self.catalog.get('served') or {}
+        self.answers = {**self.catalog['answers'], **(served.get('answers') or {})}
+        self.served = {(row['answer'], path) for row in self.catalog['provenance'] + (served.get('provenance') or [])
+                       if row['served'] for path in field_paths(row['field'])}
+        self.ui_running_reads = ui_running_reads
         self.calls: list[tuple[str, str, Any]] = []
+        self.ui_calls: list[tuple[str, str]] = []
         self.inspected: list[tuple[int, Any]] = []
         self.conversations: dict[str, dict] = {}
         self._scratch, self._own_scratch = (Path(scratch) if scratch is not None else None), False
@@ -437,7 +466,8 @@ class AgentServerCore:
     def _served_key(self, answer: str, key) -> bool:
         """Whether the catalog serves body field KEY of ANSWER, or a field inside it."""
         path = f'body.{key}'
-        return any(a == answer and (p == path or p.startswith(path + '.') or p.startswith(path + '[]'))
+        return any(a == answer and (p == path or p.startswith(path + '.') or p.startswith(path + '[]')
+                                    or p.startswith(path + '#'))
                    for a, p in self.served)
 
     def made(self, answer: str, status: int | None, body=None, *, has_body: bool = True, has_status: bool = True,
@@ -506,7 +536,8 @@ class AgentServerCore:
             served.update(copy.deepcopy(entry['equalRequest']))         # F-04.2's fixture request, another id
             if body == observed:
                 served.update(copy.deepcopy(entry['ownRequest']))      # F-04.2's own request
-        self.conversations[cid] = {'execution_status': 'idle', 'events': [], 'runtime': 'available'}
+        self.conversations[cid] = {'execution_status': 'idle', 'events': [], 'runtime': 'available',
+                                   'create': {k: copy.deepcopy(v) for k, v in body.items() if k != 'secrets'}}
         return self.made('create-new', entry['status'], served)
 
     def on_count(self):
@@ -607,15 +638,20 @@ class AgentServerCore:
         if not isinstance(body, dict) or set(body) != {'command', 'cwd', 'timeout'} or body['cwd'] != '/workspace' \
                 or type(body['timeout']) is not int or not 0 < body['timeout'] <= SEED_TIMEOUT_MAX_S \
                 or not isinstance(body['command'], str):
+            if isinstance(body, dict) and isinstance(body.get('command'), str) \
+                    and _result().RESULT_RE.fullmatch(body['command']):
+                return self.on_result(cid, held, body)
             return self.refuse('a command that is not the harness\'s SEED command')
         match = SEED_RE.fullmatch(body['command'])
-        if match is None or match.group(2) != _attempt_run().SEED_SCRIPT:
+        if match is None or match.group(2) != _result().pinned_script('SEED_SCRIPT'):
+            if _result().RESULT_RE.fullmatch(body['command']):
+                return self.on_result(cid, held, body)
             return self.refuse('a command that is not the harness\'s SEED command')
         if held.get('seeded'):
             return self.refuse('a second SEED on the conversation: no observation')
-        held['seeded'] = True
         payload, _, repository, digest = match.groups()
         where = self.scratch() / cid
+        held['seeded'] = {'repository': repository, 'path': str(where / repository)}
         where.mkdir(parents=True, exist_ok=True)
         done = subprocess.run([PYTHON, '-I', '-c', match.group(2), str(where / repository), digest],
                               input=payload.encode('ascii'), capture_output=True, timeout=body['timeout'],
@@ -624,3 +660,109 @@ class AgentServerCore:
             return self.refuse(f'a SEED whose exit is {done.returncode}: no record observes its answer')
         stdout = done.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
         return self.made('seed', self.answers['seed']['status'], {'stdout': stdout, 'exit_code': done.returncode})
+
+    # -- RESULT: the harness's own script over D1's base and recorded changes (result.py) -------------------------
+    def on_result(self, cid, held, body):
+        """The RESULT command's answer (E-01.7, result.py), or the label's refusal naming why."""
+        result = _result()
+        try:
+            stdout = result.answer(self.scratch() / cid, held, body, python=PYTHON)
+        except result.NotAnswered as refusal:
+            return self.refuse(str(refusal))
+        return self.made('result', self.answers['result']['status'], {'stdout': stdout,
+                                                                      'exit_code': self.answers['result']['exit_code']})
+
+    # -- the UI face (E-01.7): read only, its unobserved fields source-derived and named in the label -------------
+    def ui_label(self, answer: str, derived: list[str], **extra) -> dict:
+        return {**self.catalog['label'], 'answer': answer, 'face': 'ui', 'sourceDerived': derived, **extra}
+
+    def ui_made(self, answer: str, status: int | None, body, derived: list[str]) -> dict:
+        made = self.made(answer, status, body, has_status=status is not None)
+        made['fixture'] = self.ui_label(answer, derived)
+        return made
+
+    def ui_answer(self, method, path, body=None):
+        """The UI face's answer to one HTTP request (its path prefix removed): read only, from the served entries."""
+        self.ui_calls.append((method, path))
+        if not isinstance(method, str) or not isinstance(path, str):
+            return self.refuse('not a request')
+        route, _, query = path.partition('?')
+        if method != 'GET':
+            return self.refuse(f'{method} {route}: the UI face is read only')
+        if route == '/server_info' and not query:
+            entry = self.answers['ui-server-info']
+            return self.ui_made('ui-server-info', entry['status'], copy.deepcopy(entry['body']), ['status'])
+        found = re.fullmatch(r'/api/conversations/([^/]+)(/events/search)?', route)
+        if found is None or CONVERSATION_ID_RE.fullmatch(found.group(1)) is None or query:
+            return self.refuse(f'{method} {path}: not in the UI face\'s catalog')
+        held = self._held(found.group(1))
+        if held is None:
+            return self.refuse('a conversation the server does not hold: no class answers it on the UI face')
+        if found.group(2):
+            entry = self.answers['ui-events']
+            return self.ui_made('ui-events', entry['status'], {'items': self.ui_events(held),
+                                                               'next_page_id': entry['next_page_id']},
+                                ['status', 'body.items', 'body.next_page_id'])
+        return self.on_ui_conversation(found.group(1), held)
+
+    def ui_status(self, held) -> str:
+        """idle until the message; then finished, or, in the running scenario, running for ui_running_reads of the UI
+        face's own conversation reads first (call count, never a clock)."""
+        if not held.get('events'):
+            return 'idle'
+        reads = held['ui_reads'] = held.get('ui_reads', 0) + 1
+        return 'running' if reads <= self.ui_running_reads else 'finished'
+
+    def on_ui_conversation(self, cid, held):
+        settings = held.get('create', {}).get('agent_settings')
+        workspace = held.get('create', {}).get('workspace')
+        command = settings.get('acp_command') if isinstance(settings, dict) else None
+        if not isinstance(settings, dict) or settings.get('agent_kind') != 'acp' or not isinstance(command, list) \
+                or not command or not all(isinstance(c, str) and c for c in command) \
+                or command[0] in ('npx', 'npx.cmd') or not isinstance(workspace, dict) \
+                or workspace.get('kind') != 'LocalWorkspace' or not isinstance(workspace.get('working_dir'), str):
+            return self.refuse('a conversation whose agent or workspace the pinned source does not determine')
+        entry = self.answers['ui-conversation']
+        body = {'id': cid, 'workspace': {'kind': 'LocalWorkspace', 'working_dir': workspace['working_dir']},
+                'agent': {'kind': 'ACPAgent', 'acp_command': list(command)}, 'execution_status': self.ui_status(held),
+                'title': entry['title'], 'tags': copy.deepcopy(entry['tags'])}
+        return self.ui_made('ui-conversation', entry['status'], body,
+                            ['status', 'body.workspace', 'body.agent', 'body.execution_status'])
+
+    def ui_events(self, held) -> list:
+        """The conversation's events as the UI face shows them: the received message's event (source-derived)."""
+        events = []
+        for event in held.get('events') or []:
+            texts = [part['text'] for part in event['llm_message']['content']]
+            events.append({'kind': 'MessageEvent', 'source': 'user',
+                           'llm_message': {'role': 'user', 'content': [{'type': 'text', 'text': t} for t in texts]}})
+        return events
+
+    def ui_session(self, conversation_id, after_seq):
+        """The session socket's frames on the UI face, as the pinned server sends them at connect: one ``sync`` frame,
+        then, when history is asked for (``after_seq`` given), a ``durable`` frame for each event above it. A
+        conversation the server does not hold is refused (None, the reason)."""
+        self.ui_calls.append(('WEBSOCKET', f'/sockets/session/{conversation_id}'))
+        held = self._held(conversation_id) if isinstance(conversation_id, str) else None
+        if held is None:
+            return None, 'a conversation the server does not hold: no class answers it on the UI face'
+        events = self.ui_events(held)
+        through = len(events) - 1 if events else None
+        frames = [self.ui_made('ui-sync', None, {'type': 'sync', 'from_seq': after_seq, 'through_seq': through},
+                               ['body.type', 'body.through_seq'])]
+        if after_seq is not None and through is not None:
+            for seq, event in enumerate(events):
+                if seq > after_seq:
+                    frames.append(self.ui_made('ui-durable', None, {'type': 'durable', 'seq': seq, 'event': event},
+                                               ['body.type', 'body.seq', 'body.event']))
+        return frames, None
+
+    def unauthorized(self, face: str) -> dict:
+        """The refusal of a key-gated request with no key or a wrong one (S-01.3.1 section 3.4; on the UI face,
+        E-01.3.3 step (4))."""
+        name = 'unauthorized' if face == 'dispatcher' else 'ui-unauthorized'
+        entry = self.answers[name]
+        made = self.made(name, entry['status'], copy.deepcopy(entry['body']))
+        if face != 'dispatcher':
+            made['fixture'] = self.ui_label(name, [])
+        return made

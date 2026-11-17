@@ -30,6 +30,7 @@ testpaths = [
     "integrations/inference/tests",
     "integrations/conversation/tests",
     "integrations/ownerhost/tests",
+    "integrations/agentfixture/tests",
 ]
 # What `python -m unittest discover` collects: unittest.TestCase classes in test*.py modules,
 # nothing else (no plain test functions or classes).

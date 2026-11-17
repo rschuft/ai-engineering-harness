@@ -101,7 +101,7 @@ tasks:
       - '{{.PYTHON}} -I -B tools/run_tests.py {{.CLI_ARGS}}'
 
   test:serial:
-    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run, one after another, the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the Owner decision recorder tests (owner:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test), the repository-access contract tests (repository:test), the inference broker tests (inference:test), the Owner conversation store tests (conversation:test) and the Integration process tests (ownerhost:test)"
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run, one after another, the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the Owner decision recorder tests (owner:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test), the repository-access contract tests (repository:test), the inference broker tests (inference:test), the Owner conversation store tests (conversation:test), the Integration process tests (ownerhost:test) and the served Agent Server fixture's conformance tests (agentfixture:test)"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -122,6 +122,7 @@ tasks:
       - task: inference:test
       - task: conversation:test
       - task: ownerhost:test
+      - task: agentfixture:test
 
   # Test profile and test check (plan leaf F-09.1; docs/development.md#testing), under the python-tools
   # interpreter, as test runs the suites (plan leaf F-10.2). test:budget is an acceptance obligation:
@@ -562,6 +563,18 @@ tasks:
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/ownerhost/tests -v'
+
+  # The served Agent Server fixture (plan leaf E-01.7; decision 0026, Proposed): its conformance tests. The tests that
+  # send a create through the listener need the locked release openapi.json, never committed (decision 0005): they
+  # run when AIEH_LOCKED_OPENAPI names it (its sha256 checked) and are skipped, saying so, otherwise.
+  agentfixture:test:
+    desc: "Run the served Agent Server fixture's conformance tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/agentfixture/tests -v): its provenance table bound to the catalog and the proof's rules on every row; every served route in the pinned route inventory; each answer validated; the two faces, the label, the refusals, the session socket, the scenarios and their transport events over a real 127.0.0.1 listener; the listener's own census (127.0.0.1 only, no client module); RESULT and gate G7 (the commit by decision 0024 point 4.4's rule, and the real script's through a real shell)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/agentfixture/tests -v'
 
   ownerhost:up:
     desc: "Start the Integration process: a supervisor holding a kill-on-close Job Object and the server inside it, on 127.0.0.1:13310 only; refuses a running environment and a held port; waits until it listens (<tools python> -I -B integrations/ownerhost/service.py up; plan leaf U-01.3, decision 0025)"

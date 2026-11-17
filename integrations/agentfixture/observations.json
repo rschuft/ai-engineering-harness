@@ -1834,7 +1834,7 @@
         "answer": "result",
         "field": "`delivered`",
         "class": "none",
-        "citation": "not served: the exchange delivery is E-01.8's seam (the I1 design's R13); over the listener the whole result path is proven at E-01.8",
+        "citation": "not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13); the production parser (`attempt_run.parse_result`) reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8",
         "determinedBy": "",
         "read": false,
         "readBy": [],
@@ -1862,7 +1862,11 @@
         "determinedBy": "a key-gated route (every route of the face but `GET /server_info`) with no key or a key not the face's; in the failed scenario every key",
         "read": true,
         "readBy": [
-          "dispatch_inputs.create_receipt"
+          "dispatch_inputs._dispatch",
+          "dispatch_inputs.create_receipt",
+          "reconcile._lookup",
+          "reconcile.verdict_of",
+          "restart_recovery._lookup_reserved"
         ],
         "served": true,
         "marks": ""
@@ -1870,12 +1874,15 @@
       {
         "face": "dispatcher",
         "answer": "unauthorized",
-        "field": "`body.detail`",
+        "field": "`body`, `body.detail`",
         "class": "observation",
-        "citation": "S-01.3.1 §3.4",
+        "citation": "S-01.3.1 §3.4 (`{\"detail\": \"Unauthorized\"}`)",
         "determinedBy": "as `status`",
-        "read": false,
-        "readBy": [],
+        "read": true,
+        "readBy": [
+          "dispatch_inputs.create_receipt",
+          "reconcile.verdict_of"
+        ],
         "served": true,
         "marks": ""
       },

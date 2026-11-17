@@ -295,6 +295,7 @@ turn between the two, and record its events too (E-01.6 observes it).
 | `GET .../runtime` | held | `runtime` |
 | `DELETE .../runtime` | held, runtime `available` | `runtime-stop` (runtime now `missing`) |
 | `POST .../bash/execute_bash_command` | the harness's SEED command, the conversation held and not yet seeded, the script's exit `0` | `seed` (another exit: `refusal`) |
+| `POST .../bash/execute_bash_command` | the harness's RESULT command, after SEED and the finished turn, over D1's base and recorded changes (`result.py`; E-01.7) | `result` (else `refusal`) |
 | `POST .../events` | the message tail, the conversation held, no message yet | `message` (the `message-event` recorded; status `finished`; no turn runs) |
 | `GET .../events/search` | held, no query | `events` |
 | (not a route) `container_inspect(id)` | held, runtime `available` | `container-inspect` (else `refusal`) |
@@ -477,6 +478,28 @@ class admits and the dispatch path does not read is listed not served (the seed 
 absence alone is not a validation failure. The validation that needs the locked document runs when its path is given
 (`AIEH_LOCKED_OPENAPI`, sha256-checked); the catalog's own schemas are checked in every run.
 
+### The dispatch suite against the served core, and the read binding over the listener
+
+`integrations/dispatch/tests/read_binding_runner.py --served` runs a dispatch test module, unmodified, with every
+request a test sends to a core (`AgentServerCore.__call__`) carried over HTTP to the listener serving that same core
+(in a thread of the runner's process), through `transport.py`; the read record sits at the fixture transport's answer
+boundary. A request no wire carries (a keyword argument: the exchange delivery) stays in process, where the core
+refuses it as before. `test_read_binding.ServedReadBinding` (E-01.7's extension of the read-binding test) runs every
+module so, the restart matrix again in the `failed` scenario, and RESULT's answer read by the production parser
+(`attempt_run.parse_result`, as the resumed result step calls it), and requires:
+
+- the only failing tests are the three restart-matrix rows that settle a turn from the event log (J, J' and K): the
+  listener refuses the event search whose answer would hold the source-derived `message-event`, as the proof
+  requires; every other test of the dispatch suite passes against the served core;
+- every read is of a row marked read, served and not clock-valued (the judge of E-01.4.2's binding, over the core's
+  rows and the served rows); RESULT's `body.stdout` is one text whose marker lines are its rows;
+- each served row marked read is read, by exactly the dispatch functions its Read column names.
+
+One read is listed apart and not judged: the production parser reads RESULT's `delivered` (absent) on the answer, a
+key the exchange delivery adds, not a field of the Agent Server's answer. The delivery is E-01.8's seam; until it
+exists that read sees nothing. The binding needs the locked document (the listener validates every create), so it
+runs when `AIEH_LOCKED_OPENAPI` is given and is skipped otherwise, saying so.
+
 ## The served fixture's provenance table
 
 The listener's additions to the catalog (`observations.json` `served`), one row per field, with the face that serves
@@ -493,10 +516,10 @@ lines).
 | dispatcher | `result` | `body.stdout#test-output` | observation | D1 §5 (8) and §2 (Tests in RESULT: output 114 bytes, sha256 `432e7641…7754`), the bytes as D1 §12's Owner report shows them (the report's sha256 `4c2e6826…c338` checked) | D1's test command over D1's base outside `openspec/` and `backlog/` and D1's changes (planning's PB-7); served only when the script's own run of it passed | yes: `attempt_run.parse_result` | yes |  |
 | dispatcher | `result` | `body.stdout#frame` | pinned-rule | `integrations/dispatch/attempt_run.py` `RESULT_SCRIPT` (the frame it prints when the command asks for the exchange delivery) | the command's `frame` parameter | no | yes |  |
 | dispatcher | `result` | `body.stderr`, `body.command_id`, `body.kind`, `body.id`, `body.timestamp`, `body.order` | none | not served: no committed observation of its value, and not read; `BashOutput` requires `command_id` and `kind` (`as:openhands/agent_server/models.py:669-687`), listed here (the dispatcher's-face clause) |  | no | no |  |
-| dispatcher | `result` | `delivered` | none | not served: the exchange delivery is E-01.8's seam (the I1 design's R13); over the listener the whole result path is proven at E-01.8 |  | no | no |  |
+| dispatcher | `result` | `delivered` | none | not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13); the production parser (`attempt_run.parse_result`) reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8 |  | no | no |  |
 | dispatcher | `result` | `fixture` | label | the fixture's label |  | no | yes |  |
-| dispatcher | `unauthorized` | `status` | observation | S-01.3.1 §3.4 (`401 {"detail": "Unauthorized"}`, a key-gated HTTP route with no key or a wrong key); E-01.3.3 §8.3 step (4), PASS live at §9.1 (a key the outer server does not hold, the runtime credential, answered 401 on its key-gated routes) | a key-gated route (every route of the face but `GET /server_info`) with no key or a key not the face's; in the failed scenario every key | yes: `dispatch_inputs.create_receipt` | yes |  |
-| dispatcher | `unauthorized` | `body.detail` | observation | S-01.3.1 §3.4 | as `status` | no | yes |  |
+| dispatcher | `unauthorized` | `status` | observation | S-01.3.1 §3.4 (`401 {"detail": "Unauthorized"}`, a key-gated HTTP route with no key or a wrong key); E-01.3.3 §8.3 step (4), PASS live at §9.1 (a key the outer server does not hold, the runtime credential, answered 401 on its key-gated routes) | a key-gated route (every route of the face but `GET /server_info`) with no key or a key not the face's; in the failed scenario every key | yes: `dispatch_inputs._dispatch`, `dispatch_inputs.create_receipt`, `reconcile._lookup`, `reconcile.verdict_of`, `restart_recovery._lookup_reserved` | yes |  |
+| dispatcher | `unauthorized` | `body`, `body.detail` | observation | S-01.3.1 §3.4 (`{"detail": "Unauthorized"}`) | as `status` | yes: `dispatch_inputs.create_receipt`, `reconcile.verdict_of` | yes |  |
 | dispatcher | `unauthorized` | `fixture` | label | the fixture's label |  | no | yes |  |
 | ui | `ui-server-info` | `status` | source-derived | `as:openhands/agent_server/server_details_router.py:184-192` (the public route answers `ServerInfo`) | the route (no input) | no | yes | source-derived |
 | ui | `ui-server-info` | `body.uptime`, `body.idle_time` | observation | F-04.1c §3 | the clock | no | yes | clock-valued |

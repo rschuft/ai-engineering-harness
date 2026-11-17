@@ -235,5 +235,162 @@ class Judge(unittest.TestCase):
                     self.assertEqual([v.get('violation') for v in violations], ['OPAQUE_READ'])
 
 
+# ---------------------------------------------------------------------------
+# E-01.7's extension: the same binding over the served fixture's listener
+
+SERVED_EXPECTED_FAILURES = {
+    # each needs the dispatcher face's source-derived entry (message-event), which the listener refuses to serve:
+    # answered in process only, for E-01.4.2's restart matrix (E-01.7's proof)
+    'test_restart_matrix.Rows.test_j_dies_with_the_turn_dispatched_its_message_received',
+    'test_restart_matrix.Rows.test_j_prime_as_j_then_a_restore',
+    'test_restart_matrix.Rows.test_k_the_messages_answer_is_lost_then_a_death',
+}
+TRANSPORT_KEYS = {('result', 'delivered')}     # the exchange delivery's key: E-01.8's seam adds it, never the fixture
+
+
+def locked_openapi():
+    """The locked release openapi.json AIEH_LOCKED_OPENAPI names (never committed: decision 0005), or None."""
+    named = os.environ.get('AIEH_LOCKED_OPENAPI')
+    if not named:
+        return None
+    import hashlib
+    if hashlib.sha256(Path(named).read_bytes()).hexdigest() != CATALOG['served']['lockedOpenapi']['sha256']:
+        raise ValueError(f'{named} is not the locked openapi.json')
+    return named
+
+
+def served_rows_by_path():
+    """The core's rows and the served fixture's (``served.provenance``), by (answer, field path)."""
+    rows = rows_by_path()
+    for row in CATALOG['served']['provenance']:
+        for path in AC.field_paths(row['field']):
+            rows[(row['answer'], path)] = row
+    return rows
+
+
+def composite(reads, rows):
+    """RESULT's ``body.stdout`` is one text whose marker lines are rows of their own (``body.stdout#<line>``): a read
+    of the text reads each of its lines the table marks read."""
+    out = []
+    for read in reads:
+        if (read['answer'], read['path']) == ('result', 'body.stdout'):
+            out += [dict(read, path=path) for (answer, path), row in rows.items()
+                    if answer == 'result' and path.startswith('body.stdout#') and row['read']]
+        else:
+            out.append(read)
+    return out
+
+
+@unittest.skipIf(locked_openapi() is None, 'AIEH_LOCKED_OPENAPI is not given: the listener validates every create '
+                                           'against the locked openapi.json, never committed (decision 0005)')
+class ServedReadBinding(unittest.TestCase):
+    """The dispatch suite, unmodified, against the served core (``read_binding_runner.py --served``: every request a
+    test sends to a core goes over HTTP to the listener serving that core), with the read record at the fixture
+    transport's answer boundary; the failed scenario's refused create over the listener (the restart matrix, its
+    rows failing by design); and RESULT's answer read by the production parser (the resumed result step's own call,
+    ``parse_result(answer, delivered_expected=False)``) in process. The served table's rows marked read are exactly
+    what these read, with their readers."""
+    category = 'integration'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out = Path(tempfile.mkdtemp(prefix='aieh-served-binding-'))
+        names = modules()
+
+        def run(args):
+            name, extra = args
+            target = cls.out / f'{"-".join(extra) or "finished"}-{name}.json'
+            done = subprocess.run([sys.executable, '-I', '-B', str(RUNNER), '--served', *extra, str(target), name],
+                                  cwd=REPO, capture_output=True, timeout=CEILING_S, creationflags=NO_WINDOW,
+                                  env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+            result = json.loads(target.read_text(encoding='utf-8')) if target.is_file() else None
+            return name, extra, done.returncode, result
+        jobs = [(name, []) for name in names] + [('test_restart_matrix.py', ['--scenario', 'failed'])]
+        with ThreadPoolExecutor(WORKERS) as pool:
+            cls.runs = list(pool.map(run, jobs))
+        cls.result_reads = cls.read_a_result()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out, ignore_errors=True)
+
+    @staticmethod
+    def read_a_result():
+        """RESULT answered by the core over a D1-shaped base (agentfixture's G7 fixture), read by the production
+        parser under a read record."""
+        tests = REPO / 'integrations' / 'agentfixture' / 'tests'
+        sys.path.insert(0, str(tests))
+        try:
+            fixture = _load('agentfixture_test_result', tests / 'test_result.py')
+        finally:
+            sys.path.remove(str(tests))
+        case = fixture.D1Shaped('setUp')
+        case.setUp()
+        try:
+            case.seeded()
+            reads = AC.Reads()
+            with AC.recording(reads):
+                answer = case.core('POST', case.path, fixture.result_command(case.base))
+                fixture.AR.parse_result(answer, delivered_expected=False)
+            return {'reads': reads.to_json(), 'readers': reads.readers_json()}
+        finally:
+            case.doCleanups()
+
+    def finished(self):
+        return [result for name, extra, _, result in self.runs if not extra]
+
+    def all_reads(self):
+        results = [result for _, _, _, result in self.runs if result] + [self.result_reads]
+        merged, readers = {}, {}
+        for result in results:
+            for read in result['reads']:
+                held = merged.setdefault((read['answer'], read['path']), dict(read, how=[]))
+                held['present'] = held['present'] or read['present']
+                held['how'] += [how for how in read['how'] if how not in held['how']]
+            for read in result['readers']:
+                readers.setdefault((read['answer'], read['path']), set()).update(read['by'])
+        return list(merged.values()), readers
+
+    def test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses(self):
+        results = self.finished()
+        self.assertEqual(len(results), len(modules()))
+        self.assertTrue(all(result is not None and result['tests'] > 0 for result in results))
+        failures = {test for result in results for test in result['failures']}
+        self.assertEqual(failures, SERVED_EXPECTED_FAILURES)
+        refused = [r for result in results for r in result['refused']]
+        self.assertTrue(any(r['path'].endswith('/events/search') for r in refused))
+        for result in results:
+            for name, text in result['failed'].items():
+                with self.subTest(test=name):
+                    self.assertIn('reconciled-from-events', text, 'a failure only where the event is refused')
+
+    def test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served(self):
+        rows = served_rows_by_path()
+        reads, _ = self.all_reads()
+        transport = [r for r in reads if (r['answer'], r['path']) in TRANSPORT_KEYS]
+        self.assertEqual([(r['answer'], r['path'], r['present']) for r in transport], [('result', 'delivered', False)])
+        judged = composite([r for r in reads if (r['answer'], r['path']) not in TRANSPORT_KEYS], rows)
+        violations, observed, _ = judge(judged, rows)
+        self.assertEqual(violations, [], 'a read of a field not marked read, clock-valued, not served or not listed')
+        observed_rows = {id(rows[key]) for key in observed}
+        for row in CATALOG['served']['provenance']:
+            if row['read']:
+                with self.subTest(answer=row['answer'], field=row['field']):
+                    self.assertIn(id(row), observed_rows, 'a served row marked read that nothing reads')
+
+    def test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it(self):
+        _, readers = self.all_reads()
+        for row in CATALOG['served']['provenance']:
+            if row['read']:
+                with self.subTest(answer=row['answer'], field=row['field']):
+                    found = set()
+                    for path in AC.field_paths(row['field']):
+                        key = (row['answer'], 'body.stdout' if path.startswith('body.stdout#') else path)
+                        found |= readers.get(key, set())
+                    self.assertEqual(set(row['readBy']), {by for by in found if not by.startswith('outside:')})
+                    self.assertTrue(row['served'])
+                    self.assertNotIn('clock-valued', row['marks'])
+
+
 if __name__ == '__main__':
     unittest.main()
