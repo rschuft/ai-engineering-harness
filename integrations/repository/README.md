@@ -23,7 +23,9 @@ policy, for the planning, lineage and dispatch components. Since F-10.4 (decisio
 verifier R6 keeping git), its profile revision and inventory snapshots (R7, R8: `head`, `status`,
 `index_entries`, under `host`), `integrations/gitea/gitea_host.py`'s checkout listing (R9:
 `listing(cached, others, exclude_standard)`, under `host`) and `tools/test_profile.py`'s revision
-stamp (R10, under `host`). Each loads the module by path.
+stamp (R10, under `host`). Since P-01.3 the Owner host's capture
+([`integrations/ownerhost/capture.py`](../ownerhost/README.md#capture-p-013)) commits through
+`write_commit` and settles its receipts through `branches()` and `read`. Each loads the module by path.
 
 ## Use
 
@@ -45,6 +47,7 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 | `blob(commit, path)` | `git cat-file blob <commit>:<path>` | The bytes; `GIT_FAILED` when there is no such blob (as the planning adapter today). |
 | `files(commit, directory)` | `git ls-tree -r -z --name-only <commit> -- <directory>/` | Paths in git's order; `[]` when the directory is absent or not a directory. `directory` is a literal repository-relative path. |
 | `export_tree(commit, subtree, destination)` | blob bytes (section 4) | See [Export](#export). Returns `{'files', 'links', 'directories', 'bytes'}`. |
+| `branches()` | `git for-each-ref --format='%(refname) %(objectname)' refs/heads/` | P-01.3. Every local branch, loose and packed, as `{full reference name: object id}`, through Dulwich's refs container; a symbolic branch answers its target's object, a dangling or broken one is left out, as git does; a linked worktree answers the common directory's branches. The object is not read. Proof: [`tests/test_repository_branches.py`](tests/test_repository_branches.py). |
 | `head()` | `git rev-parse --verify HEAD`, `git symbolic-ref HEAD` | `Head(commit, ref)`: `commit` is `None` on an unborn branch, `ref` `None` when detached. |
 | `full_name(name)` | `git rev-parse --verify --quiet --symbolic-full-name <name>` | F-10.4. The reference NAME resolves to, in git's order (`<name>`, `refs/<name>`, `refs/tags/<name>`, `refs/heads/<name>`, `refs/remotes/<name>`, `refs/remotes/<name>/HEAD`; `@` is HEAD), symbolic references followed to their end (`HEAD` gives `refs/heads/main`). `None` when NAME names no object, is no reference (an id, a navigation, a reflog entry, a path), or is ambiguous (more than one rule resolves, such as a tag shadowing a branch: git prints nothing), unless `core.warnAmbiguousRefs` is false, when the first rule wins. |
 | `status(paths=None, untracked='no')` | `git status --porcelain=v1 -z --no-renames --untracked-files=<untracked> -- :(literal)<paths>` | `StatusEntry(xy, path)`: tracked changes, then untracked entries (`??`, a collapsed directory ends with `/`), each sorted. |

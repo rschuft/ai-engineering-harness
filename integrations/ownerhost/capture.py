@@ -548,38 +548,16 @@ def _parse_commit(data: bytes) -> tuple[list, bytes]:
 
 
 def branch_tips(repo) -> list:
-    """The commit of every local branch (``refs/heads/*``), by branch name. The names are listed from the files
-    reference backend, the only one repository_access opens (loose references under the common directory, then
-    packed-refs); each is read through repository_access (``repo.read``), which resolves it as git does. A name
-    git would not read as a reference, or one that names no commit, is no branch."""
-    common = repo.commondir
-    names = set()
-    base = os.path.join(common, 'refs', 'heads')
-    for top, _dirs, files in os.walk(base):
-        for name in files:
-            names.add('/'.join(['refs', 'heads', *os.path.relpath(os.path.join(top, name), base).split(os.sep)]))
-    try:
-        with open(os.path.join(common, 'packed-refs'), 'rb') as handle:
-            packed = handle.read()
-    except FileNotFoundError:
-        packed = b''
-    except OSError as exc:
-        raise CaptureRefused('CAPTURE_GIT_FAILED', f'packed-refs cannot be read: {exc}') from None
-    for line in packed.splitlines():
-        if line and line[:1] not in (b'#', b'^'):
-            name = line.partition(b' ')[2].decode('utf-8', 'surrogateescape')
-            if name.startswith('refs/heads/'):
-                names.add(name)
+    """The object of every local branch (``refs/heads/*``, loose and packed) that is a commit, in branch-name
+    order: ``Repository.branches()`` of the repository-access module lists them, and each is read through it."""
     tips = []
-    for name in sorted(names):
-        try:
-            found = repo.read(name)
-        except ra.RepositoryError as exc:
-            if exc.code in ('OBJECT_NAME_INVALID', 'REVISION_INVALID'):
-                continue
-            raise CaptureRefused('CAPTURE_GIT_FAILED', f'{name}: {exc}') from None
-        if found is not None and found[1] == 'commit':
-            tips.append(found[0])
+    try:
+        for _name, oid in sorted(repo.branches().items()):
+            found = repo.read(oid)
+            if found is not None and found[1] == 'commit':
+                tips.append(found[0])
+    except ra.RepositoryError as exc:
+        raise CaptureRefused('CAPTURE_GIT_FAILED', f'the local branches cannot be read: {exc}') from None
     return tips
 
 

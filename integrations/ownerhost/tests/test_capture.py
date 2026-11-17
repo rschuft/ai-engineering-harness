@@ -1007,7 +1007,7 @@ class NoModelNoSocket(Rig):
         called = {node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
                   and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                   and node.func.value.id == 'repo'}
-        self.assertEqual(called, {'head', 'read', 'object_kind', 'status', 'write_commit', 'close'})
+        self.assertEqual(called, {'branches', 'head', 'read', 'object_kind', 'status', 'write_commit', 'close'})
         self.assertEqual({node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
                           and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                           and node.func.value.id == 'ra'}, {'open_repository'})

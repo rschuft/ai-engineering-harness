@@ -1069,6 +1069,7 @@ class NoProcess(unittest.TestCase):
                 r.read('HEAD:README.md')
                 r.files('HEAD', 'docs')
                 r.head()
+                r.branches()
                 r.status(None, 'all')
                 r.index_entries()
                 r.listing(True, True, True)

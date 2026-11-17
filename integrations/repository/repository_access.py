@@ -1603,6 +1603,34 @@ class Repository:
             else:
                 out.append((path, mode, oid))
 
+    def branches(self):
+        """``git for-each-ref --format='%(refname) %(objectname)' refs/heads/``: every local branch, loose and
+        packed, as {full reference name: object id}, read through Dulwich's refs container (the files
+        backend, the only one this module opens; branches live in the common directory, so a linked
+        worktree answers its main worktree's). A symbolic reference under refs/heads/ answers the object
+        its target names, as for-each-ref prints it; a dangling one, a name git would not read as a
+        reference, and a broken value are left out, as git leaves them out. The object is not read: a
+        caller that needs a commit checks it."""
+        try:
+            keys = sorted(self._dul.refs.keys(base=b'refs/heads/'))
+        except Exception as exc:
+            raise RepositoryError('GIT_FAILED', f'cannot list refs/heads/: {type(exc).__name__}: {exc}') from None
+        found = {}
+        for key in keys:
+            name = 'refs/heads/' + key.decode('utf-8', 'surrogateescape')
+            if not refname_valid(name):
+                continue
+            try:
+                value = self._dul.refs[name.encode('utf-8', 'surrogateescape')]
+            except KeyError:
+                continue
+            except Exception as exc:
+                raise RepositoryError('GIT_FAILED', f'cannot read {name}: {type(exc).__name__}: {exc}') from None
+            text = value.decode('ascii', 'replace').lower()
+            if len(text) == self._hexsz and all(ch in _HEX for ch in text):
+                found[name] = text
+        return found
+
     def head(self):
         """HEAD: its commit id (``rev-parse --verify HEAD``) and the branch it names."""
         found = self._read_raw_ref('HEAD')
