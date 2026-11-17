@@ -2447,9 +2447,13 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
     (``resolved``, the record ``reserve_attempt`` stored), immediately before the transport; then,
     through an ``AgentServerClient`` on the pinned route allowlist, read ``GET /server_info`` and
     refuse unless decision 0001's preconditions P1 to P5 hold (``server_preconditions``); then send
-    the create exactly once and return the transport's answer. A refusal never sends the create
-    (an admission refusal calls the transport zero times). Nothing is retried and no other runtime
-    is ever tried.
+    the create exactly once and return the transport's answer. A refusal raised before the create's
+    call never sends the create (an admission refusal calls the transport zero times); a refusal
+    raised at or after that call (the route client's, or the transport's on the create's answer)
+    may have followed a create that reached the server: it carries ``create_possibly_sent``, and
+    ``dispatch`` records the create as sent (``create_sent`` true), so that the attempt is asked at
+    the next ordinal's admission (review of dispatch 19, N1). Nothing is retried and no other
+    runtime is ever tried.
 
     For the D1 stage (E-05.6) the body checked and sent is the admitted one with the grant's token in the
     token secret's place, built in memory here: the secrets block is checked again by the shared check, the
@@ -2473,7 +2477,16 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
                               f'{type(exc).__name__}', failed=list(PRECONDITIONS), observed=None) from None
     server_preconditions(info, client.version)
     _check_grant_unrevoked(integration_store, admitted)
-    return client.call(admitted.method, admitted.path, body=body)
+    try:
+        return client.call(admitted.method, admitted.path, body=body)
+    except DispatchRefused as refusal:
+        refusal.create_possibly_sent = True   # at or after the create's call: it may have reached the server (N1)
+        raise
+
+
+def _create_possibly_sent(refusal: DispatchRefused) -> bool:
+    """True for a refusal ``send_create`` raised at or after the create's call; False for one raised before it."""
+    return getattr(refusal, 'create_possibly_sent', False) is True
 
 
 # ---------------------------------------------------------------------------
@@ -3424,7 +3437,8 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
                                  integration_store=integration_store)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-                  _refusal_detail(_native_ended(custody.ended(refusal), grant), create_sent=False))
+                  _refusal_detail(_native_ended(custody.ended(refusal), grant),
+                                  create_sent=_create_possibly_sent(refusal)))
             raise
         except Exception as exc:
             detail = {'error': type(exc).__name__, **custody.detail(), **_native_detail(grant)}

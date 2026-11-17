@@ -15,10 +15,13 @@ itself is unchanged). Called with the attempt's conversation id, it
    whose ``body`` is the container's inspect object), independently of the Agent Server's own answers;
 3. compares the five fields (``compare``): ``caps``, ``image``, ``mounts`` (exactly the declared binds, as
    ``(Type, Source, Destination, RW)``), ``network-mode`` (``bridge``) and ``extra-hosts``
-   (``["host.docker.internal:host-gateway"]``); any other value, or an inspect it cannot obtain, is ``not-launched``;
+   (``["host.docker.internal:host-gateway"]``); any other value, or an inspect it cannot obtain, parse or compare
+   (any exception while it reads the admitted values or obtains, parses or compares the document: its type is the
+   reason in the receipt's problems), is ``not-launched``;
 4. writes the launch receipt ``dispatch/attempt/<attempt id>/launch`` (``attempt-launch/v1``: the verdict, each
    compared field with its admitted or limit value and the observed one, the inspect document's sha256 and its
-   SOURCE), confirmed, before it answers; a receipt already there with another observation is ``not-launched``;
+   SOURCE), confirmed, before it answers; a receipt already there with another observation is ``not-launched``, and
+   a receipt it cannot write is answered as a problem, so the attempt never reaches SEED without its receipt;
 5. answers ``[]`` when launched, else one problem sentence per failed field (no observed value in the sentence: the
    receipt holds them, bounded), and ``run_attempt`` then ends the attempt (``INSPECTION_FAILED``, a
    ``containment-stop`` record) with no SEED and no message.
@@ -236,13 +239,13 @@ def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str
     reserved_conversation = store.conversation_id_for(operation_key)
 
     def inspect(conversation_id: str) -> list:
-        problems = []
+        problems, values, document, fields = [], None, None, []
         try:
             values = admitted(integration_store, operation_key, read_profile=read_profile, read_artifact=read_artifact)
         except DispatchRefused as refusal:
-            values = None
             problems.append(f'the admitted values could not be read ({refusal.code})')
-        document = None
+        except Exception as exc:  # noqa: BLE001 - no admitted values: nothing is compared
+            problems.append(f'the admitted values could not be read ({type(exc).__name__})')
         if conversation_id != reserved_conversation:
             problems.append('the inspect was asked for another conversation than the attempt\'s')
         else:
@@ -255,7 +258,12 @@ def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str
             else:
                 if document is None:
                     problems.append('the container inspect could not be obtained (no inspect object)')
-        fields = compare(document, values) if document is not None and values is not None else []
+        if document is not None and values is not None:
+            try:
+                fields = compare(document, values)
+            except Exception as exc:  # noqa: BLE001 - a document the gate cannot compare is not launched (S3)
+                fields = []
+                problems.append(f'the container inspect could not be compared ({type(exc).__name__})')
         problems += [f'the container\'s {f["field"]} is not the {f["basis"]} value' for f in fields if not f['equal']]
         verdict = NOT_LAUNCHED if problems else LAUNCHED
         intent = {'format': LAUNCH_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
@@ -263,7 +271,11 @@ def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str
                   'inspect': {'source': source, 'obtained': document is not None, 'sha256': _digest(document)},
                   'limitFinding': DEVIATION_FINDING,
                   'problems': list(problems)}
-        if not _write_receipt(integration_store, LAUNCH_KEY.format(attempt_id=attempt_id), intent, actor):
+        try:
+            written = _write_receipt(integration_store, LAUNCH_KEY.format(attempt_id=attempt_id), intent, actor)
+        except Exception as exc:  # noqa: BLE001 - no receipt: never launched, whatever the comparison found
+            return problems + [f'the launch receipt could not be written ({type(exc).__name__})']
+        if not written:
             problems.append('a launch receipt with another observation is recorded for the attempt')
         return problems
 

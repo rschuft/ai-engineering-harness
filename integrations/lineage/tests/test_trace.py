@@ -140,7 +140,15 @@ class Example(unittest.TestCase):
     def setUpClass(cls):
         fx.require_repository_access()
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-example-'))
-        with E.in_process_backlog():
+        # what build_dispatched made, recorded as it made it (work id, operation key, conversation id): the
+        # expectation of the executed-by edges, independent of the projection (review of dispatch 19, N8)
+        cls.dispatched, made = [], FA.FixtureAttempts.attempt
+
+        def recording(attempts, integration_store, core, work_id, **kwargs):
+            key, cid = made(attempts, integration_store, core, work_id, **kwargs)
+            cls.dispatched.append((work_id, key, cid))
+            return key, cid
+        with E.in_process_backlog(), mock.patch.object(FA.FixtureAttempts, 'attempt', recording):
             cls.projections = E.example(cls.tmp)
 
     @classmethod
@@ -162,8 +170,9 @@ class Example(unittest.TestCase):
 
     def test_sample_authorities_resolve_the_whole_chain_and_say_so(self):
         # (The name is recorded in evidence/test-profile/test-ids.json from before E-01.5, when the attempt sample
-        # answered. Since E-01.5 the example's attempts are dispatched and answered by the Agent Server fixture's
-        # cited core through the attempt resolver: they resolve with their mode stated, fixture, and say so.)
+        # answered. Since E-01.5 the example's attempts are built with the dispatcher's own constructors, not by a
+        # dispatch, and answered by the Agent Server fixture's cited core through the attempt resolver: they resolve
+        # with their mode stated, fixture, and say so.)
         # The example's statements are the Owner conversation store's (lineage_example.example: build_conversations
         # and cite_store in a commit after the declaring one): they resolve authoritatively. The recorded tasks'
         # proposal pointer, pinned at the design commit, is superseded by that later commit, and says so.
@@ -199,11 +208,15 @@ class Example(unittest.TestCase):
         self.assertEqual({t for _, t, _ in edges(projection, T.FULFILLED_BY)}, {'backlog:TASK-1', 'backlog:TASK-2'})
         store_mod = E.store_module()
         executed = [e for e in projection['edges'] if e['relation'] == T.EXECUTED_BY]
-        # each attempt is the dispatched typed attempt of its task: its conversation the reserved one of its key
-        self.assertEqual({(e['from'], e['to']) for e in executed}, {
-            (f'backlog:{e["provenance"][0]["operation_key"].split("/")[2]}',
-             f'openhands:conversation/{store_mod.conversation_id_for(e["provenance"][0]["operation_key"])}')
-            for e in executed})
+        # each attempt is the typed attempt build_dispatched made for its task (N8: the expectation is what it made,
+        # recorded in setUpClass, never read back from the projection): its conversation the reserved one of its key
+        self.assertEqual(sorted(work for work, _, _ in self.dispatched), ['TASK-1', 'TASK-2'])
+        for work, key, cid in self.dispatched:
+            self.assertEqual(cid, store_mod.conversation_id_for(key))
+        self.assertEqual({(e['from'], e['to']) for e in executed},
+                         {(f'backlog:{work}', f'openhands:conversation/{cid}') for work, _, cid in self.dispatched})
+        self.assertEqual(sorted(e['provenance'][0]['operation_key'] for e in executed),
+                         sorted(key for _, key, _ in self.dispatched))
         self.assertEqual({e['from'] for e in executed}, {'backlog:TASK-1', 'backlog:TASK-2'})
         self.assertEqual(len(edges(projection, T.SHAPED_BY)), 3)  # proposal, design, spec at the traced commit
         # D2: Q1's quote is located in the statement's durable bytes, read from the Owner conversation store, and
@@ -271,6 +284,22 @@ QUAL02_MESSAGE1 = E.CORPUS / 'qual-02' / 'message-1.txt'
 
 # ---------------------------------------------------------------------------
 # Read-only
+
+class Wording(unittest.TestCase):
+    """Review of dispatch 19, N7: the example's attempts are built with the dispatcher's own constructors in a
+    throwaway store, not dispatched; the development reference and the lineage README say so."""
+    category = 'unit'
+
+    def test_the_example_attempts_are_not_called_dispatched(self):
+        repo = HERE.parents[2]
+        for path in (repo / 'docs' / 'development.md', HERE.parent / 'README.md'):
+            text = ' '.join(path.read_text(encoding='utf-8').split())
+            with self.subTest(path=path.name):
+                for claim in ("attempts dispatched in a throwaway", "attempts are dispatched in a throwaway",
+                              "attempts dispatched in an integration store", "attempts are dispatched in an"):
+                    self.assertFalse(claim in text, f'{path.name} says: {claim}')
+                self.assertTrue("built with the dispatcher's own constructors" in text, path.name)
+
 
 class ReadOnly(Case):
     def test_the_traversal_writes_nothing_and_asks_only_reads(self):

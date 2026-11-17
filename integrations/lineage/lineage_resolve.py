@@ -848,12 +848,14 @@ def declared_authority(allowlist: bytes):
 
 def answering_authority(answer):
     """The authority the Agent Server answer ANSWER names: a fixture labels every answer (``fixture.authority``,
-    the agentfixture catalog's label); an answer with no label is ``live``. None for a label of no known authority."""
-    label = answer.get('fixture') if isinstance(answer, dict) else None
-    if label is None:
+    the agentfixture catalog's label); an answer with no label is ``live``. An answer that carries a label is never
+    ``live``, whatever its ``authority`` field says (review of dispatch 19, N6: a label on a live-bound attempt is
+    neither): it is ``fixture`` when the label says so, else None (a label of no known fixture authority)."""
+    if not isinstance(answer, dict) or 'fixture' not in answer:
         return LIVE
+    label = answer['fixture']
     authority = label.get('authority') if isinstance(label, dict) else None
-    return authority if authority in AUTHORITIES else None
+    return FIXTURE if authority == FIXTURE else None
 
 
 class AttemptResolver:

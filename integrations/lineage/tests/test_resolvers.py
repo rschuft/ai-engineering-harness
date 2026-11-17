@@ -1131,6 +1131,26 @@ class AttemptResolution(unittest.TestCase):
         self.assertEqual((result.outcome, result.code, result.authority), (L.RESOLVED, None, R.ATTEMPT_AUTHORITY),
                          'live-bound, answered without a label: live')
 
+    def test_a_fixture_label_claiming_live_is_never_live(self):
+        """Review of dispatch 19, N6 (probe P2): on a live-bound attempt, an answer carrying a fixture label is
+        ATTEMPT_AUTHORITY_MISMATCH whatever the label's authority field says (R11: a label on a live-bound attempt
+        is neither); on a fixture-bound one, such a label is no fixture answer either."""
+        def relabelled(method, path, body=None, **kwargs):
+            answer = dict(self.core(method, path, body, **kwargs))
+            answer['fixture'] = {**answer['fixture'], 'authority': 'live'}
+            return answer
+        live, _, cid = self.attempts(live=True)
+        result = self.ask(f'openhands:conversation/{cid}', live, transport=relabelled)
+        self.assertEqual((result.outcome, result.code, result.authority),
+                         (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_AUTHORITY_MISMATCH', R.ATTEMPT_AUTHORITY))
+        self.path.unlink()
+        attempts, _, cid = self.attempts(work_id='TASK-3')
+        result = self.ask(f'openhands:conversation/{cid}', attempts, transport=relabelled)
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_AUTHORITY_MISMATCH'))
+        for label in ({'authority': 'live'}, {'authority': 'live', 'answer': 'observation'}, None, {}):
+            with self.subTest(label=label):
+                self.assertIsNone(R.answering_authority({'status': 200, 'fixture': label}))
+
     def test_declared_and_answering_authority(self):
         self.assertEqual(R.declared_authority(b'{"routes": []}'), R.LIVE)
         self.assertEqual(R.declared_authority(b'{"transport": {"authority": "fixture", "kind": "x"}}'), R.FIXTURE)

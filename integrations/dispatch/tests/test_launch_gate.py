@@ -11,14 +11,15 @@ F-04.2 section 4.3 and 7 and to the D1 run record's steps (3) and (5b)). Shown h
 
 * the gate passes on the cited inspect document, and writes its launch receipt (``Passes``);
 * an altered copy of each of the five compared fields (caps, image ID, mounts, NetworkMode, ExtraHosts) marks the
-  attempt ``not-launched``, and so does an inspect that cannot be obtained (``NotLaunched``); the altered copies are
-  test knobs (``Altered``), answers no cited run gave, made by editing a copy of the core's answer;
+  attempt ``not-launched``, and so does an inspect that cannot be obtained or compared, or admitted values that
+  raise, each with its receipt; a receipt that cannot be written is answered as a problem (``NotLaunched``); the
+  altered copies are test knobs (``Altered``), answers no cited run gave, made by editing a copy of the core's answer;
 * the limit values are the recorded ones of ``fd-container-network-deviations`` and F-04.2 section 7
   (``Limits``);
 * wired as ``run_attempt``'s ``inspect`` (its step 1, before SEED and the message): a launched attempt goes on to SEED
-  and its message; an attempt with an unauthorized workspace path, or with no container to inspect (a local-runtime
-  fallback), is ended ``INSPECTION_FAILED`` with no SEED and no message, and is never reported launched
-  (``Wired``).
+  and its message; an attempt with an unauthorized workspace path, with no container to inspect (a local-runtime
+  fallback), with a document the gate cannot compare, or whose receipt cannot be written, is ended
+  ``INSPECTION_FAILED`` with no SEED and no message, and is never reported launched (``Wired``).
 """
 from pathlib import Path
 import copy
@@ -30,6 +31,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -252,6 +254,44 @@ class NotLaunched(Attempt):
         self.assertEqual((answer['status'], answer['fixture']['answer']), (501, 'refusal'))
         self.not_launched(result, self.core.container_inspect)
 
+    def test_a_document_the_gate_cannot_compare_is_recorded_not_launched(self):
+        """Review of dispatch 19, S3 (probe P1): a Mounts entry whose Source is null cannot be sorted with the others
+        (a TypeError inside the comparison). The gate records the not-launched receipt, with the reason, and answers
+        it; the document was obtained, and its digest is recorded."""
+        result = self.dispatched()
+
+        def null_source(body):
+            body['Mounts'][0]['Source'] = None
+        source = Altered(self.core, null_source)
+        problems = self.gate(result, source)(result.conversation_id)
+        self.assertEqual(problems, ['the container inspect could not be compared (TypeError)'])
+        record = self.receipt(result)
+        self.assertIsNotNone(record, 'the not-launched receipt is recorded')
+        self.assertEqual((record['verdict'], record['fields'], record['problems']),
+                         (LG.NOT_LAUNCHED, [], ['the container inspect could not be compared (TypeError)']))
+        document = LG._plain(source(result.conversation_id)['body'])
+        self.assertEqual(record['inspect'], {'source': SOURCE, 'obtained': True, 'sha256': hashlib.sha256(
+            di._canonical(document).encode('utf-8')).hexdigest()})
+        self.assertEqual(self.store.get(LG.LAUNCH_KEY.format(attempt_id=record['attemptId'])).state, 'confirmed')
+
+    def test_admitted_values_that_raise_are_recorded_not_launched(self):
+        """S3: an exception other than a refusal while the admitted values are read is not launched, recorded."""
+        result = self.dispatched()
+        with mock.patch.object(LG, 'admitted', side_effect=KeyError('caps')):
+            problems = self.gate(result)(result.conversation_id)
+        self.assertEqual(problems, ['the admitted values could not be read (KeyError)'])
+        record = self.receipt(result)
+        self.assertEqual((record['verdict'], record['fields']), (LG.NOT_LAUNCHED, []))
+
+    def test_a_receipt_that_cannot_be_written_is_answered_as_a_problem(self):
+        """S3: on the cited (launched) document, a receipt write that fails is a problem the gate answers: there is
+        no launch without its receipt."""
+        result = self.dispatched()
+        with mock.patch.object(LG, '_write_receipt', side_effect=OSError('the store could not be written')):
+            problems = self.gate(result)(result.conversation_id)
+        self.assertEqual(problems, ['the launch receipt could not be written (OSError)'])
+        self.assertIsNone(self.receipt(result))
+
     def test_an_inspect_asked_for_another_conversation_is_not_launched(self):
         result = self.dispatched()
         problems = self.gate(result)('0' * 8 + '-0000-4000-8000-' + '0' * 12)
@@ -337,6 +377,29 @@ class Wired(Attempt):
         self.assertEqual(outcome.end['surfaced']['dispatcherRecords'],
                          [{'kind': 'containment-stop', 'code': 'INSPECTION_FAILED',
                            'ref': f'attempt:{store_mod.attempt_id_for(result.operation_key)}#inspection'}])
+        self.assertEqual(self.seeds_and_messages(result.conversation_id), ([], []))
+
+    def test_a_document_the_gate_cannot_compare_ends_the_attempt_with_its_receipt(self):
+        """Review of dispatch 19, S3 (probe P1), wired: the attempt is ended INSPECTION_FAILED with no SEED and no
+        message, and its not-launched receipt is recorded."""
+        result = self.dispatched()
+
+        def null_source(body):
+            body['Mounts'][0]['Source'] = None
+        outcome = self.run_attempt(result, self.gate(result, Altered(self.core, null_source)))
+        self.assertEqual(outcome.outcome, 'inspection-failed')
+        self.assertIn('the container inspect could not be compared (TypeError)', outcome.problems)
+        self.assertEqual(self.receipt(result)['verdict'], LG.NOT_LAUNCHED)
+        self.assertEqual(self.seeds_and_messages(result.conversation_id), ([], []))
+
+    def test_a_receipt_that_cannot_be_written_never_reaches_seed(self):
+        """S3: the receipt write fails on the cited document: the attempt is ended INSPECTION_FAILED, no SEED."""
+        result = self.dispatched()
+        with mock.patch.object(LG, '_write_receipt', side_effect=OSError('the store could not be written')):
+            outcome = self.run_attempt(result, self.gate(result))
+        self.assertEqual(outcome.outcome, 'inspection-failed')
+        self.assertIn('the launch receipt could not be written (OSError)', outcome.problems)
+        self.assertIsNone(self.receipt(result))
         self.assertEqual(self.seeds_and_messages(result.conversation_id), ([], []))
 
     def test_a_local_runtime_fallback_has_no_container_and_is_never_reported_launched(self):

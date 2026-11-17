@@ -611,9 +611,9 @@ must be newer than the refused attempt's dispatch and hold another token (`PRIOR
 token then read from the entry must be that receipt's (`NATIVE_TOKEN_NOT_REPLACED`, the reserved attempt failed
 and nothing sent). Then, for every profile, E-01.5's execution non-overlap
 ([below](#the-launch-gate-and-execution-non-overlap-e-015)): an earlier attempt whose grant is not revoked
-(`PRIOR_GRANT_UNREVOKED`), or whose conversation the Agent Server reports executing or cannot be observed
+(`PRIOR_GRANT_UNREVOKED`), or whose conversation the Agent Server holds with its runtime not stopped or cannot be observed
 (`PRIOR_CONVERSATION_RUNNING`, `PRIOR_CONVERSATION_UNOBSERVED`), refuses the next ordinal. An earlier attempt that
-**sent no create** (no `dispatched` event, or `send_create` refused before its POST: `create_sent` false) created no
+**sent no create** (no `dispatched` event, or `send_create` refused before the create's call: `create_sent` false) created no
 conversation and needs no end; one that failed **after** sending its create may have created one (a create the
 server was still processing when E-01.4.1's lookup answered 404), so it is asked; an `unknown` one is the store's
 live claim. Every refusal but the last comes before the reservation, reads no
@@ -753,7 +753,8 @@ answer as the selected fields the evidence records).
 |---|---|---|
 | a refusal after the reservation and before the send (re-read, admission, workspace) | `reserved` -> `failed` | the refusal (refusal/v1) |
 | about to send | `reserved` -> `dispatched` | `create-dispatched/v1`: the conversation id and route |
-| a refusal in `send_create` (re-check, allowlist, preconditions): the create was not sent | `dispatched` -> `failed` | the refusal, `create_sent: false` |
+| a refusal in `send_create` before the create's call (re-check, allowlist, preconditions): the create was not sent | `dispatched` -> `failed` | the refusal, `create_sent: false` |
+| a refusal at or after the create's call (the route client's, or the transport's on the create's answer): the create may have reached the server | `dispatched` -> `failed` | the refusal, `create_sent: true` |
 | `200` or `201` with the reserved id | `dispatched` -> `confirmed` | the receipt |
 | a `4xx`: `CREATE_REFUSED` | `dispatched` -> `failed` | the refusal, `create_sent: true` |
 | no answer (the transport raised; re-raised), a `5xx`, another `2xx`, another id: `CreateOutcomeUnknown` | `dispatched` -> `unknown` | the status only |
@@ -1027,12 +1028,14 @@ actor=)` is the `inspect` callable `run_attempt` takes (the attempt run's step 1
    `RW`), `network-mode` and `extra-hosts`, the last two with the recorded limit values of
    `fd-container-network-deviations` (`security/inventory.json`; F-04.2 section 7): `NetworkMode` `bridge` and
    `ExtraHosts` `["host.docker.internal:host-gateway"]`. Any other value (another type included: `2.0` is not `2`),
-   or an inspect it cannot obtain (none, no inspect object, the source refused or raised), is **not launched**;
+   or an inspect it cannot obtain (none, no inspect object, the source refused or raised) or compare (any exception
+   while it reads the admitted values or parses or compares the document, its type the reason), is **not launched**;
 4. writes the launch receipt `dispatch/attempt/<attempt id>/launch` (`attempt-launch/v1`: the verdict `launched` or
    `not-launched`, each compared field with its basis, admitted or limit, its expected and its observed value, the
    document's sha256 and its source; an observed value over 1024 characters is kept as its digest) through the
    attempt run's receipt writer (`attempt_run._receipt`), confirmed before it answers; a second gate over the same
-   attempt finds its receipt, and one with another observation is not launched (the first stands);
+   attempt finds its receipt, and one with another observation is not launched (the first stands); a receipt it
+   cannot write is answered as a problem, so no attempt reaches SEED without its receipt;
 5. answers `[]`, or one problem per failed field, and `run_attempt` then ends the attempt (`INSPECTION_FAILED`, a
    `containment-stop` record): no SEED and no message.
 
@@ -1062,8 +1065,12 @@ container and forwards the create before it refreshes the outer catalog (openhan
 `docker_runtime/routers.py:173`, `:184`, `:187`, `:218`), and a lookup answers 404 while the catalog lacks the
 conversation (`conversation_router.py:229-231`). So E-01.4.1's lookup can answer 404, and the attempt be `failed`,
 for a create that completes afterwards. The non-overlap rule asks again at every admission, whatever the store says.
-A residual stays: an admission whose own lookup falls inside that window sees 404 and admits; the next attempt's
-inspection (the server's count) and its launch gate then stop it.
+A residual stays: an admission whose own lookup falls inside that window sees 404 and admits. The launch gate does
+not see a second conversation (it inspects the attempt's own container); the inspection's count does
+(`inspect_conversation`: exactly one conversation on the server), and the admitted attempt is ended
+`INSPECTION_FAILED`, a containment stop. Its cost: a non-retryable end that bars the work item (every later ordinal
+is refused `PRIOR_END_SECURITY_STOP`). A surviving earlier conversation on the same server, idle or stopped, has no
+exit inside the harness today.
 
 **Delegated decisions** (dispatch 18): the refusal code `PRIOR_GRANT_UNREVOKED`; the launch receipt's key and format;
 an earlier attempt that recorded `create_sent` false is not asked (it provably sent no create: E-01.3.1's
@@ -2270,18 +2277,18 @@ create the core answers, its inspect source the core's `container-inspect` entry
 | Class | What it shows |
 |---|---|
 | `Passes` | the gate passes on the cited document and its receipt records the five fields, the document's digest and its source; the admitted values are the reserved record's and the pinned lock's (a lock of other bytes is `PROFILE_ARTIFACT_DRIFTED`, not launched); a repeated gate finds its receipt, another observation is not launched |
-| `NotLaunched` | an altered copy (`Altered`, a test knob) of each compared field is not launched, the failed field named: caps (each of the three, a float, none), image, mounts (a source elsewhere, another conversation's, the engine socket added, read-only, a volume, one missing), NetworkMode (`host`, `none`, another container's), ExtraHosts (none, empty, one more); an inspect that cannot be obtained (raised, no object, no answer, refused) and a stopped runtime's (no container) are not launched; an inspect asked for another conversation is never made |
+| `NotLaunched` | an altered copy (`Altered`, a test knob) of each compared field is not launched, the failed field named: caps (each of the three, a float, none), image, mounts (a source elsewhere, another conversation's, the engine socket added, read-only, a volume, one missing), NetworkMode (`host`, `none`, another container's), ExtraHosts (none, empty, one more); an inspect that cannot be obtained (raised, no object, no answer, refused) and a stopped runtime's (no container) are not launched; a document the gate cannot compare (a null mount `Source`: a `TypeError`) and admitted values that raise are not launched, each with its receipt and reason; a receipt that cannot be written is answered as a problem; an inspect asked for another conversation is never made |
 | `Limits` (unit) | the limit values are `fd-container-network-deviations`' and F-04.2 section 7's; `compare` takes any other value or type as unequal |
-| `Wired` | as `run_attempt`'s `inspect`: a launched attempt goes on to SEED and its message, the inspect before both; an unauthorized workspace path, and a local-runtime fallback (no container to inspect), are ended `INSPECTION_FAILED` with no SEED and no message, never launched |
+| `Wired` | as `run_attempt`'s `inspect`: a launched attempt goes on to SEED and its message, the inspect before both; an unauthorized workspace path, a local-runtime fallback (no container to inspect), a document the gate cannot compare and a receipt that cannot be written are ended `INSPECTION_FAILED` with no SEED and no message, never launched |
 
 [`tests/test_non_overlap.py`](tests/test_non_overlap.py):
 
 | Class | What it shows |
 |---|---|
-| `NativeOrdinals` | rulings (a) and (b): ordinal 1's create in flight (`InFlight`, a test knob derived from the pinned handler's order) when the dispatcher's wait ended, E-01.4.1's lookup answers 404 and the attempt is `failed`; once the create completes its conversation appears, and ordinal 2 is refused `PRIOR_CONVERSATION_RUNNING` with nothing reserved, no create and no credential read; after its runtime stops, ordinal 2 is dispatched. A conversation that never appeared does not block; a lookup or runtime read that never arrives (a transport event) is `PRIOR_CONVERSATION_UNOBSERVED`; a create the server answered with an error after forwarding it (`KeptOnError`, a test knob from the pinned handler: an existing conversation is not stopped) leaves a `failed` attempt that is still asked, and refused while it executes; an attempt that sent no create is never asked |
+| `NativeOrdinals` | rulings (a) and (b): ordinal 1's create in flight (`InFlight`, a test knob derived from the pinned handler's order) when the dispatcher's wait ended, E-01.4.1's lookup answers 404 and the attempt is `failed`; once the create completes its conversation appears, and ordinal 2 is refused `PRIOR_CONVERSATION_RUNNING` with nothing reserved, no create and no credential read; after its runtime stops, ordinal 2 is dispatched. A conversation that never appeared does not block; a lookup or runtime read that never arrives (a transport event) is `PRIOR_CONVERSATION_UNOBSERVED`; a create the server answered with an error after forwarding it (`KeptOnError`, a test knob from the pinned handler: an existing conversation is not stopped) leaves a `failed` attempt that is still asked, and refused while it executes; a refusal raised on the create's answer after the core received it (`LateRefusal`, a test knob) records `create_sent` true, and the attempt is asked; an attempt that sent no create is never asked |
 | `BrokeredOrdinals` | ruling (c) and every profile: a brokered ordinal 1 (a real broker in process) refuses ordinal 2 `PRIOR_GRANT_UNREVOKED` with no issue and no call; after `end_attempt` revokes it, `PRIOR_CONVERSATION_RUNNING`; after its runtime stops, ordinal 2 is dispatched |
 | `GrantJournal` (unit) | `grant_unrevoked` in each journal and revocation state `end_attempt` reads |
-| `Readme` (unit) | this README states which earlier attempts are asked |
+| `Readme` (unit) | this README states which earlier attempts are asked, and the 404 race's residual: what stops it, its cost, and that a surviving earlier conversation has no exit inside the harness today |
 
 `test_conversation_create.FakeAgentServer` answers the two reads the rule makes of an earlier attempt's conversation
 (`GET` it, and its runtime) as the core does, by its state (a fresh fake holds no earlier conversation: 404); the

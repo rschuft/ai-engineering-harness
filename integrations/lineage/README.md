@@ -36,7 +36,7 @@ status.
 | `tests/fixtures/archived-task/` | Backlog.md 1.55.3's own `task list --json` and `task view --json` output in a throwaway project where `TASK-1` was archived (gate G11, recorded 2026-11-16), replayed by the fake Backlog.md |
 | `tests/test_trace.py` | The traversal: the example (regenerated and compared), read-only proof, every negative resolution fixture, the samples' contract, the `fixture` mode and the command line |
 | `tests/test_traversal_git.py` | The traversal's repository access (F-09.4, F-10.3): one opened repository per traversal, closed on a normal end, an exception and a damaged repository (`GIT_FAILED` at once), nothing kept between traversals, no git launched; a resolver call as its own operation; OpenSpec change folders whose names hold a space, resolved as before the batch reader; and the `performance` benchmark `OneTraversal`, whose result is the launch count of one traversal of the example (none with Backlog.md answered in the test process, its three reads with it launched; at most 10) with projections equal to `examples/` byte for byte, and its repository access against the git oracle, interleaved in the same run: git's answers equal, the traversal's access at least 4x faster and a one-shot resolve at least 8x faster (decision 0014) |
-| `tests/lineage_example.py` | Builds the example's throwaway sources (`build_example`: among them an Owner conversation store holding the corpus statements the change cites, under store identities, and a commit that cites them; `build_dispatched`: the two tasks' attempts dispatched in an integration store of their own), traces them and (with `--record`) writes `examples/`; the same store and citation for the tests (`build_conversations`, `cite_store`) |
+| `tests/lineage_example.py` | Builds the example's throwaway sources (`build_example`: among them an Owner conversation store holding the corpus statements the change cites, under store identities, and a commit that cites them; `build_dispatched`: the two tasks' attempts built with the dispatcher's own constructors in an integration store of their own, not by a dispatch), traces them and (with `--record`) writes `examples/`; the same store and citation for the tests (`build_conversations`, `cite_store`) |
 | `tests/fixture_attempts.py` | Dispatched attempts for the attempt resolver's tests and the example (`FixtureAttempts`): a throwaway profile whose pinned route allowlist declares the fixture authority (R8 point 2; or none, `live=True`), and typed attempts reserved, dispatched and confirmed through the store's own API with the dispatcher's own records, each create answered by the Agent Server fixture's cited core |
 | `tests/test_live_lineage.py` | Live, against the pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 (including the traversal over live tasks and after a real `openspec archive`, and a task archived by Backlog.md itself, then resolved); skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` are set |
 
@@ -210,7 +210,8 @@ command line, which has no transport (a live Agent Server is E-01.6's).
   allowlist is read by its sha256 (`ATTEMPT_ALLOWLIST_UNREADABLE`).
 - **The mode, per attempt.** The **bound** authority is the allowlist's declaration (R8 point
   2: a top-level `transport` object's `authority`, `live` when there is none); the **answering**
-  authority is the answer's fixture label (`fixture.authority`, `live` when there is none). They
+  authority is the answer's fixture label (`fixture.authority`, `live` when there is none; an
+  answer that carries a label is never `live`, whatever its `authority` field says). They
   must agree, else `authority-unavailable` (`ATTEMPT_AUTHORITY_MISMATCH`): a fixture-bound attempt
   answered without the label, or a label on a live-bound one, is neither. A fixture's answer
   carries `lineage.fixture_authority(...)`, a label beginning `FIXTURE`, as its authority, and
@@ -430,8 +431,9 @@ intent `{workRef, outcomeRef}`); and an Owner conversation store, made by its ow
 holds the P-01.2 corpus statements the change cites, as Owner statements under store
 identities (`build_conversations`). A third commit points the intent record at those store
 identities (`cite_store`; the design commit, whose pointers the recorded tasks carry, is left
-as it is). Since E-01.5 the two tasks' attempts are dispatched in an integration store of their
-own (`build_dispatched`: typed attempts on `qual-02-search-freshness` at the design commit, made
+as it is). Since E-01.5 the two tasks' attempts are built with the dispatcher's own constructors in an
+integration store of their own, not by a dispatch (`build_dispatched`: typed attempts on
+`qual-02-search-freshness` at the design commit, made
 by `tests/fixture_attempts.py` with the dispatcher's records, each create answered by the Agent
 Server fixture's cited core; the shared `build`, and its hand-made reservations, are unchanged
 for the tests). It traces `outcome:<id>@<third commit>` over that store twice:

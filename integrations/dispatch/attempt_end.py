@@ -859,9 +859,9 @@ def _no_overlap(integration_store, identity, client_for, observed: set) -> None:
         runtime = prior_runtime(client_for(), store.conversation_id_for(claim.operation_key))
         if runtime not in (None, STOPPED):
             raise _refused('PRIOR_CONVERSATION_RUNNING', f'the conversation of attempt {claim.attempt_id} (ordinal '
-                           f'{claim.identity.ordinal}, {integration_store.get(claim.operation_key).state}) is '
-                           f'{runtime!r} at the Agent Server: it is executing', attempt_id=claim.attempt_id,
-                           runtime_status=runtime)
+                           f'{claim.identity.ordinal}, {integration_store.get(claim.operation_key).state}) is held '
+                           f'at the Agent Server with its runtime not stopped ({runtime!r})',
+                           attempt_id=claim.attempt_id, runtime_status=runtime)
 
 
 def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) -> Admission:

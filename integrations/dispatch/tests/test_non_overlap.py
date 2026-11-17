@@ -15,7 +15,9 @@ The engineering manager's rulings (dispatch 18 of unit I1), each shown here:
 * (b) the 404 race: a refusal test includes a conversation that appears after E-01.4.1's lookup answered 404
   (``InFlight``, a test knob outside the catalog, derived from the pinned handler's order, named as such);
 * (c) an earlier ordinal whose grant journal is not revoked refuses ordinal N+1 (``PRIOR_GRANT_UNREVOKED``), and a
-  brokered attempt is held to the same non-overlap (``BrokeredOrdinals``, ``GrantJournal``).
+  brokered attempt is held to the same non-overlap (``BrokeredOrdinals``, ``GrantJournal``);
+* the review of dispatch 19, N1: a refusal raised at or after the create's call records the create as sent
+  (``create_sent`` true), so the attempt is asked (``NativeOrdinals``).
 
 Each refusal comes before the reservation: nothing is reserved, no create is sent, no credential is read or issued.
 """
@@ -166,6 +168,8 @@ class NativeOrdinals(Ordinals):
         self.assertEqual((refusal.context['attempt_id'], refusal.context['runtime_status']),
                          (store_mod.attempt_id_for(first.operation_key), 'available'))
         self.assertIn('failed', refusal.detail)
+        self.assertTrue('held at the Agent Server with its runtime not stopped' in refusal.detail, 'N4: the text')
+        self.assertFalse('executing' in refusal.detail, 'N4: an idle conversation is not called executing')
         self.assertEqual([c[:2] for c in self.core.calls[reads:]],
                          [('GET', f'/api/conversations/{cid}'), ('GET', f'/api/conversations/{cid}/runtime')])
         self.assertNothingNew(1, 1)
@@ -218,6 +222,36 @@ class NativeOrdinals(Ordinals):
         failed = [e for e in self.fixture.store.events(first.operation_key) if e.to_state == 'failed']
         self.assertIs(json.loads(failed[0].detail_json)['create_sent'], True)
         self.refused('PRIOR_CONVERSATION_RUNNING', lambda: self.dispatch(wire))
+        self.assertNothingNew(1, 1)
+
+    def test_a_refusal_raised_on_the_creates_answer_records_the_create_as_sent(self):
+        """Review of dispatch 19, N1 (probe P3): a DispatchRefused raised at the create's call, here by the transport
+        on the create's answer after the core received it (``LateRefusal``, a test knob outside the catalog). The
+        attempt is ``failed`` with ``create_sent`` true, not false, so it is asked at the next ordinal's admission,
+        and its conversation, held with its runtime not stopped, refuses ordinal 2."""
+        class LateRefusal:
+            def __init__(self, core):
+                self.core, self.done = core, False
+
+            def __call__(self, method, path, body=None, **kwargs):
+                answer = self.core(method, path, body, **kwargs)
+                if (method, path) == CREATE and not self.done:
+                    self.done = True
+                    raise di.DispatchRefused('ROUTE_NOT_ALLOWLISTED', 'raised by the transport on the create\'s answer')
+                return answer
+        wire = LateRefusal(self.core)
+        self.refused('ROUTE_NOT_ALLOWLISTED', lambda: self.dispatch(wire))
+        (first,) = self.typed_of(self.fixture.store)
+        self.assertEqual(self.fixture.store.get(first.operation_key).state, 'failed')
+        failed = [e for e in self.fixture.store.events(first.operation_key) if e.to_state == 'failed']
+        self.assertIs(json.loads(failed[0].detail_json)['create_sent'], True)
+        cid = store_mod.conversation_id_for(first.operation_key)
+        self.assertIn(cid, self.core.conversations, 'the core received the create')
+        calls = len(self.core.calls)
+        refusal = self.refused('PRIOR_CONVERSATION_RUNNING', lambda: self.dispatch(wire))
+        self.assertEqual(refusal.context['runtime_status'], 'available')
+        self.assertEqual([c[:2] for c in self.core.calls[calls:]],
+                         [('GET', f'/api/conversations/{cid}'), ('GET', f'/api/conversations/{cid}/runtime')])
         self.assertNothingNew(1, 1)
 
     def test_an_attempt_that_sent_no_create_is_never_asked(self):
@@ -331,6 +365,18 @@ class Readme(unittest.TestCase):
         self.assertFalse('An earlier attempt that failed before or at its create created no conversation' in text,
                          'the README still says a failed attempt created no conversation')
         self.assertTrue('`PRIOR_GRANT_UNREVOKED`' in text, 'the README names PRIOR_GRANT_UNREVOKED')
+
+    def test_the_readme_states_the_residual_and_its_cost(self):
+        """Review of dispatch 19, N4 and S2: the launch gate does not see a second conversation, the inspection's
+        count does; the cost, and that a surviving earlier conversation has no exit inside the harness today."""
+        text = ' '.join((HERE.parent / 'README.md').read_text(encoding='utf-8').split())
+        self.assertFalse("the next attempt's inspection (the server's count) and its launch gate then stop it" in text,
+                         'the README still says the launch gate stops the residual')
+        for stated in ('The launch gate does not see a second conversation', "the inspection's count does",
+                       'a non-retryable end that bars the work item', '`PRIOR_END_SECURITY_STOP`',
+                       'A surviving earlier conversation on the same server, idle or stopped, has no exit inside the '
+                       'harness today'):
+            self.assertTrue(stated in text, f'the README does not state: {stated}')
 
 
 if __name__ == '__main__':
