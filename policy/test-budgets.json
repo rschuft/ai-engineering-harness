@@ -56,10 +56,10 @@
    "wall_s": 10.1
   },
   "lineage": {
-   "tests": 146,
-   "launches": 163,
-   "mkdtemp": 79,
-   "wall_s": 13.3
+   "tests": 180,
+   "launches": 187,
+   "mkdtemp": 103,
+   "wall_s": 21.6
   },
   "owner": {
    "tests": 126,
@@ -116,16 +116,16 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 321,
-   "launches": 1417,
-   "mkdtemp": 413,
-   "wall_s": 93.1
+   "tests": 325,
+   "launches": 1423,
+   "mkdtemp": 425,
+   "wall_s": 94.1
   },
   "agentfixture": {
-   "tests": 93,
+   "tests": 94,
    "launches": 55,
-   "mkdtemp": 56,
-   "wall_s": 28.5
+   "mkdtemp": 58,
+   "wall_s": 27.8
   }
  },
  "categories": {
@@ -262,6 +262,39 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at fd58088 (U-04.1's review fixes, and E-01.8's launch-gate label fix's tests in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "lineage"
+   ],
+   "revision": "8b33a23d2ecf775d5e5444bb35e8448634b6bbee",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 8b33a23 (U-04.1's last review round: the restore-crossing rule, the lineage store's epoch read, and E-01.8's gate defect test in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "8b33a23d2ecf775d5e5444bb35e8448634b6bbee",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 8b33a23 (U-04.1's last review round: the restore-crossing rule, the lineage store's epoch read, and E-01.8's gate defect test in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "8b33a23d2ecf775d5e5444bb35e8448634b6bbee",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 8b33a23 (U-04.1's last review round: the restore-crossing rule, the lineage store's epoch read, and E-01.8's gate defect test in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
