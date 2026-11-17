@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -8,12 +8,15 @@ import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
+  useAui,
   useLocalRuntime,
   useRemoteThreadListRuntime,
   type ChatModelAdapter,
 } from "@assistant-ui/react";
 import { EmptyState } from "./EmptyState";
-import { acknowledgingChatAdapter, modelFreeChatAdapter } from "./chat-adapter";
+import { CAPTURE_TOOL, createCapturingChatAdapter, modelFreeChatAdapter } from "./chat-adapter";
+import { CaptureCard } from "./capture-card";
+import { RequestForm } from "./RequestForm";
 import { createThreadListAdapter } from "./conversation-adapters";
 import { HUMAN_TOOL_NAMES, TOOL_COMPONENTS } from "./decision-tool";
 import { useOwnerSession } from "../identity/OwnerSessionContext";
@@ -35,11 +38,14 @@ function UserMessage() {
   );
 }
 
+/** The tool UIs of the chat: a pending decision (U-02.2) and a captured request's card (P-01.3). */
+const CHAT_TOOLS = { ...TOOL_COMPONENTS, by_name: { ...TOOL_COMPONENTS.by_name, [CAPTURE_TOOL]: CaptureCard } };
+
 /** An assistant message: its text, and its tool calls through their tool UIs (a pending decision, U-02.2). */
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="owner-chat__message owner-chat__message--assistant">
-      <MessagePrimitive.Parts components={{ tools: TOOL_COMPONENTS }} />
+      <MessagePrimitive.Parts components={{ tools: CHAT_TOOLS }} />
     </MessagePrimitive.Root>
   );
 }
@@ -108,23 +114,31 @@ function UnconnectedChat() {
  * is kept as the paused assistant message, and after a browser or service
  * restart the history load brings it back with its call still pending; the
  * Owner answers it in the decision card and the completed message is an
- * update of the same id. CHAT_MODEL is the run's model adapter: the fixed
- * acknowledgement unless one is given (no chat model is connected yet).
+ * update of the same id.
+ *
+ * P-01.3: the request form sends a requested change as one message in the
+ * fixed layout; the run's model adapter (no model) then asks the Integration
+ * process to capture it and replies with the capture card. CHAT_MODEL is the
+ * run's model adapter: unless one is given, the capturing adapter, which
+ * answers any other message with the fixed acknowledgement.
  */
-export function StoredChat({
-  client,
-  chatModel = acknowledgingChatAdapter,
-}: {
-  client: IntegrationClient;
-  chatModel?: ChatModelAdapter;
-}) {
+export function StoredChat({ client, chatModel }: { client: IntegrationClient; chatModel?: ChatModelAdapter }) {
   const adapter = useMemo(() => createThreadListAdapter(client), [client]);
   const runtimeHook = useMemo(
     () =>
       function useStoredThreadRuntime() {
-        return useLocalRuntime(chatModel, { unstable_humanToolNames: HUMAN_TOOL_NAMES });
+        const aui = useAui();
+        const current = useRef(aui);
+        useEffect(() => {
+          current.current = aui;
+        });
+        const model = useMemo(
+          () => chatModel ?? createCapturingChatAdapter(client, () => current.current.threadListItem()),
+          [],
+        );
+        return useLocalRuntime(model, { unstable_humanToolNames: HUMAN_TOOL_NAMES });
       },
-    [chatModel],
+    [chatModel, client],
   );
   const runtime = useRemoteThreadListRuntime({ runtimeHook, adapter });
   return (
@@ -150,6 +164,7 @@ export function StoredChat({
             <ComposerPrimitive.Input className="owner-chat__input" aria-label="Message" placeholder="Write to the Owner host" />
             <ComposerPrimitive.Send className="owner-chat__send">Send</ComposerPrimitive.Send>
           </ComposerPrimitive.Root>
+          <RequestForm />
         </ThreadPrimitive.Root>
       </div>
     </AssistantRuntimeProvider>

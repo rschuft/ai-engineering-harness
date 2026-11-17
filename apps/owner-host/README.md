@@ -45,7 +45,8 @@ mounted while the area changes.
 | `SignIn`, `SessionControl` | `src/identity/SignIn.tsx`, `src/identity/SessionControl.tsx` | The login view, and the header's "Sign in" link or "Sign out" button. |
 | `ChatArea`, `StoredChat` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`; signed in, `useRemoteThreadListRuntime` over `useLocalRuntime` with `ThreadListPrimitive`, `ActionBarPrimitive.Edit` and `BranchPickerPrimitive`. |
 | `createThreadListAdapter`, `createHistoryAdapter` | `src/areas/conversation-adapters.ts` | The `RemoteThreadListAdapter` and the per-thread `ThreadHistoryAdapter` (through `unstable_useAdapters`) over the Integration process's thread and history routes (U-02.1). |
-| `acknowledgingChatAdapter`, `modelFreeChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run. |
+| `acknowledgingChatAdapter`, `modelFreeChatAdapter`, `createCapturingChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run; since P-01.3 the signed-in chat's adapter, which asks the Integration process to capture a message in the request layout and replies with its card, and answers any other message with the acknowledgement. |
+| `RequestForm`, `CaptureCard` | `src/areas/RequestForm.tsx`, `src/areas/capture-card.tsx` | The request form (P-01.3): the change's name, its objective, its acceptance criteria and suggestions as labelled one-line fields, sent as one message in the fixed layout shown in its preview; and the card that shows the capture's answer (the change and its commit) or its refusal with the stable code. |
 | `DecisionToolUI`, `UnknownToolUI`, `HUMAN_TOOL_NAMES` | `src/areas/decision-tool.tsx` | The tool UI for a pending Owner decision (U-02.2): the `owner_decision` human tool's question and one button per option while it is pending, the answer once given; any other tool call is named, never run. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
@@ -230,6 +231,34 @@ the store's rules, and compares the requests the shell sent with
 which the Integration process's test replays against a real process it stops
 and starts (`integrations/ownerhost/tests/test_pending_decision.py`). A real
 browser and a decision asked by a real producer are **not yet verified**.
+
+## Requested changes (P-01.3)
+
+Under the composer, the request form ([`src/areas/RequestForm.tsx`](src/areas/RequestForm.tsx))
+takes a requested change as labelled fields: the change's name (kebab-case), its objective, one or
+more acceptance criteria and optional suggestions, each one line. "Send the request" appends one
+message in the fixed layout the Integration process parses (`formatRequest`; the preview shows the
+exact text, which is what the store keeps and the record quotes):
+
+```
+Change: <name>
+Objective: <objective>
+Acceptance criteria:
+- <criterion>
+Suggestion: <suggestion>
+```
+
+No model is connected. The run's model adapter (`createCapturingChatAdapter`) waits until the
+history adapter has stored the message, then sends
+`POST /threads/{thread}/messages/{message}/capture` with the sha256 of the message's text
+(WebCrypto), and replies with an `intent_capture` tool call whose result is the service's answer
+or refusal, shown by the capture card; a message not in the layout gets the fixed acknowledgement
+and no capture. A suggestion is recorded as a hypothesis, never as the objective
+([the Integration process's capture](../../integrations/ownerhost/README.md#capture-p-013)).
+[`src/areas/capture-request.test.tsx`](src/areas/capture-request.test.tsx) shows it against a fake
+Integration process: the layout and its digest (equal to Python's), the order (the capture after
+the statement is stored), the card, a refusal's code and detail, and no capture for an ordinary
+message. A real browser is **not yet verified**.
 
 ## Agent Canvas and assistant-ui in one React app
 

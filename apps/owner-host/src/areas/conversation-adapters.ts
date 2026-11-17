@@ -71,6 +71,19 @@ function wire(item: ExportedMessageRepositoryItem): unknown {
 }
 
 /**
+ * The appends each client has sent, by message id (plan leaf P-01.3): the
+ * capture is asked only once its message is stored (messageStored), since
+ * the service compares the digest with the stored bytes. Message ids are the
+ * runtime's own; a message loaded from the store is stored already.
+ */
+const appends = new WeakMap<IntegrationClient, Map<string, Promise<void>>>();
+
+/** Resolves once the history adapter has stored message ID (at once when it was never appended here). */
+export function messageStored(client: IntegrationClient, id: string): Promise<void> {
+  return appends.get(client)?.get(id) ?? Promise.resolve();
+}
+
+/**
  * The history of the thread the runtime is on. THREAD resolves the thread
  * list item at each call, never once at mount (the runtime's contract).
  */
@@ -90,10 +103,14 @@ export function createHistoryAdapter(client: IntegrationClient, thread: () => Th
       return { messages: answer.messages.map(revive) };
     },
     append(item) {
-      return inOrder(async () => {
+      const write = inOrder(async () => {
         const { remoteId } = await thread().initialize();
         await client.request("POST", threadPath(remoteId, "/messages"), wire(item));
       });
+      let sent = appends.get(client);
+      if (!sent) appends.set(client, (sent = new Map()));
+      sent.set(item.message.id, write);
+      return write;
     },
     update(item) {
       return inOrder(async () => {

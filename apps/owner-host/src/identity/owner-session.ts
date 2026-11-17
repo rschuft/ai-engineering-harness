@@ -46,9 +46,28 @@ export const CONVERSATION_CODES = [
   "MESSAGE_IMMUTABLE",
   "MESSAGE_NOT_FOUND",
 ] as const;
+/** The refusals of the capture route (plan leaf P-01.3; integrations/ownerhost/capture.py). */
+export const CAPTURE_CODES = [
+  "CAPTURE_PROJECT_UNCONFIGURED",
+  "CAPTURE_CONFIG_INVALID",
+  "CAPTURE_STORE_UNAVAILABLE",
+  "CAPTURE_NOT_A_STATEMENT",
+  "CAPTURE_MESSAGE_MISMATCH",
+  "CAPTURE_LAYOUT_INVALID",
+  "COMMIT_IDENTITY_UNAVAILABLE",
+  "COMMIT_IDENTITY_INVALID",
+  "COMMIT_IDENTITY_PLACEHOLDER",
+  "CAPTURE_PROJECT_UNAVAILABLE",
+  "CAPTURE_CHANGE_EXISTS",
+  "CAPTURE_RECEIPT_CONFLICT",
+  "CAPTURE_COMMIT_REFUSED",
+  "CAPTURE_GIT_FAILED",
+  "CAPTURE_OUTCOME_UNKNOWN",
+] as const;
 export type RefusalCode =
   | (typeof CREDENTIAL_CODES)[number]
   | (typeof CONVERSATION_CODES)[number]
+  | (typeof CAPTURE_CODES)[number]
   | "HOST_NOT_ALLOWED"
   | "ORIGIN_NOT_ALLOWED"
   | "NOT_SHAPED"
@@ -75,6 +94,21 @@ export const REFUSAL_TEXT: Record<RefusalCode, string> = {
   MESSAGE_ID_CONFLICT: "The thread already holds another message under this id.",
   MESSAGE_IMMUTABLE: "A statement is never changed; an edit is kept as a new message.",
   MESSAGE_NOT_FOUND: "The Owner conversation store has no such message.",
+  CAPTURE_PROJECT_UNCONFIGURED: "No project repository is configured for the Owner host (components.owner_host).",
+  CAPTURE_CONFIG_INVALID: "The Owner host's project configuration (components.owner_host) is not valid.",
+  CAPTURE_STORE_UNAVAILABLE: "The Integration process was started without its integration store.",
+  CAPTURE_NOT_A_STATEMENT: "Only your own message can be captured, not a reply.",
+  CAPTURE_MESSAGE_MISMATCH: "The stored message is not the text sent, so nothing was captured.",
+  CAPTURE_LAYOUT_INVALID: "The request is not in the request form's layout, so nothing was captured.",
+  COMMIT_IDENTITY_UNAVAILABLE: "No git identity is configured for you (components.owner_host.git_identities).",
+  COMMIT_IDENTITY_INVALID: "Your configured git identity is not \"Name <email>\".",
+  COMMIT_IDENTITY_PLACEHOLDER: "Your configured git identity uses a placeholder domain; configure a real address.",
+  CAPTURE_PROJECT_UNAVAILABLE: "The project repository cannot be used (not a work tree with a commit on a branch).",
+  CAPTURE_CHANGE_EXISTS: "The project repository already has a change of this name; choose another name.",
+  CAPTURE_RECEIPT_CONFLICT: "This message was captured under another configuration.",
+  CAPTURE_COMMIT_REFUSED: "The project repository refused the commit; nothing was written.",
+  CAPTURE_GIT_FAILED: "The project repository could not be written; nothing was changed.",
+  CAPTURE_OUTCOME_UNKNOWN: "The capture's outcome is not known; read the project repository before anything else.",
 };
 
 export interface OwnerSession {
@@ -91,6 +125,8 @@ export class SessionRefusal extends Error {
   constructor(
     readonly code: RefusalCode,
     readonly status: number | null = null,
+    /** The service's own detail of the refusal, when it gave one (shown as given, never interpreted). */
+    readonly detail: string | null = null,
   ) {
     super(`${code}: ${REFUSAL_TEXT[code]}`);
     this.name = "SessionRefusal";
@@ -218,7 +254,9 @@ export function createIntegrationClient(credential: string, fetchImpl: FetchLike
       }
       if (!response.ok) {
         const code = (answer as { code?: unknown } | null)?.code;
-        if (typeof code === "string" && code in REFUSAL_TEXT) throw new SessionRefusal(code as RefusalCode, response.status);
+        const detail = (answer as { detail?: unknown } | null)?.detail;
+        if (typeof code === "string" && code in REFUSAL_TEXT)
+          throw new SessionRefusal(code as RefusalCode, response.status, typeof detail === "string" ? detail.slice(0, 500) : null);
         throw new SessionRefusal("ANSWER_INVALID", response.status);
       }
       return answer;
