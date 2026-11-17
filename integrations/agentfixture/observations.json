@@ -1362,6 +1362,12 @@
       },
       "socket-refusal": {
         "code": 1008
+      },
+      "ui-preflight": {
+        "status": 200
+      },
+      "malformed": {
+        "status": 400
       }
     },
     "routes": [
@@ -1699,6 +1705,45 @@
             "type": "object"
           }
         }
+      },
+      "BashOutput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "BashOutput"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stdout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stderr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "scenarios": {
@@ -1834,12 +1879,14 @@
         "answer": "result",
         "field": "`delivered`",
         "class": "none",
-        "citation": "not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13); the production parser (`attempt_run.parse_result`) reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8",
+        "citation": "not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13; the engineering manager's ruling 7 of E-01.7's review: outside criterion 7's served fields); the production parser reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8",
         "determinedBy": "",
-        "read": false,
-        "readBy": [],
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
         "served": false,
-        "marks": ""
+        "marks": "transport key: E-01.8"
       },
       {
         "face": "dispatcher",
@@ -2300,6 +2347,54 @@
         "field": "`fixture`",
         "class": "label",
         "citation": "the fixture's label, on the handshake",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-preflight",
+        "field": "`status`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/middleware.py:34-50` (the pinned server answers a CORS preflight through Starlette's CORSMiddleware: 200 for an origin it allows)",
+        "determinedBy": "a preflight of a UI route for GET from a configured origin (the engineering manager's ruling 2 of E-01.7's review); its CORS headers are the listener's own policy, as the label header is, not fields of an answer",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-preflight",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, naming the source-derived field",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "both",
+        "answer": "malformed",
+        "field": "`status`",
+        "class": "label",
+        "citation": "the fixture's refusal of a body it cannot parse (not JSON, or nested past the parser's depth): `400` (E-01.7's review, N-d)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "both",
+        "answer": "malformed",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, with the reason it refused",
         "determinedBy": "",
         "read": false,
         "readBy": [],

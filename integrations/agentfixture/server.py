@@ -125,10 +125,12 @@ class Fixture:
     """One served fixture: the core, the scenario and its counters, the locked document, the call log."""
 
     def __init__(self, scenario: str = 'finished', *, core=None, openapi: dict | None = None, log: Path | None = None,
-                 scratch: Path | None = None):
+                 scratch: Path | None = None, ui_origins=()):
         if scenario not in SCENARIOS:
             raise ValueError(f'not a scenario: {scenario!r}')
         self.scenario = scenario
+        self.ui_origins = tuple(ui_origins)
+        self._lock = None
         self.core = core if core is not None else core_module().AgentServerCore(
             scratch=scratch, ui_running_reads=RUNNING_READS if scenario == 'running' else 0)
         self.openapi, self.log_path = openapi, (Path(log) if log is not None else None)
@@ -141,6 +143,46 @@ class Fixture:
     def call(self, method: str, path: str, body):
         """One request into the core (its call log, then its answer): the dispatcher's face's one entry to it."""
         return self.core(method, path, body)
+
+    async def serialized(self, work):
+        """WORK (a function of no argument) run off the event loop, in a worker thread, one at a time: the core's
+        state is not shared between threads, and SEED and RESULT run a process (review N-e). The loop meanwhile
+        goes on serving what needs no core state (a refusal outside the catalog, a preflight, a withheld response,
+        the stop request)."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            return await asyncio.to_thread(work)
+
+    # -- CORS (the engineering manager's ruling 2 of E-01.7's review) ---------------------------------------------
+    def preflight(self, face: str, path: str, headers: dict) -> tuple[dict, list]:
+        """(the answer, its CORS headers) for an OPTIONS request. The dispatcher's face has no CORS at all: no browser
+        drives it, so its preflight is the labelled refusal. On the UI face a preflight is answered only from an
+        explicitly configured origin (``ui_origins``; none by default), for ``GET`` of a UI route the catalog serves,
+        asking for no header but the access value's; no credentials are ever allowed. Anything else is the labelled
+        refusal."""
+        core = self.core
+        origin = headers.get('origin')
+        method = headers.get('access-control-request-method')
+        asked = {h.strip().lower() for h in headers.get('access-control-request-headers', '').split(',') if h.strip()}
+        if face != 'ui':
+            return core.refuse('a preflight on the dispatcher\'s face: no browser drives it'), []
+        if origin not in self.ui_origins or method != 'GET' or not in_catalog(self.routes, 'ui', 'GET', path) \
+                or not asked <= {KEY_HEADER}:
+            return core.refuse('a preflight the UI face does not allow (an origin not configured, a method but GET, '
+                               'a route outside its catalog, or a header but the access value\'s)'), []
+        cors = [(b'access-control-allow-origin', origin.encode('latin-1')), (b'access-control-allow-methods', b'GET'),
+                (b'vary', b'Origin')]
+        if asked:
+            cors.append((b'access-control-allow-headers', KEY_HEADER.encode('ascii')))
+        return core.ui_preflight(), cors
+
+    def cors(self, face: str, headers: dict) -> list:
+        """The CORS headers of a UI-face answer to a configured origin's request; none otherwise."""
+        origin = headers.get('origin')
+        if face == 'ui' and origin in self.ui_origins:
+            return [(b'access-control-allow-origin', origin.encode('latin-1')), (b'vary', b'Origin')]
+        return []
 
     def note(self, **entry) -> None:
         self.log.append(entry)
@@ -216,10 +258,10 @@ def _plain(value):
 
 
 def create_app(fixture: Fixture, *, lifespan=None):
-    """The ASGI application: one handler for both faces' HTTP and the UI face's session socket, behind CORS as the
-    pinned server does it (an origin whose host is localhost or 127.0.0.1 is allowed, with credentials, every method
-    and header: G10, ``as:openhands/agent_server/middleware.py:34-60``)."""
-    from starlette.middleware.cors import CORSMiddleware
+    """The ASGI application: one handler for both faces' HTTP and the UI face's session socket. Its CORS is its own
+    and narrow (``Fixture.preflight``, ``Fixture.cors``): none on the dispatcher's face; on the UI face, GET only, from
+    configured origins only, never with credentials. Agent Canvas needs none of it: it reaches the UI face through
+    upstream's static server, whose reverse proxy makes its requests same-origin (the I1 design's R14 fact 2)."""
 
     async def app(scope, receive, send):
         if scope['type'] == 'lifespan':
@@ -228,8 +270,7 @@ def create_app(fixture: Fixture, *, lifespan=None):
             return await _socket(fixture, scope, receive, send)
         return await _http(fixture, scope, receive, send)
 
-    return CORSMiddleware(app, allow_origin_regex=r'https?://(localhost|127\.0\.0\.1)(:[0-9]+)?',
-                          allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
+    return app
 
 
 async def _lifespan(scope, receive, send, lifespan):
@@ -276,31 +317,42 @@ async def _http(fixture: Fixture, scope, receive, send):
     raw, connected = await _body(receive)
     if not connected:
         return
+    if method == 'OPTIONS':
+        answer, cors = fixture.preflight(face, path, headers)
+        fixture.note(face=face, method=method, path=path, event='answered', answer=answer['fixture']['answer'],
+                     status=answer.get('status'))
+        return await _respond(send, answer, cors)
     body = None
     if raw:
         try:
             body = json.loads(raw.decode('utf-8'))
-        except ValueError:
-            answer = fixture.core.refuse('a body that is not JSON')
-            fixture.note(face=face, method=method, path=path, event='answered', answer='refusal')
+        except (ValueError, RecursionError):
+            answer = fixture.core.malformed()
+            fixture.note(face=face, method=method, path=path, event='answered', answer='malformed',
+                         status=answer['status'])
             return await _respond(send, answer)
-    if face == 'dispatcher':
-        answer, event = fixture.dispatcher(method, path, query, headers.get(KEY_HEADER), body)
+    key = headers.get(KEY_HEADER)
+    if face == 'ui' and method != 'GET':
+        answer, event = fixture.core.refuse(f'{method} {path}: the UI face is read only'), 'answered'
+    elif not in_catalog(fixture.routes, face, method, path):
+        answer, event = fixture.core.refuse(f'{method} {path}: not in the catalog'), 'answered'
+    elif face == 'dispatcher':
+        answer, event = await fixture.serialized(lambda: fixture.dispatcher(method, path, query, key, body))
     else:
-        answer, event = fixture.ui(method, path, query, headers.get(KEY_HEADER)), 'answered'
+        answer, event = await fixture.serialized(lambda: fixture.ui(method, path, query, key)), 'answered'
     fixture.note(face=face, method=method, path=path, event=event,
                  answer=None if answer is None else answer['fixture']['answer'],
                  status=None if answer is None else answer.get('status'))
     if answer is None:
         return await _withhold(receive)
-    await _respond(send, answer)
+    await _respond(send, answer, fixture.cors(face, headers))
 
 
-async def _respond(send, answer: dict) -> None:
+async def _respond(send, answer: dict, extra=()) -> None:
     answer = _plain(answer)
     status = answer.get('status')
     data = b'' if 'body' not in answer or status == 204 else json.dumps(answer['body']).encode('utf-8')
-    headers = [label_header(answer)]
+    headers = [label_header(answer), *extra]
     if data:
         headers.append((b'content-type', b'application/json'))
     await send({'type': 'http.response.start', 'status': status, 'headers': headers})
@@ -354,7 +406,7 @@ async def _socket(fixture: Fixture, scope, receive, send):
         unauthorized = core.answers['ui-socket-unauthorized']
         return await _close(fixture, send, unauthorized['code'], unauthorized['reason'], face, path,
                             answer='ui-socket-unauthorized')
-    frames, refused = core.ui_session(cid, after_seq)
+    frames, refused = await fixture.serialized(lambda: core.ui_session(cid, after_seq))
     if frames is None:
         return await _close(fixture, send, REFUSED_CLOSE, refused, face, path)
     for frame in frames:
@@ -427,13 +479,30 @@ def bind_listener(port: int) -> socket.socket:
     return listener
 
 
+def guard_probe(port: int) -> str:
+    """The armed guard shown in the process itself (review ruling 4): one connect to the process's own listener,
+    which the guard must refuse before any packet is sent. 'refused' when it did, else what happened instead (a
+    connect that went through means the guard is not armed). It is the served sources' one connect call site."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.connect((LOOPBACK, port))
+        return 'connected'
+    except OutboundRefused:
+        return 'refused'
+    except OSError as exc:
+        return f'error: {type(exc).__name__}'
+    finally:
+        probe.close()
+
+
 def serve(*, port: int, scenario: str, log: Path, openapi: Path | None = None, state_dir: Path | None = None,
-          scratch: Path | None = None) -> int:
-    """The server process: bind, write ``<state-dir>/server.json`` (pid, address, port, the loaded modules), serve
-    until ``<state-dir>/stop-request`` exists."""
+          scratch: Path | None = None, ui_origins=()) -> int:
+    """The server process: bind, write ``<state-dir>/server.json`` (pid, address, port, the loaded modules), arm the
+    outbound guard once the event loop exists and record its probe (``<state-dir>/guard.json``), then print its ready
+    line and serve until ``<state-dir>/stop-request`` exists."""
     import uvicorn
     document = locked_document(openapi) if openapi is not None else None
-    fixture = Fixture(scenario, openapi=document, log=log, scratch=scratch)
+    fixture = Fixture(scenario, openapi=document, log=log, scratch=scratch, ui_origins=ui_origins)
     listener = bind_listener(port)
     holder = {}
     state = Path(state_dir) if state_dir is not None else None
@@ -441,6 +510,10 @@ def serve(*, port: int, scenario: str, log: Path, openapi: Path | None = None, s
     @contextlib.asynccontextmanager
     async def lifespan():
         OUTBOUND_GUARD.arm()
+        if state is not None:
+            (state / 'guard.json').write_text(json.dumps({'armed': OUTBOUND_GUARD.armed,
+                                                          'probe': guard_probe(port)}) + '\n', encoding='utf-8')
+        print(f'listening {LOOPBACK}:{port}', flush=True)  # the starter's signal: bound, the guard armed
         async def watch():
             while state is None or not (state / 'stop-request').exists():
                 await asyncio.sleep(STOP_POLL_S)
@@ -461,7 +534,6 @@ def serve(*, port: int, scenario: str, log: Path, openapi: Path | None = None, s
         (state / 'server.json').write_text(json.dumps({'pid': os.getpid(), 'address': LOOPBACK, 'port': port,
                                                        'scenario': scenario, 'modules': modules}) + '\n',
                                            encoding='utf-8')
-    print(f'listening {LOOPBACK}:{port}', flush=True)      # the starter's signal: the listener is bound
     try:
         server.run(sockets=[listener])
     finally:
@@ -480,9 +552,11 @@ def main(argv=None) -> int:
     run.add_argument('--openapi', type=Path, help='the locked release openapi.json (downloaded, sha256-checked)')
     run.add_argument('--state-dir', type=Path, help='server.json and the stop-request file')
     run.add_argument('--scratch', type=Path, help='the core\'s scratch directory (SEED and RESULT)')
+    run.add_argument('--ui-origin', action='append', default=[],
+                     help='an origin whose browser requests the UI face answers with CORS (GET only; none by default)')
     args = parser.parse_args(argv)
     return serve(port=args.port, scenario=args.scenario, log=args.log, openapi=args.openapi, state_dir=args.state_dir,
-                 scratch=args.scratch)
+                 scratch=args.scratch, ui_origins=args.ui_origin)
 
 
 if __name__ == '__main__':

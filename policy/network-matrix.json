@@ -109,7 +109,7 @@
         "fd-host-loopback-exposure"
       ],
       "inspection": [
-        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+        "guest.py host-census (every harness host listener on 127.0.0.1: QEMU and Gitea by PID; by port HOST_CENSUS_PORTS 13300, 13310, 13320, 5173 and 4173, the Integration process and the served Agent Server fixture among them)"
       ],
       "notes": "Host-internal edges are separated by credential entry and code path, not prevented: QMP, the SSH forward, Gitea, the Owner host and the stores are reachable by every process of the Owner's account (decision 0013, point 6). This does not amend decision 0010."
     },

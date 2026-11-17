@@ -380,8 +380,22 @@ has room the UI face also shows it in the data (`title`, `tags`). `transport.py`
 
 **Refusals.** A request outside the catalog, or one whose answer would need a field no class admits (other than a
 property listed not served on the dispatcher's face), is answered HTTP 501 with the label (`FIXTURE_NO_OBSERVATION`
-and why). A refused socket is closed 1008 with the reason `FIXTURE_NO_OBSERVATION: <why>` after a labelled
-handshake.
+and why). A body that cannot be parsed (not JSON, or nested past the parser's depth) is the labelled 400
+(`malformed`), never an unlabelled error. A refused socket is closed 1008 with the reason
+`FIXTURE_NO_OBSERVATION: <why>` after a labelled handshake. A request line the HTTP layer itself rejects (uvicorn's
+own 400, before the application runs) carries no label: no application code sees it.
+
+**CORS** (the engineering manager's ruling 2 of E-01.7's review). The dispatcher's face has none: no browser drives
+it, so a preflight there is the labelled 501 and no answer carries an `Access-Control-*` header. The UI face answers a
+browser only from origins configured explicitly (`--ui-origin`; none by default), only for `GET` of a route its
+catalog serves, asking for no header but `X-Session-API-Key`, and never with credentials: the preflight is the
+labelled `ui-preflight` (its status source-derived from the pinned server's own preflight through Starlette's
+`CORSMiddleware`, `as:openhands/agent_server/middleware.py:34-50`), with `Access-Control-Allow-Origin` (that origin),
+`-Methods` `GET` and `-Headers` `x-session-api-key`; any other preflight is the labelled 501. Those headers are the
+listener's own policy, as its label header is, not fields of an answer. A preflight is matched to the UI `GET` route
+it precedes (a reading: the pinned server's CORS middleware answers a preflight before any route; the inventory lists
+no preflight route). Agent Canvas needs none of this: it reaches the UI face through upstream's static server, whose
+reverse proxy makes its requests same-origin (the I1 design's R14 fact 2), so no credentials mode is needed.
 
 **Create validation** (the engineering manager's ruling 2, carried from E-01.4.2). Before the core sees a create, its
 body is validated against the locked release document's `StartConversationRequest` with the harness's
@@ -391,7 +405,11 @@ process is given its path (`--openapi`) and checks its sha256. A body that does 
 document is given, is refused with the label and never answered 201.
 
 **What it never does.** It opens no outbound connection: once its event loop exists, an audit hook refuses every
-`socket.connect` and `socket.getaddrinfo` in the process (the Integration process's measured pattern). It imports no
+`socket.connect` and `socket.getaddrinfo` in the process (the Integration process's measured pattern). The process
+shows it armed itself: before its ready line it tries one connect to its own listener (`guard_probe`, the served
+sources' one connect call site) and records in `<state-dir>/guard.json` that the guard refused it. Its core calls run
+off the event loop, one at a time (a worker thread under one lock): SEED and RESULT run a process, and meanwhile the
+loop goes on answering what needs no core state. It imports no
 client module (`transport.py` is the client; the server never loads it, nor any dispatch module: the core reads the
 SEED and RESULT scripts from `attempt_run.py`'s source as data). No route reaches a guest, a model or a credential;
 it never executes what it receives (the core runs only the harness's own SEED and RESULT scripts, recognized byte for
@@ -408,10 +426,10 @@ transport event is not an answer: the listener holds the request and sends nothi
 |---|---|---|
 | `finished` | the dispatcher's face as the core answers it; the UI face idle until the message, then finished | none |
 | `running` | as `finished` on the dispatcher's face; the UI face shows the conversation running for 7 of its own conversation reads after the message (D1's wait read the conversation seven times: D1 §5 calls), then finished | none |
-| `pending` | the conversation stays idle: the dispatcher's message never reaches the core | the first `POST .../events`: the request never reaches the core; its response is withheld |
+| `pending` | the conversation stays idle: the dispatcher's message never reaches the core. Over the listener the attempt run ends `TURN_UNRECONCILED`, its turn journal `unknown` (`no-answer`), its conversation idle with no message; `recover` sends nothing again | the first `POST .../events`: the request never reaches the core; its response is withheld |
 | `failed` | S-01.3.1's observed refusal of a create: the dispatcher's face admits no key, so the create (and every key-gated request) is answered `unauthorized` | none |
-| `lost-create-acknowledgement` | the create is received and its acknowledgement lost; the lookup is answered, and E-01.4.1's reconcile settles it | the first `POST /api/conversations`: it reaches the core; its response is withheld |
-| `unknown` | the create is received and its acknowledgement lost, and so is every lookup of that conversation: the attempt stays `unknown` (`LOOKUP_INDETERMINATE`) | the first `POST /api/conversations`, and each `GET /api/conversations/{id}` of that conversation: each reaches the core; each response is withheld |
+| `lost-create-acknowledgement` | the create is received and its acknowledgement lost (the dispatch leaves the attempt `unknown`, `create-unanswered`); E-01.4.1's reconcile finds the conversation and confirms the attempt on it; no second create | the first `POST /api/conversations`: it reaches the core; its response is withheld |
+| `unknown` | the create is received and its acknowledgement lost, and so is every lookup of that conversation: E-01.4.1's reconcile leaves the attempt `unknown` (`still_unknown`), and E-01.4.2's `recover` asks once more and holds it (`OUTCOME_UNKNOWN`, its lookup `indeterminate`); no second create | the first `POST /api/conversations`, and each `GET /api/conversations/{id}` of that conversation: each reaches the core; each response is withheld |
 
 **The two faces can diverge in time** (the engineering manager's ruling 1 of dispatch 24, option (A)). No committed
 record observes a non-terminal status read after the dispatcher's message (D1's seven wait reads are recorded without
@@ -420,6 +438,19 @@ first read after the message, with the core's scenario mark. The UI face may ser
 proof admits there; in the running scenario it does so for its own call count. A UI view can therefore show a turn
 running while the dispatcher has already taken it as finished. The "unknown" scenario is built from withheld answers
 only (ruling 3): the listener never needs the source-derived `message-event`.
+
+The outcomes in the table for `pending`, `lost-create-acknowledgement` and `unknown` are shown over the listener by the
+production paths themselves (`tests/test_scenarios.py`: the dispatch, E-01.4.1's `reconcile_creates`, E-01.4.2's
+`recover` and the attempt run, unmodified, through the fixture transport), a withheld answer ending at the transport's
+injected ceiling; `failed`'s by the restart matrix over the listener (`test_read_binding.ServedReadBinding`).
+
+**The session socket** sends, at connect, the one `sync` frame and the replay of the events above `after_seq`, and no
+live frame after: an event recorded while a socket is open reaches the client at its next connect. U-01.2's gate G5
+must account for it.
+
+**Records.** Every answer carries the fixture's label, and an answer without it never reaches the dispatch path (the
+transport refuses it); no answer can be taken as live (`lineage_resolve.answering_authority`: `test_served.Authority`).
+The labels on the dispatcher's own records ("every record it causes", criterion 11) are E-01.8's (the I1 design's R11).
 
 ### RESULT (`result.py`)
 
@@ -491,14 +522,19 @@ module so, the restart matrix again in the `failed` scenario, and RESULT's answe
 - the only failing tests are the three restart-matrix rows that settle a turn from the event log (J, J' and K): the
   listener refuses the event search whose answer would hold the source-derived `message-event`, as the proof
   requires; every other test of the dispatch suite passes against the served core;
+- the failed-scenario run fails on its refused creates (its return code, its failures, the 401 given to the dispatch
+  path);
 - every read is of a row marked read, served and not clock-valued (the judge of E-01.4.2's binding, over the core's
-  rows and the served rows); RESULT's `body.stdout` is one text whose marker lines are its rows;
+  rows and the served rows);
+- RESULT's `body.stdout` is one text whose marker lines are rows of their own: a line row is read exactly when the
+  production parser refuses the text without that line (each line taken away in turn; the table is not consulted);
 - each served row marked read is read, by exactly the dispatch functions its Read column names.
 
-One read is listed apart and not judged: the production parser reads RESULT's `delivered` (absent) on the answer, a
-key the exchange delivery adds, not a field of the Agent Server's answer. The delivery is E-01.8's seam; until it
-exists that read sees nothing. The binding needs the locked document (the listener validates every create), so it
-runs when `AIEH_LOCKED_OPENAPI` is given and is skipped otherwise, saying so.
+One row is a transport key (its mark, the engineering manager's ruling 7 of E-01.7's review): RESULT's `delivered`,
+which the production parser reads (absent) on the answer, a key the exchange delivery adds and not a field of the
+Agent Server's answer, outside criterion 7's served fields. It is never served; the judge lists its read apart, by the
+row's mark. The delivery is E-01.8's seam. The binding needs the locked document (the listener validates every
+create), so it runs when `AIEH_LOCKED_OPENAPI` is given and is skipped otherwise, saying so.
 
 ## The served fixture's provenance table
 
@@ -516,7 +552,7 @@ lines).
 | dispatcher | `result` | `body.stdout#test-output` | observation | D1 §5 (8) and §2 (Tests in RESULT: output 114 bytes, sha256 `432e7641…7754`), the bytes as D1 §12's Owner report shows them (the report's sha256 `4c2e6826…c338` checked) | D1's test command over D1's base outside `openspec/` and `backlog/` and D1's changes (planning's PB-7); served only when the script's own run of it passed | yes: `attempt_run.parse_result` | yes |  |
 | dispatcher | `result` | `body.stdout#frame` | pinned-rule | `integrations/dispatch/attempt_run.py` `RESULT_SCRIPT` (the frame it prints when the command asks for the exchange delivery) | the command's `frame` parameter | no | yes |  |
 | dispatcher | `result` | `body.stderr`, `body.command_id`, `body.kind`, `body.id`, `body.timestamp`, `body.order` | none | not served: no committed observation of its value, and not read; `BashOutput` requires `command_id` and `kind` (`as:openhands/agent_server/models.py:669-687`), listed here (the dispatcher's-face clause) |  | no | no |  |
-| dispatcher | `result` | `delivered` | none | not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13); the production parser (`attempt_run.parse_result`) reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8 |  | no | no |  |
+| dispatcher | `result` | `delivered` | none | not served: the transport's key, not a field of the Agent Server's answer (the exchange delivery, E-01.8's seam: the I1 design's R13; the engineering manager's ruling 7 of E-01.7's review: outside criterion 7's served fields); the production parser reads it, absent, at this answer's boundary until the seam adds it; over the listener the whole result path is proven at E-01.8 |  | yes: `attempt_run.parse_result` | no | transport key: E-01.8 |
 | dispatcher | `result` | `fixture` | label | the fixture's label |  | no | yes |  |
 | dispatcher | `unauthorized` | `status` | observation | S-01.3.1 §3.4 (`401 {"detail": "Unauthorized"}`, a key-gated HTTP route with no key or a wrong key); E-01.3.3 §8.3 step (4), PASS live at §9.1 (a key the outer server does not hold, the runtime credential, answered 401 on its key-gated routes) | a key-gated route (every route of the face but `GET /server_info`) with no key or a key not the face's; in the failed scenario every key | yes: `dispatch_inputs._dispatch`, `dispatch_inputs.create_receipt`, `reconcile._lookup`, `reconcile.verdict_of`, `restart_recovery._lookup_reserved` | yes |  |
 | dispatcher | `unauthorized` | `body`, `body.detail` | observation | S-01.3.1 §3.4 (`{"detail": "Unauthorized"}`) | as `status` | yes: `dispatch_inputs.create_receipt`, `reconcile.verdict_of` | yes |  |
@@ -555,6 +591,10 @@ lines).
 | ui | `ui-socket-denied` | `fixture` | label | the fixture's label |  | no | yes |  |
 | both | `socket-refusal` | `close.code`, `close.reason` | label | the fixture's refusal on a socket: close 1008, the reason `FIXTURE_NO_OBSERVATION` and why (an inbound message on the read-only face, a socket outside the catalog, a conversation it does not hold) |  | no | yes |  |
 | both | `socket-refusal` | `fixture` | label | the fixture's label, on the handshake |  | no | yes |  |
+| ui | `ui-preflight` | `status` | source-derived | `as:openhands/agent_server/middleware.py:34-50` (the pinned server answers a CORS preflight through Starlette's CORSMiddleware: 200 for an origin it allows) | a preflight of a UI route for GET from a configured origin (the engineering manager's ruling 2 of E-01.7's review); its CORS headers are the listener's own policy, as the label header is, not fields of an answer | no | yes | source-derived |
+| ui | `ui-preflight` | `fixture` | label | the fixture's label, naming the source-derived field |  | no | yes |  |
+| both | `malformed` | `status` | label | the fixture's refusal of a body it cannot parse (not JSON, or nested past the parser's depth): `400` (E-01.7's review, N-d) |  | no | yes |  |
+| both | `malformed` | `fixture` | label | the fixture's label, with the reason it refused |  | no | yes |  |
 
 **Source-derived entries** are on the UI face only, but for the core's one dispatcher-face entry (`message-event`),
 which the listener refuses to serve. Their observed counterparts are U-03.2's (planning's re-homing).

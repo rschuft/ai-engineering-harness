@@ -1358,7 +1358,7 @@
         "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
         "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md"
       ],
-      "notes": "Recorded before the listener first listens (the I1 design, section 5 N5 and N6: evidence/I1-integration-design-2026-11-16.md). Observed at E-01.7's verdict by its conformance suite."
+      "notes": "Recorded before the listener first listens (the I1 design, section 5 N5: evidence/I1-integration-design-2026-11-16.md). N6, the census port, followed in E-01.7's review fixes: 13320 is in tools/guest.py HOST_CENSUS_PORTS. Observed at E-01.7's verdict by its conformance suite."
     },
     {
       "id": "api-integration-service",

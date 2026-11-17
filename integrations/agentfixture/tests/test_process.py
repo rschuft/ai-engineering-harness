@@ -31,6 +31,7 @@ class Process(unittest.TestCase):
         try:
             cls.answer = cls.served.transport(timeout=30)('GET', '/server_info')
             cls.record = cls.served.record()
+            cls.guard = json.loads((cls.served.state / 'guard.json').read_text(encoding='utf-8'))
             cls.rows = [row for row in CENSUS.read_tables() if row.pid == cls.record['pid']]
         finally:
             cls.served.stop()
@@ -57,6 +58,28 @@ class Process(unittest.TestCase):
     def test_it_stops_on_its_stop_request(self):
         self.assertEqual(self.exit, 0)
 
+    def test_the_outbound_guard_is_armed_in_the_served_process(self):
+        """Review ruling 4: written by the process itself once the guard is armed, before its ready line: a connect
+        to its own listener was refused by the guard (an unarmed guard lets it through: 'connected')."""
+        self.assertEqual(self.guard, {'armed': True, 'probe': 'refused'})
+
+
+@unittest.skipIf(S.locked_openapi_path() is None, 'AIEH_LOCKED_OPENAPI is not given: the create needs the locked '
+                                                  'openapi.json, never committed (decision 0005)')
+class ProcessWithTheDocument(unittest.TestCase):
+    """Review N-g: the served process started with ``--openapi`` validates a create with it."""
+    category = 'integration'
+
+    def test_the_real_process_validates_a_create_with_the_document_it_was_given(self):
+        served = S.Served('finished', openapi=S.locked_openapi_path()).start()
+        self.addCleanup(served.close)
+        transport = served.transport(timeout=30)
+        self.assertEqual(transport('POST', '/api/conversations', S.d1_create())['status'], 201)
+        bad = transport('POST', '/api/conversations', dict(S.d1_create('11111111-2222-4333-8444-555555555555'),
+                                                           workspace=7))
+        self.assertEqual((bad['status'], bad['fixture']['answer']), (501, 'refusal'))
+        self.assertIn('does not validate', bad['fixture']['refused'])
+
 
 class Census(unittest.TestCase):
     """No outbound call site in the served sources (a syntax-tree census), and the guard the process arms."""
@@ -68,9 +91,14 @@ class Census(unittest.TestCase):
         for name in SERVED_SOURCES:
             tree = ast.parse((S.PACKAGE / name).read_text(encoding='utf-8'))
             with self.subTest(source=name):
+                # the one exception: the guard's own probe, a connect the armed guard must refuse (review ruling 4)
+                probes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'guard_probe']
+                skipped = {id(n) for probe in probes for n in ast.walk(probe)}
                 calls = {getattr(n.func, 'attr', getattr(n.func, 'id', None)) for n in ast.walk(tree)
-                         if isinstance(n, ast.Call)}
+                         if isinstance(n, ast.Call) and id(n) not in skipped}
                 self.assertFalse(calls & forbidden_calls, sorted(calls & forbidden_calls))
+                if name == 'server.py':
+                    self.assertEqual(len(probes), 1)
                 imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
                     {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
                 self.assertFalse(imported & {'http.client', 'urllib.request', 'requests', 'httpx'}, imported)
@@ -83,13 +111,29 @@ class Census(unittest.TestCase):
                     SERVER.OutboundGuard._hook(event, ())
         SERVER.OutboundGuard._hook('socket.bind', ())
 
+    def test_the_declared_port_is_the_host_censuss_and_the_matrixs(self):
+        """N6 (review ruling 3): 13320 is in tools/guest.py HOST_CENSUS_PORTS and the network matrix's protocol."""
+        guest = ast.parse((S.REPO / 'tools' / 'guest.py').read_text(encoding='utf-8'))
+        census = next(n for n in guest.body if isinstance(n, ast.Assign)
+                      and [ast.unparse(t) for t in n.targets] == ['HOST_CENSUS_PORTS'])
+        self.assertIn(SERVER.PORT, ast.literal_eval(census.value))
+        matrix = json.loads((S.REPO / 'policy' / 'network-matrix.json').read_text(encoding='utf-8'))
+        (edge,) = [e for e in matrix['edges'] if e['id'] == 'nm-dispatcher-agentfixture']
+        self.assertIn(f'{SERVER.LOOPBACK}:{SERVER.PORT}', edge['protocol'])
+        (same,) = [e for e in matrix['edges'] if e['id'] == 'nm-owner-same-account']
+        self.assertIn('13320', ' '.join(same['inspection']))
+
 
 class _Unlabelled(http.server.BaseHTTPRequestHandler):
+    label = None             # the X-AIEH-Fixture header this server sends (None: none)
+
     def do_GET(self):
         data = json.dumps({'version': '1.60.1'}).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
+        if self.label is not None:
+            self.send_header('X-AIEH-Fixture', json.dumps(self.label))
         self.end_headers()
         self.wfile.write(data)
 
@@ -100,15 +144,33 @@ class _Unlabelled(http.server.BaseHTTPRequestHandler):
 class Transport(unittest.TestCase):
     category = 'integration'
 
-    def test_an_answer_without_the_label_is_refused(self):
-        server = http.server.HTTPServer(('127.0.0.1', 0), _Unlabelled)
+    def serving(self, label):
+        handler = type('Labelled', (_Unlabelled,), {'label': label})
+        server = http.server.HTTPServer(('127.0.0.1', 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
+        return TRANSPORT.FixtureTransport(server.server_address[1], timeout=30)
+
+    def test_an_answer_without_the_label_is_refused(self):
         with self.assertRaises(TRANSPORT.FixtureTransportError) as caught:
-            TRANSPORT.FixtureTransport(server.server_address[1], timeout=30)('GET', '/server_info')
+            self.serving(None)('GET', '/server_info')
         self.assertEqual(caught.exception.code, 'FIXTURE_LABEL_MISSING')
+
+    def test_a_label_whose_authority_is_not_fixture_is_refused(self):
+        """Review ruling 5: the fixture's name with another authority (live, none, other) is not the fixture."""
+        for authority in ('live', None, 'fixture-ish'):
+            with self.subTest(authority=authority):
+                label = {'fixture': TRANSPORT.FIXTURE, 'answer': 'server-info'}
+                if authority is not None:
+                    label['authority'] = authority
+                with self.assertRaises(TRANSPORT.FixtureTransportError) as caught:
+                    self.serving(label)('GET', '/server_info')
+                self.assertEqual(caught.exception.code, 'FIXTURE_LABEL_MISSING')
+        answer = self.serving({'fixture': TRANSPORT.FIXTURE, 'authority': 'fixture', 'answer': 'server-info'})(
+            'GET', '/server_info')
+        self.assertEqual(answer['status'], 200)
 
     def test_a_delivery_or_the_ui_face_is_refused_before_anything_is_sent(self):
         transport = TRANSPORT.FixtureTransport(S.free_port(), timeout=30)

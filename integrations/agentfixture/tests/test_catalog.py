@@ -22,6 +22,7 @@ ROWS = SERVED['provenance']
 README = S.PACKAGE / 'README.md'
 CLASSES = {'observation', 'echo', 'pinned-rule', 'label', 'source-derived', 'none'}
 UPSTREAM = r'`(sdk|as):openhands/[a-z_/]+\.py:\d+(-\d+)?`'
+TRANSPORT_KEY = 'transport key'
 RECORDS = r'(S-01\.3\.1 §\d|E-01\.3\.3 §\d|D1 §\d|F-04\.1c §\d|F-04\.2 §\d)'
 CHECK_PROFILE = S.load('aieh_check_profile', S.REPO / 'tools' / 'check_profile.py')
 OPENAPI = S.locked_openapi_path()
@@ -83,7 +84,17 @@ class Rules(unittest.TestCase):
                 self.assertEqual(row['served'], row['class'] != 'none')
                 if row['class'] == 'none':
                     self.assertTrue(row['citation'].startswith('not served:'))
+                    if TRANSPORT_KEY in row['marks']:
+                        continue
                     self.assertFalse(row['read'])
+
+    def test_the_one_transport_key_is_read_never_served_and_marked_for_e_01_8(self):
+        """Review ruling 7: ``delivered`` is the exchange delivery's key, not an Agent Server answer field: read by
+        the production parser, never served, marked so the read-binding judge lists it apart."""
+        keys = [r for r in ROWS if TRANSPORT_KEY in r['marks']]
+        self.assertEqual([(r['answer'], r['field'], r['class'], r['served'], r['readBy']) for r in keys],
+                         [('result', '`delivered`', 'none', False, ['attempt_run.parse_result'])])
+        self.assertIn('E-01.8', keys[0]['marks'])
 
     def test_source_derived_only_on_the_ui_face_cited_to_the_locked_wheels_and_marked(self):
         for row in ROWS:
@@ -116,7 +127,7 @@ class Rules(unittest.TestCase):
 
     def test_a_row_read_is_served_on_the_dispatchers_face_and_never_clock_valued(self):
         for row in ROWS:
-            if row['read']:
+            if row['read'] and TRANSPORT_KEY not in row['marks']:
                 with self.subTest(answer=row['answer'], field=row['field']):
                     self.assertEqual((row['face'], row['served']), ('dispatcher', True))
                     self.assertNotIn('clock-valued', row['marks'])
@@ -136,7 +147,7 @@ class Rules(unittest.TestCase):
         self.addCleanup(core.close)
         core('POST', '/api/conversations', S.d1_create())
         answers = [core.ui_answer('GET', '/server_info'), core.ui_answer('GET', CONVERSATION),
-                   core.ui_answer('GET', CONVERSATION + '/events/search')]
+                   core.ui_answer('GET', CONVERSATION + '/events/search'), core.ui_preflight()]
         core('POST', CONVERSATION + '/events', S.MESSAGE)
         frames, _ = core.ui_session(S.CID, -1)
         for answer in answers + frames:
@@ -222,6 +233,20 @@ class Answers(unittest.TestCase):
         keep(core('GET', CONVERSATION + '/runtime'))
         keep(core.unauthorized('dispatcher'))
         keep(core.unauthorized('ui'))
+        keep(core.malformed())
+        keep(cls.d1_result())
+
+    @staticmethod
+    def d1_result():
+        """RESULT's answer over a D1-shaped base (test_result's fixture), made by the core (review ruling 1)."""
+        import test_result as TR
+        case = TR.D1Shaped('setUp')
+        case.setUp()
+        try:
+            case.seeded()
+            return case.core('POST', case.path, TR.result_command(case.base))
+        finally:
+            case.doCleanups()
 
     def schema(self, name):
         return {'$ref': f'#/schemas/{name}'}, {'schemas': SERVED['schemas']}
@@ -238,6 +263,12 @@ class Answers(unittest.TestCase):
                 with self.subTest(answer=name):
                     schema, document = self.schema(model)
                     self.assertEqual(CHECK_PROFILE.schema_errors(answer['body'], schema, document), [])
+        (result,) = self.made['result']
+        schema, document = self.schema('BashOutput')
+        self.assertEqual(set(result['body']), {'stdout', 'exit_code'})
+        self.assertEqual(CHECK_PROFILE.schema_errors(result['body'], schema, document), [])
+        self.assertEqual(CHECK_PROFILE.schema_errors(dict(result['body'], exit_code='0'), schema, document)[:1],
+                         ['$.exit_code: expected type [\'integer\', \'null\']'], 'the schema is not vacuous')
         for answer in self.made['count']:
             self.assertIs(type(answer['body']), int)
         self.assertNotIn('body', self.made['message'][0])
@@ -246,12 +277,13 @@ class Answers(unittest.TestCase):
     @unittest.skipIf(LOCKED is None, 'AIEH_LOCKED_OPENAPI is not given (the locked document is never committed)')
     def test_each_answer_validates_against_the_locked_schema_save_the_listed_not_served(self):
         unserved = {}
-        for row in S.CATALOG['provenance']:
+        for row in S.CATALOG['provenance'] + ROWS:
             if not row['served']:
                 unserved.setdefault(row['answer'], set()).update(
                     p[len('body.'):] for p in AC.field_paths(row['field']) if p.startswith('body.'))
         cases = [('create-new', 'ConversationInfo'), ('conversation', 'ConversationInfo'),
-                 ('runtime', 'ConversationRuntimeInfo'), ('seed', 'BashOutput'), ('ui-conversation', 'ConversationInfo')]
+                 ('runtime', 'ConversationRuntimeInfo'), ('seed', 'BashOutput'), ('result', 'BashOutput'),
+                 ('ui-conversation', 'ConversationInfo')]
         for name, model in cases:
             for answer in self.made[name]:
                 with self.subTest(answer=name):
@@ -266,11 +298,12 @@ class Answers(unittest.TestCase):
                     self.assertEqual([e for e in errors if e not in allowed], [])
                     if name.startswith('ui-'):
                         self.assertEqual(errors, [], 'the UI face lists nothing not served')
-        for name in ('events', 'ui-events'):
-            for answer in self.made[name]:
-                for item in answer['body']['items']:
-                    self.assertEqual(CHECK_PROFILE.schema_errors(item, {'$ref': '#/components/schemas/Event'},
-                                                                 LOCKED), [])
+        # review N-a: the UI face's events (the dispatcher face's items only ever hold its source-derived entry,
+        # which the listener never serves: they are not validated here), at least one item seen
+        items = [item for answer in self.made['ui-events'] for item in answer['body']['items']]
+        self.assertEqual(len(items), 1)
+        for item in items:
+            self.assertEqual(CHECK_PROFILE.schema_errors(item, {'$ref': '#/components/schemas/Event'}, LOCKED), [])
         for answer in self.made['ui-durable']:
             self.assertEqual(CHECK_PROFILE.schema_errors(answer['body']['event'],
                                                          {'$ref': '#/components/schemas/Event'}, LOCKED), [])

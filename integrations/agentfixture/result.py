@@ -271,8 +271,12 @@ def answer(scratch: Path, held: dict, body, *, python: str) -> str:
     workspace = work / seeded['repository']
     shutil.copytree(source, workspace)
     apply_changes(workspace, d1_changes(report))
-    held['result'] = True
-    code, stdout = run(script, payload, workspace, work, body['timeout'], python)
+    try:
+        code, stdout = run(script, payload, workspace, work, body['timeout'], python)
+    except subprocess.TimeoutExpired:
+        raise NotAnswered('a RESULT that did not finish within its timeout: no record observes its answer') from None
     if code != 0:
         raise NotAnswered(f'a RESULT whose script exits {code}: no record observes its answer')
-    return served_stdout(stdout, report)
+    served = served_stdout(stdout, report)
+    held['result'] = True                     # only once an answer is made (review N-e)
+    return served

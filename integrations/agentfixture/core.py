@@ -653,9 +653,12 @@ class AgentServerCore:
         where = self.scratch() / cid
         held['seeded'] = {'repository': repository, 'path': str(where / repository)}
         where.mkdir(parents=True, exist_ok=True)
-        done = subprocess.run([PYTHON, '-I', '-c', match.group(2), str(where / repository), digest],
-                              input=payload.encode('ascii'), capture_output=True, timeout=body['timeout'],
-                              cwd=where, creationflags=_no_window().no_window_flags())
+        try:
+            done = subprocess.run([PYTHON, '-I', '-c', match.group(2), str(where / repository), digest],
+                                  input=payload.encode('ascii'), capture_output=True, timeout=body['timeout'],
+                                  cwd=where, creationflags=_no_window().no_window_flags())
+        except subprocess.TimeoutExpired:
+            return self.refuse('a SEED that did not finish within its timeout: no record observes its answer')
         if done.returncode != self.answers['seed']['exit_code']:
             return self.refuse(f'a SEED whose exit is {done.returncode}: no record observes its answer')
         stdout = done.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
@@ -677,7 +680,7 @@ class AgentServerCore:
         return {**self.catalog['label'], 'answer': answer, 'face': 'ui', 'sourceDerived': derived, **extra}
 
     def ui_made(self, answer: str, status: int | None, body, derived: list[str]) -> dict:
-        made = self.made(answer, status, body, has_status=status is not None)
+        made = self.made(answer, status, body, has_status=status is not None, has_body=body is not None)
         made['fixture'] = self.ui_label(answer, derived)
         return made
 
@@ -756,6 +759,16 @@ class AgentServerCore:
                     frames.append(self.ui_made('ui-durable', None, {'type': 'durable', 'seq': seq, 'event': event},
                                                ['body.type', 'body.seq', 'body.event']))
         return frames, None
+
+    def ui_preflight(self) -> dict:
+        """A CORS preflight the UI face allows (the listener decides which: ``server.Fixture.preflight``)."""
+        return self.ui_made('ui-preflight', self.answers['ui-preflight']['status'], None, ['status'])
+
+    def malformed(self) -> dict:
+        """The refusal of a request whose body cannot be parsed (not JSON, or nested past the parser's depth): 400
+        with the label, never an unlabelled error (E-01.7 review N-d)."""
+        return self.made('malformed', self.answers['malformed']['status'], has_body=False,
+                         refused='a body that cannot be parsed as JSON')
 
     def unauthorized(self, face: str) -> dict:
         """The refusal of a key-gated request with no key or a wrong one (S-01.3.1 section 3.4; on the UI face,

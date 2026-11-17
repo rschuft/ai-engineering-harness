@@ -35,6 +35,7 @@ def load(name: str, path: Path):
     return module
 
 
+SERVER_PORT = 13320                                  # server.PORT, before the module is loaded
 AC = load('agentfixture_core', PACKAGE / 'core.py')
 SERVER = load('agentfixture_server', PACKAGE / 'server.py')
 TRANSPORT = load('agentfixture_transport', PACKAGE / 'transport.py')
@@ -56,12 +57,16 @@ def locked_openapi_path() -> Path | None:
 
 
 def free_port() -> int:
-    probe = socket.socket()
-    try:
-        probe.bind(('127.0.0.1', 0))
-        return probe.getsockname()[1]
-    finally:
-        probe.close()
+    """A free loopback port, never the Owner's Integration process's 13310 nor the fixture's declared 13320."""
+    while True:
+        probe = socket.socket()
+        try:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        finally:
+            probe.close()
+        if port not in (13310, SERVER_PORT):
+            return port
 
 
 class Served:
@@ -79,8 +84,6 @@ class Served:
     def start(self) -> 'Served':
         for _ in range(5):
             self.port = free_port()
-            if self.port in (13310, SERVER.PORT):
-                continue
             argv = [sys.executable, '-I', '-B', str(PACKAGE / 'server.py'), 'serve', '--port', str(self.port),
                     '--scenario', self.scenario, '--log', str(self.log), '--state-dir', str(self.state),
                     '--scratch', str(self.scratch)]

@@ -116,6 +116,122 @@ class Faces(Listener):
                 self.assertTrue(answer['label']['refused'])
 
 
+class Cors(Listener):
+    """Review ruling 2: no CORS on the dispatcher's face; on the UI face GET only, from configured origins only, never
+    with credentials; every preflight labelled, an out-of-catalog one the labelled 501."""
+    ORIGIN = 'http://127.0.0.1:13330'
+
+    def setUp(self):
+        self.fixture = SERVER.Fixture(self.scenario, ui_origins=(self.ORIGIN,))
+        self.addCleanup(self.fixture.core.close)
+        self.served = S.InThread(self.fixture).start()
+        self.addCleanup(self.served.stop)
+        self.transport = self.served.transport(timeout=30)
+        self.core = self.fixture.core
+
+    def preflight(self, path, origin=ORIGIN, method='GET', asked='x-session-api-key'):
+        headers = {'Origin': origin, 'Access-Control-Request-Method': method}
+        if asked:
+            headers['Access-Control-Request-Headers'] = asked
+        return S.http(self.served.port, 'OPTIONS', path, headers=headers)
+
+    def cors_headers(self, answer):
+        return {k: v for k, v in answer['headers'].items() if k.startswith('access-control-')}
+
+    def test_the_dispatchers_face_has_no_cors_and_its_preflight_is_the_labelled_501(self):
+        for path in ('/api/conversations', '/server_info', '/alive', CONVERSATION):
+            for origin in (self.ORIGIN, 'http://localhost:5173'):
+                with self.subTest(path=path, origin=origin):
+                    answer = self.preflight(path, origin=origin, method='POST')
+                    self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
+                    self.assertEqual(self.cors_headers(answer), {})
+        plain = S.http(self.served.port, 'OPTIONS', '/api/conversations')
+        self.assertEqual((plain['status'], plain['label']['answer']), (501, 'refusal'))
+        get = S.http(self.served.port, 'GET', '/api/conversations/count', key=S.DISPATCHER_ACCESS,
+                     headers={'Origin': self.ORIGIN})
+        self.assertEqual((get['status'], self.cors_headers(get)), (200, {}))
+
+    def test_the_ui_face_allows_get_from_a_configured_origin_only_and_never_credentials(self):
+        self.held()
+        answer = self.preflight('/ui' + CONVERSATION)
+        self.assertEqual((answer['status'], answer['label']['answer'], answer['label']['sourceDerived']),
+                         (200, 'ui-preflight', ['status']))
+        self.assertEqual(self.cors_headers(answer), {'access-control-allow-origin': self.ORIGIN,
+                                                     'access-control-allow-methods': 'GET',
+                                                     'access-control-allow-headers': 'x-session-api-key'})
+        refused = [self.preflight('/ui' + CONVERSATION, origin='http://localhost:4173'),
+                   self.preflight('/ui' + CONVERSATION, method='POST'),
+                   self.preflight('/ui/api/settings'),
+                   self.preflight('/ui' + CONVERSATION, asked='x-session-api-key,authorization')]
+        for answer in refused:
+            with self.subTest(refused=answer['label'].get('refused')):
+                self.assertEqual((answer['status'], answer['label']['answer'], self.cors_headers(answer)),
+                                 (501, 'refusal', {}))
+        get = self.ui('GET', CONVERSATION, headers={'Origin': self.ORIGIN})
+        self.assertEqual(self.cors_headers(get), {'access-control-allow-origin': self.ORIGIN})
+        other = self.ui('GET', CONVERSATION, headers={'Origin': 'http://localhost:5173'})
+        self.assertEqual(self.cors_headers(other), {})
+
+    def test_with_no_configured_origin_every_preflight_is_refused(self):
+        fixture = SERVER.Fixture('finished')
+        self.addCleanup(fixture.core.close)
+        served = S.InThread(fixture).start()
+        self.addCleanup(served.stop)
+        fixture.core('POST', '/api/conversations', S.d1_create())
+        answer = S.http(served.port, 'OPTIONS', '/ui' + CONVERSATION,
+                        headers={'Origin': self.ORIGIN, 'Access-Control-Request-Method': 'GET'})
+        self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
+
+
+class Robustness(Listener):
+    def test_a_body_nested_past_the_parsers_depth_or_not_json_is_a_labelled_400(self):
+        """Review N-d: never an unlabelled 500."""
+        import http.client
+        for raw in (b'[' * 200000, b'{not json', b'\xff\xfe'):
+            with self.subTest(size=len(raw)):
+                connection = http.client.HTTPConnection('127.0.0.1', self.served.port, timeout=30)
+                try:
+                    connection.request('POST', '/api/conversations', body=raw,
+                                       headers={'Content-Type': 'application/json',
+                                                'X-Session-API-Key': S.DISPATCHER_ACCESS})
+                    response = connection.getresponse()
+                    response.read()
+                    label = json.loads(response.getheader('X-AIEH-Fixture'))
+                finally:
+                    connection.close()
+                self.assertEqual((response.status, label['answer']), (400, 'malformed'))
+        self.assertEqual(self.core.calls, [])
+
+    def test_a_long_core_call_runs_off_the_event_loop(self):
+        """Review N-e: while a SEED holds the core (here, a call made to wait on the test's own event), the listener
+        still answers a request that needs no core state; nothing waits on a clock."""
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        original = self.fixture.call
+
+        def held_call(method, path, body):
+            if path.endswith('/bash/execute_bash_command'):
+                entered.set()
+                release.wait(60)
+            return original(method, path, body)
+        self.fixture.call = held_call
+        self.held()
+        done = {}
+        worker = threading.Thread(target=lambda: done.setdefault(
+            'answer', self.transport('POST', CONVERSATION + '/bash/execute_bash_command',
+                                     {'command': 'x', 'cwd': '/workspace', 'timeout': 5})))
+        worker.start()
+        self.addCleanup(worker.join, 60)
+        self.addCleanup(release.set)
+        self.assertTrue(entered.wait(60))
+        answer = S.http(self.served.port, 'GET', '/alive', key=S.DISPATCHER_ACCESS)
+        self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
+        self.assertNotIn('answer', done, 'the held call is still held')
+        release.set()
+        worker.join(60)
+        self.assertEqual(done['answer']['fixture']['answer'], 'refusal')
+
+
 class SourceDerived(Listener):
     def test_the_listener_refuses_the_request_that_would_need_the_source_derived_entry(self):
         self.held()

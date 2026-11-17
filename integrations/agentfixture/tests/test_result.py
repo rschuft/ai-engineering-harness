@@ -17,6 +17,7 @@ import fixture_support as S
 CATEGORY = 'integration'
 
 TAR = S.load('test_attempt_run', S.DISPATCH_TESTS / 'test_attempt_run.py')
+CHECK = S.load('aieh_check_profile', S.REPO / 'tools' / 'check_profile.py')
 AR = TAR.AR
 RESULT = S.RESULT
 DEMO = S.REPO / 'integrations' / 'gitea' / 'demo' / 'aieh-d1-demo'
@@ -149,6 +150,28 @@ class Answer(D1Shaped):
         self.assertEqual(RESULT.RESULT_TIMEOUT_MAX_S, AR.RESULT_TIMEOUT_S)
 
 
+class OverTheListener(D1Shaped):
+    """Review ruling 1: SEED, the message and RESULT through the listener (the fixture transport to a real 127.0.0.1
+    listener serving this core), not in process; the answer as it arrived validated against the catalog's schema."""
+
+    def test_seed_then_result_through_the_listener(self):
+        fixture = S.SERVER.Fixture('finished', core=self.core)
+        served = S.InThread(fixture).start()
+        self.addCleanup(served.stop)
+        transport = served.transport(timeout=300)
+        self.assertEqual(transport('POST', self.path, seed_body(self.base))['status'], 200)
+        self.assertEqual(transport('POST', f'/api/conversations/{S.CID}/events', S.MESSAGE)['status'], 200)
+        answer = transport('POST', self.path, result_command(self.base))
+        self.assertEqual((answer['status'], answer['fixture']['answer']), (200, 'result'))
+        schemas = {'schemas': S.SERVED['schemas']}
+        self.assertEqual(CHECK.schema_errors(answer['body'], {'$ref': '#/schemas/BashOutput'}, schemas), [])
+        printed = AR.parse_result(answer, delivered_expected=False)
+        raw = AR.expected_commit(printed['tree'], self.base.commit, message(), WHEN)
+        self.assertEqual(printed['commit'], AR.object_id('commit', raw))
+        self.assertEqual([(c['method'], c['answer']) for c in fixture.log],
+                         [('POST', 'seed'), ('POST', 'message'), ('POST', 'result')])
+
+
 class Refused(D1Shaped):
     def test_a_base_that_is_not_d1s_outside_openspec_and_backlog_is_refused(self):
         self.base = self.make_base(readme=b'# not the demo\n', name='other')
@@ -171,6 +194,18 @@ class Refused(D1Shaped):
         self.refused(self.core('POST', self.path, result_command(self.base, test_timeout=5)),
                      'not the production builder\'s')
         self.assertFalse((self.tmp / 'core' / S.CID / 'result').exists(), 'nothing ran')
+
+    def test_a_result_that_times_out_is_refused_and_leaves_the_conversation_able_to_answer(self):
+        """Review N-e: a timeout is a labelled refusal, and the conversation is not marked as having had its RESULT:
+        only an answer marks it."""
+        import subprocess
+        from unittest import mock
+        self.seeded()
+        with mock.patch.object(RESULT.subprocess, 'run', side_effect=subprocess.TimeoutExpired('python', 1)):
+            self.refused(self.core('POST', self.path, result_command(self.base)), 'did not finish within its timeout')
+        self.assertFalse(self.core.conversations[S.CID].get('result'))
+        self.assertEqual(self.core('POST', self.path, result_command(self.base))['status'], 200)
+        self.assertTrue(self.core.conversations[S.CID]['result'])
 
     def test_a_result_with_an_exchange_delivery_is_refused_as_before(self):
         self.seeded()
