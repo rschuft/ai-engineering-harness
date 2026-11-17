@@ -3189,6 +3189,7 @@
     "test_acceptance.RepositoryStateRefusals.test_a_link_or_junction_at_the_decision_records_is_refused_before_the_reservation",
     "test_acceptance.RepositoryStateRefusals.test_a_passing_preflight_writes_nothing_in_the_repository",
     "test_acceptance.RepositoryStateRefusals.test_a_refused_read_of_the_repository_is_git_failed",
+    "test_acceptance.RepositoryStateRefusals.test_a_tracked_file_at_the_decision_records_deleted_from_the_work_tree_is_refused",
     "test_acceptance.RepositoryStateRefusals.test_a_tracked_file_at_the_decision_records_is_refused_before_the_reservation",
     "test_acceptance.RepositoryStateRefusals.test_an_untracked_file_at_the_decision_records_is_refused_before_the_reservation",
     "test_acceptance.RepositoryStateRefusals.test_commit_signing_is_refused_before_the_reservation",

@@ -716,6 +716,16 @@ class RepositoryStateRefusals(Rig):
         fx.commit_all(self.project, 'the file out of the way')
         self.repaired_records_once()
 
+    def test_a_tracked_file_at_the_decision_records_deleted_from_the_work_tree_is_refused(self):
+        """Q3's other side: the file in the way is in HEAD's tree but deleted from the work tree (not staged), which
+        only HEAD's tree shows."""
+        in_the_way = self.project / CHANGE_DIR / 'owner-decisions'
+        in_the_way.write_bytes(b'a tracked file in the way\n')
+        fx.commit_all(self.project, 'a file in the way')
+        in_the_way.unlink()
+        answer = self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        self.assertIn('not a directory in HEAD', answer['detail'])
+
     def test_the_content_checks_run_before_the_reservation(self):
         """INTENT_RECORD_INVALID and the x-outcomes readback's RESOLUTION_FAILED, through the recorder's own functions,
         refused before anything is reserved (each forced by a stand-in for the recorder's function)."""
