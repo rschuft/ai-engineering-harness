@@ -1849,8 +1849,12 @@ planning, not adopted) also puts a default-deny content-security policy first in
 derived copy defaults to `node_modules/.cache/aieh-canvas-standalone` (ignored). The records name the listener
 (`nm-owner-ui-canvas`, `nm-canvas-agentfixture-ui`, `app-agent-canvas`; census port 13330). Gates G6 and G5 and
 what was observed: [the app's README](../apps/owner-host/README.md#the-standalone-agent-canvas-u-012-gates-g6-and-g5).
-**Not yet verified:** the conversation view rendered (G5 stopped at Canvas's telemetry-consent dialog, which needs a
-write to the backend); the engineering route, the frame and the session-detail action are not built.
+The shell frames it on its engineering session route, `/engineering/outcomes/<id>/sessions/<id>`, reached from the
+outcome card's session-detail link when the projection's `sessionDetail` action is available
+([the app's README](../apps/owner-host/README.md#the-engineering-session-route-u-012)); its content-security policy
+allows `frame-src http://127.0.0.1:13330` and nothing wider. **Not yet verified:** the conversation view rendered in a
+real browser (G5 stopped at Canvas's telemetry-consent dialog, which needs a write to the backend; the route and the
+frame are tested in jsdom only).
 
 **The Integration process (U-01.3).** The Owner host's backend is the Integration process
 ([`integrations/ownerhost/`](../integrations/ownerhost/README.md); [decision

@@ -1,12 +1,14 @@
 import type { Plugin } from "vite";
+import { CANVAS_ORIGIN } from "../src/engineering/session-detail.ts";
 
 // The Owner host's content-security policy (plan leaf U-01.3; Proposed decision
 // 0025, R4's consequence). The shell's origin holds the Owner UI session
 // credential, so a script running in it would hold the session's authority:
 // the policy lets the page load code only from its own origin and connect only
 // to its own origin and to the Integration process (http://127.0.0.1:13310).
-// No remote source is allowed anywhere. Frames are refused until the
-// standalone Canvas origin exists (U-01.2 names it).
+// No remote source is allowed anywhere. The page may frame one origin only:
+// the standalone Agent Canvas application's, http://127.0.0.1:13330 (U-01.2;
+// decision 0026 point 8; R4), which is never the shell's own.
 //
 // Two allowances, and why:
 // - style-src 'unsafe-inline': Agent Canvas and its bundled libraries (goober,
@@ -18,6 +20,7 @@ import type { Plugin } from "vite";
 // Vite injects); the built app, served by `vite preview`, does not.
 
 export const INTEGRATION_ORIGIN = "http://127.0.0.1:13310";
+export { CANVAS_ORIGIN };
 
 export type PolicyMode = "build" | "dev";
 
@@ -30,7 +33,7 @@ export function policyDirectives(mode: PolicyMode): [string, string[]][] {
     ["font-src", ["'self'"]],
     ["connect-src", ["'self'", INTEGRATION_ORIGIN]],
     ["worker-src", ["'self'"]],
-    ["frame-src", ["'none'"]],
+    ["frame-src", [CANVAS_ORIGIN]],
     ["object-src", ["'none'"]],
     ["base-uri", ["'none'"]],
     ["form-action", ["'none'"]],

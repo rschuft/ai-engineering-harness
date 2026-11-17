@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import config from "../vite.config.ts";
-import { contentSecurityPolicy, INTEGRATION_ORIGIN, metaPolicy, ownerContentSecurityPolicy, policyDirectives } from "./csp";
+import { CANVAS_ORIGIN, contentSecurityPolicy, INTEGRATION_ORIGIN, metaPolicy, ownerContentSecurityPolicy, policyDirectives } from "./csp";
 
 // The shell's content-security policy (U-01.3): code only from the shell's own
 // origin, connections only to that origin and to the Integration process.
@@ -17,14 +17,18 @@ function sources(policy: string): Map<string, string[]> {
 const NON_SELF = (source: string) => !["'self'", "'none'", "'unsafe-inline'", "data:"].includes(source);
 
 describe("content-security policy", () => {
-  it("allows only the shell origin and the Integration process as places to connect to or load from", () => {
+  it("allows only the shell origin and the Integration process as places to connect to or load from, and frames Canvas's origin only", () => {
     for (const mode of ["build", "dev"] as const) {
       const policy = sources(contentSecurityPolicy(mode));
       const origins = [...policy.values()].flat().filter(NON_SELF);
-      expect(origins).toEqual([INTEGRATION_ORIGIN]);
+      expect(origins).toEqual([INTEGRATION_ORIGIN, CANVAS_ORIGIN]);
       expect(policy.get("connect-src")).toEqual(["'self'", "http://127.0.0.1:13310"]);
       expect(policy.get("default-src")).toEqual(["'self'"]);
-      expect(policy.get("frame-src")).toEqual(["'none'"]);
+      // U-01.2: the standalone Agent Canvas origin, and nothing wider (no scheme, wildcard, port range or self)
+      expect(policy.get("frame-src")).toEqual(["http://127.0.0.1:13330"]);
+      expect(CANVAS_ORIGIN).toBe("http://127.0.0.1:13330");
+      expect(policy.get("connect-src")).not.toContain(CANVAS_ORIGIN);
+      expect(policy.get("child-src")).toBeUndefined();
       expect(policy.get("object-src")).toEqual(["'none'"]);
       expect(policy.get("base-uri")).toEqual(["'none'"]);
       expect(policy.get("frame-ancestors")).toEqual(["'none'"]);

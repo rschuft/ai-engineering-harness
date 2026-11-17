@@ -27,6 +27,9 @@ import { setViewportWidth } from "../test/viewport";
 import shellCss from "../shell/shell.css?raw";
 import cardSource from "./outcome-card.tsx?raw";
 import projectionSource from "./outcome-projection.ts?raw";
+import sessionLinksSource from "../engineering/SessionLinks.tsx?raw";
+import sessionDetailSource from "../engineering/session-detail.ts?raw";
+import engineeringSessionSource from "../engineering/EngineeringSession.tsx?raw";
 import { OUTCOME_ID, SCENARIOS, answer, fixture, schema as projectionSchema, type Answer } from "../test/outcome-fixtures";
 
 // The outcome card (plan leaf U-04.2) over real answers of the Integration process's outcome
@@ -404,7 +407,7 @@ describe("evidence: observed apart from asserted, by reference (U-04's proof; R6
     expect(values(observedList)).not.toContain(evidence.testOutput.output.sha256);
   });
 
-  it("makes each reference copyable, and the session detail a disabled placeholder", async () => {
+  it("makes each reference copyable, and the session detail a link to the shell's own route (U-01.2)", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const a = answer("reconnect", 1);
@@ -414,10 +417,47 @@ describe("evidence: observed apart from asserted, by reference (U-04's proof; R6
       fireEvent.click(within(attempt).getAllByRole("button", { name: "Copy commit commit" })[0]);
     });
     expect(writeText).toHaveBeenCalledWith(a.body.attempts[0].evidence.commit.commit);
-    const detail = within(attempt).getByTestId("outcome-session-detail") as HTMLButtonElement;
-    expect(detail.disabled).toBe(true);
-    expect(detail.textContent).toBe("Session detail: not available yet");
-    expect(card.querySelectorAll("a, iframe")).toHaveLength(0);
+    const detail = within(attempt).getByTestId("outcome-session-detail") as HTMLAnchorElement;
+    const cid = a.body.attempts[0].conversationId;
+    expect(detail.tagName).toBe("A");
+    expect(detail.getAttribute("href")).toBe(`/engineering/outcomes/${OUTCOME_ID}/sessions/${cid}`);
+    expect(detail.textContent).toBe("Open the session detail (FIXTURE)");
+    // the card's only link is that one; no frame is in the shell's chat
+    expect(Array.from(card.querySelectorAll("a, [href], [src]")).map((e) => e.getAttribute("href"))).toEqual([
+      `/engineering/outcomes/${OUTCOME_ID}/sessions/${cid}`,
+    ]);
+    expect(card.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("keeps the session detail disabled, with the projection's reason, when the action is refused", async () => {
+    for (const name of ["published-live", "authority-unbound"]) {
+      const a = answer(name);
+      const card = await show(name);
+      const [attempt] = attempts(card);
+      const detail = within(attempt).getByTestId("outcome-session-detail") as HTMLButtonElement;
+      expect(detail.tagName, name).toBe("BUTTON");
+      expect(detail.disabled, name).toBe(true);
+      expect(detail.textContent, name).toBe("Session detail: not available");
+      expect(within(attempt).getByTestId("outcome-session-detail-code").textContent, name).toBe("SESSION_ACCESS_UNAVAILABLE");
+      expect(within(attempt).getByTestId("outcome-session-detail-reason").textContent, name).toBe(a.body.attempts[0].sessionDetail.reason);
+      expect(card.querySelectorAll("a, [href], [src], iframe"), name).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  it("makes no link from a conversation id that is not a lower-case UUID, whatever the projection says", async () => {
+    const hostile = ["../threads", "//203.0.113.9/x", "javascript:alert(1)", "055B27F3-903E-5EB9-8758-197C1029ADE7",
+                     "055b27f3-903e-5eb9-8758-197c1029ade7/../x"];
+    for (const value of hostile) {
+      const a = answer("running-turn-sent");
+      a.body.attempts[0].sessionDetail = { conversationId: value, canvasPath: `/conversations/${value}`, authority: "fixture" };
+      renderCard(() => a);
+      const card = await settled();
+      const [attempt] = attempts(card);
+      expect(card.querySelectorAll("a, [href], [src], iframe"), value).toHaveLength(0);
+      expect((within(attempt).getByTestId("outcome-session-detail") as HTMLButtonElement).disabled, value).toBe(true);
+      cleanup();
+    }
   });
 
   it("shows no evidence for an attempt that has none, and says so", async () => {
@@ -457,7 +497,11 @@ describe("inert rendering (R14)", () => {
     renderCard(() => a);
     const card = await settled();
     expect(card.getAttribute("data-state")).toBe("shown");
-    expect(card.querySelectorAll("img, a, script, iframe, object, embed")).toHaveLength(0);
+    expect(card.querySelectorAll("img, script, iframe, object, embed")).toHaveLength(0);
+    // U-01.2: the one link is the session detail's, its address the shell's own route built from checked ids
+    expect(Array.from(card.querySelectorAll("a, [href], [src]")).map((e) => e.getAttribute("href"))).toEqual([
+      `/engineering/outcomes/${OUTCOME_ID}/sessions/${a.body.attempts[0].conversationId}`,
+    ]);
     expect(within(card).getByTestId("outcome-objective").textContent).toBe(hostile);
     expect((card.textContent ?? "").split(hostile).length - 1).toBeGreaterThanOrEqual(5);
     expect((window as any).__aiehHit).toBeUndefined();
@@ -665,13 +709,41 @@ describe("the review's fixes (U-04.2 fix round)", () => {
   });
 
   it("S4: the card's sources build no HTML, link or source from projection data", () => {
-    const sources: [string, string][] = [["outcome-card.tsx", cardSource], ["outcome-projection.ts", projectionSource]];
+    const sources: [string, string][] = [
+      ["outcome-card.tsx", cardSource],
+      ["outcome-projection.ts", projectionSource],
+      ["EngineeringSession.tsx", engineeringSessionSource],
+      ["session-detail.ts", sessionDetailSource],
+    ];
     for (const [file, source] of sources) {
       expect(/dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(source), file).toBe(false);
       expect(/\bhref\b/.test(source), file).toBe(false);
       expect(/\bsrc\s*[=:]/.test(source), file).toBe(false);
-      expect(/<(a|img|iframe|script|object|embed)\b/.test(source), file).toBe(false);
+      expect(/<(a|img|iframe|script|object|embed|Link|NavLink)\b/.test(source), file).toBe(false);
+      expect(/\bto=/.test(source), file).toBe(false);
     }
+  });
+
+  it("U-01.2: the only href, to or src built from a projection value goes through the one checked builder", () => {
+    const s = sessionLinksSource;
+    expect(/dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(s)).toBe(false);
+    // every address attribute in SessionLinks.tsx is one of two variables ...
+    expect([...s.matchAll(/\b(href|to|src)=\{([^}]*)\}/g)].map((m) => `${m[1]}=${m[2]}`)).toEqual([
+      "to=sessionPath",
+      "href=sessionPath",
+      "src=frameUrl",
+    ]);
+    expect(/\b(href|to|src)="/.test(s)).toBe(false);
+    // ... each assigned once, from the checked builder, and never otherwise
+    expect([...s.matchAll(/\bsessionPath\s*=(?!=)([^;]*);/g)].map((m) => m[1].trim())).toEqual(["engineeringSessionPath(outcome, conversation)"]);
+    expect([...s.matchAll(/\bframeUrl\s*=(?!=)([^;]*);/g)].map((m) => m[1].trim())).toEqual(["canvasConversationUrl(conversation)"]);
+    expect((s.match(/<(a|iframe|Link)\b/g) ?? []).sort()).toEqual(["<Link", "<a", "<iframe"]);
+    // the builder: two templates, each a shell-owned constant prefix and checked ids only
+    const templates = [...sessionDetailSource.matchAll(/return [^;]*`(\$\{[^`]*)`;/g)].map((m) => m[1]);
+    expect(templates).toEqual(["${CANVAS_ORIGIN}${CANVAS_CONVERSATIONS}${id}", "${ENGINEERING_OUTCOMES}${o}${SESSIONS}${c}"]);
+    expect(sessionDetailSource).toContain("const id = checkedId(conversation);");
+    expect(sessionDetailSource).toContain("const o = checkedId(outcome);");
+    expect(sessionDetailSource).toContain("const c = checkedId(conversation);");
   });
 
   it("note 1: a code or refusal named like an Object.prototype member is a code the card does not know", async () => {

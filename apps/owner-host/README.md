@@ -25,6 +25,7 @@ in the development reference.
 | `/chat` | Chat | assistant-ui's headless primitives. Signed out: `useLocalRuntime` with a model-free adapter, an empty in-memory thread and a disabled composer. Signed in (U-02.1): the stored chat, its thread list and the thread, with an Edit action that keeps the earlier version (branch picker). |
 | `/work` | Work | The Objectives and Work items surfaces, each with an empty state that says no source is connected. |
 | `/engineering` | Engineering | A "No Agent Server is connected" notice, then Agent Canvas's providers and scoped root, loaded lazily. |
+| `/engineering/outcomes/:outcomeId/sessions/:conversationId` | Engineering | The engineering session of an outcome's attempt (U-01.2): its fixture label, its status from the outcome projection, and Agent Canvas's view of the conversation in a frame from Canvas's own origin. The selection is the address. |
 | `/sign-in` | (none) | The login view (U-01.3): paste the Owner UI session credential; once signed in, the session and "Sign out". Not an area, so not in the navigation; the header links to it. |
 | any other | (none) | "Page not found" inside the shell, with links to the three areas. |
 
@@ -54,6 +55,9 @@ mounted while the area changes.
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
 | `CanvasMount` | `src/engineering/CanvasMount.tsx` | `AgentServerUIProviders` (analytics off, host i18n). Its `children` prop is the seam where U-01.2 places the selected session. |
 | `CanvasBoundary` | `src/engineering/CanvasBoundary.tsx` | Replaces a failed Canvas mount with an explicit empty state naming the error. |
+| `EngineeringSession` | `src/engineering/EngineeringSession.tsx` | The engineering session route (U-01.2): the fixture label, the attempt's status from the projection, the frame. |
+| `SessionDetailLink`, `CanvasFrame` | `src/engineering/SessionLinks.tsx` | The outcome card's link to that route and the route's frame: the only elements whose address carries a projection-supplied value, built by `session-detail.ts` alone. |
+| `canvasConversationUrl`, `engineeringSessionPath`, `sessionDetailOf` | `src/engineering/session-detail.ts` | The checked builder (lower-case UUIDs in shell-owned templates; the constant `CANVAS_ORIGIN`) and the projection's action as the shell reads it. |
 | `EmptyState` | `src/areas/EmptyState.tsx` | The shared plain "nothing connected" statement (`role="status"`). |
 
 ## Session identity
@@ -130,6 +134,23 @@ it: a hostile string in every string field and key of a projection makes no
 element, and its sources contain no `dangerouslySetInnerHTML`, `innerHTML`,
 `href` or `src` (`src/areas/outcome-card.test.tsx`, "inert rendering").
 
+**Refined at U-01.2** (the engineering manager's ruling, decision 0018 point 3.1): an
+`href` or a `src` may carry a projection-supplied value only when that value passes
+a strict grammar, the lower-case UUID, and is inserted into a template the shell
+owns; never a raw projection string, URL or path. The one place that does it is
+[`src/engineering/session-detail.ts`](src/engineering/session-detail.ts)
+(`engineeringSessionPath`: `/engineering/outcomes/<id>/sessions/<id>`;
+`canvasConversationUrl`: the constant `http://127.0.0.1:13330` and
+`/conversations/<id>`), and the only elements that use it are the outcome card's
+session-detail link and the engineering route's frame
+([`src/engineering/SessionLinks.tsx`](src/engineering/SessionLinks.tsx)). The
+static test holds every other source to no `href`, `src`, `to=`, `a`, `Link` or
+`iframe`, and holds `SessionLinks.tsx` to exactly three address attributes, each
+a variable assigned only from the builder; a hostile conversation id (not a
+lower-case UUID: a path, a URL, upper case) yields no link and no frame
+(`outcome-card.test.tsx`, `src/engineering/session-detail.test.ts`,
+`engineering-session.test.tsx`).
+
 ### Content-security policy
 
 [`build/csp.ts`](build/csp.ts): the shell's origin holds the session's
@@ -139,8 +160,9 @@ itself and to `http://127.0.0.1:13310`. `vite preview` sends it as a header (wit
 element, and `vite dev` sends it with one allowance, inline scripts, for the
 React refresh preamble Vite injects. Styles may be inline (Canvas and its
 bundled libraries insert `<style>` elements) and images may be `data:` URLs
-(Canvas shows browser screenshots so); frames are refused until the standalone
-Canvas origin exists (U-01.2).
+(Canvas shows browser screenshots so). The page may frame one origin only, the
+standalone Agent Canvas application's: `frame-src http://127.0.0.1:13330` (U-01.2;
+R4), nothing wider; the shell never connects to it (`connect-src` is unchanged).
 
 ## Dependencies
 
@@ -320,8 +342,10 @@ item's status, and calls no Agent Server, Gitea or Backlog.md. For the outcome i
   draft pull request, the host's intake, the result receipt and its bundle), kept apart from what
   the attempt asserted (its report and its own tests, the test output's digest), by the basis the
   projection states; each reference and digest is shown as such, with a Copy button. The "session
-  detail" source action is a disabled placeholder, "Session detail: not available yet": it belongs
-  to U-01.2;
+  detail" source action (U-01.2) is a link, "Open the session detail (FIXTURE)", to the shell's own
+  engineering route when the projection's `sessionDetail` is available, and otherwise a disabled
+  "Session detail: not available" with the projection's code and reason (see
+  [The engineering session route](#the-engineering-session-route-u-012));
 - **blockers and missing sources**, none hidden: each unresolved reference (a `failed` lineage),
   an integration store that was not read, a task whose latest status is failed or unknown, an
   attempt whose authority is not shown, an open restore epoch, the count and codes of the lineage
@@ -356,6 +380,39 @@ end over HTTP, run only by `integrations/ownerhost/tests/test_outcome_card_http.
 this suite), with Node.js 24 or later; like every Vitest run, its start writes a transient bundle of
 `vite.config.ts` under `node_modules/.vite-temp/` (Vite's configuration loader). A real browser is
 **not yet verified**.
+
+## The engineering session route (U-01.2)
+
+From an outcome card the Owner opens an attempt's engineering session by its link, "Open the session detail
+(FIXTURE)", without seeing or typing an id: the link's address is the shell's own route,
+`/engineering/outcomes/<outcome id>/sessions/<conversation id>`, so the selection is the address and a refresh, a
+bookmark or a reopened browser keeps it. The link exists only when the outcome projection's `sessionDetail` action
+is available (U-04.1's projection, [`integrations/ownerhost`](../../integrations/ownerhost/README.md): a
+fixture-bound attempt with a conversation id); otherwise the card shows the action disabled with the projection's
+code (`SESSION_ACCESS_UNAVAILABLE`) and reason (the live session access is U-03.1's).
+
+The route ([`src/engineering/EngineeringSession.tsx`](src/engineering/EngineeringSession.tsx)) checks both ids
+(lower-case UUIDs), reads the projection through the signed-in Integration client, finds the attempt whose
+available action names this conversation, and shows the fixture label, that attempt's status and code as the
+projection states them, and Agent Canvas's view of the conversation in a frame. Anything else (an id that does not
+pass the check, a refused or absent action, a projection that was not read, the Owner signed out) shows the reason
+and no frame.
+
+**The frame** ([`src/engineering/SessionLinks.tsx`](src/engineering/SessionLinks.tsx)):
+
+- `src`: the shell's constant Canvas origin, `http://127.0.0.1:13330`, and `/conversations/<checked id>`; no query,
+  no fragment, no credential. The Owner UI session credential never reaches the frame: it is not in the address or
+  any attribute, the shell sends the frame nothing, and every request the shell makes is to the Integration process
+  with the session header, none to the Canvas origin (`engineering-session.test.tsx`).
+- `sandbox="allow-scripts allow-same-origin allow-forms"`: the minimum the standalone application needs (its scripts;
+  its own origin, for its storage and its same-origin requests through upstream's proxy; forms, for its composer and
+  dialogs). No popups, top-level navigation, modals or downloads. Scripts and its own origin together let a framed
+  page lift its own sandbox, but it is another origin than the shell's, so the sandbox is defence in depth.
+- `referrerPolicy="no-referrer"` (the shell's address is not sent), `allow=""` (no permission is delegated).
+
+**Not yet verified:** the frame in a real browser. Gate G5 stopped (its egress and the consent write are with
+planning), so criterion 2 (rendering observed in a real browser) waits; the tests here run in jsdom, where the frame
+loads nothing.
 
 ## The standalone Agent Canvas (U-01.2): gates G6 and G5
 

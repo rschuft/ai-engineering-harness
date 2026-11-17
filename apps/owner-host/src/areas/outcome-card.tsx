@@ -22,6 +22,8 @@ import {
   type Json,
   type Projection,
 } from "./outcome-projection";
+import { SessionDetailLink } from "../engineering/SessionLinks";
+import { sessionDetailOf } from "../engineering/session-detail";
 
 // The outcome card (plan leaf U-04.2; the I1 integration design, slice 14, R4, R6, R11 and R14).
 //
@@ -59,7 +61,7 @@ export function outcomePath(outcome: string): string {
   return `/outcomes/${encodeURIComponent(outcome)}`;
 }
 
-function useOutcomeProjection(client: IntegrationClient | null, outcome: string | null) {
+export function useOutcomeProjection(client: IntegrationClient | null, outcome: string | null) {
   const [read, setRead] = useState<Read>({ state: "loading" });
   const serial = useRef(0);
   const load = useCallback(async () => {
@@ -184,7 +186,7 @@ export function StatusBadge({ status, code }: { status: unknown; code: unknown }
   );
 }
 
-function FixtureLabel({ testId, children }: { testId: string; children: ReactNode }) {
+export function FixtureLabel({ testId, children }: { testId: string; children: ReactNode }) {
   return (
     <strong className="owner-outcome__fixture" data-testid={testId}>
       FIXTURE {children}
@@ -307,7 +309,26 @@ function Evidence({ attempt }: { attempt: Json }) {
   );
 }
 
-function AttemptItem({ attempt }: { attempt: Json }) {
+/**
+ * The session-detail source action (U-01.2): a link to the shell's own engineering route when the projection's
+ * action is available (a fixture-bound attempt whose conversation id passes the shell's check), else a disabled
+ * control with the projection's reason. The address is built by session-detail.ts alone (SessionDetailLink).
+ */
+function SessionDetailAction({ outcome, attempt }: { outcome: string; attempt: Json }) {
+  const detail = sessionDetailOf(attempt);
+  if (detail.available) return <SessionDetailLink outcome={outcome} conversation={detail.conversationId} />;
+  return (
+    <span className="owner-outcome__session-detail-refused">
+      <button type="button" className="owner-outcome__session-detail" data-testid="outcome-session-detail" disabled>
+        Session detail: not available
+      </button>{" "}
+      <code data-testid="outcome-session-detail-code">{detail.code}</code>{" "}
+      <span data-testid="outcome-session-detail-reason">{detail.reason}</span>
+    </span>
+  );
+}
+
+function AttemptItem({ outcome, attempt }: { outcome: string; attempt: Json }) {
   const shownBy = obj(attempt.shownBy) ?? {};
   const disclosed = arr(attempt.disclosed);
   const status = shownStatus(attempt.executionStatus);
@@ -377,21 +398,13 @@ function AttemptItem({ attempt }: { attempt: Json }) {
       <div className="owner-outcome__actions" data-testid="outcome-source-actions">
         Source actions: the attempt <Reference value={attempt.operationKey} label="attempt" />, its execution{" "}
         <Reference value={attempt.executionRef} label="execution reference" />{" "}
-        <button
-          type="button"
-          className="owner-outcome__session-detail"
-          data-testid="outcome-session-detail"
-          disabled
-          title="The session view belongs to plan leaf U-01.2, not built yet."
-        >
-          Session detail: not available yet
-        </button>
+        <SessionDetailAction outcome={outcome} attempt={attempt} />
       </div>
     </li>
   );
 }
 
-function ProjectionView({ projection: p }: { projection: Projection }) {
+function ProjectionView({ outcome, projection: p }: { outcome: string; projection: Projection }) {
   const objective = p.objective;
   const facts = obj(objective?.facts) ?? {};
   const resolution = obj(objective?.resolution) ?? {};
@@ -497,7 +510,7 @@ function ProjectionView({ projection: p }: { projection: Projection }) {
           ) : (
             <ul className="owner-outcome__attempts">
               {p.attempts.map((a, i) => (
-                <AttemptItem key={i} attempt={a} />
+                <AttemptItem key={i} outcome={outcome} attempt={a} />
               ))}
             </ul>
           )}
@@ -625,7 +638,7 @@ export function OutcomeProjectionCard({
         <p data-testid="outcome-unreadable">The Integration process answered something that is not an outcome projection: {read.why}</p>
       ) : (
         <>
-          <ProjectionView projection={read.projection} />
+          <ProjectionView outcome={id} projection={read.projection} />
           <p className="owner-outcome__read-at" data-testid="outcome-read-at">
             Read at <time dateTime={read.readAt}>{read.readAt}</time>.
           </p>
