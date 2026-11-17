@@ -1956,12 +1956,13 @@ Plan leaf E-01.7 (built 2026-11-16, its verdict pending; decision 0026, Proposed
 only (`server.PORT`), with two faces: the dispatcher's at the root, and a read-only UI face under `/ui` for the Owner
 UI and Agent Canvas. The access values are public labelled constants; every answer carries the label header
 `X-AIEH-Fixture`. Its edge and asset are recorded (`nm-dispatcher-agentfixture`, `api-agentfixture`, planned until
-E-01.7's verdict). The port is not yet in `tools/guest.py`'s `HOST_CENSUS_PORTS` (that file is outside the slice);
-`agentfixture:test` reads the kernel's tables by the listener's own pid instead.
+E-01.7's verdict). The port is in `tools/guest.py`'s `HOST_CENSUS_PORTS`, so `guest:host-census` finds the listener
+by port (its process is only `python`); `agentfixture:test` also reads the kernel's tables by the listener's own
+pid.
 
 ```
 <tools python> -I -B integrations/agentfixture/server.py serve --log FILE [--port 13320] [--scenario NAME]
-    [--openapi FILE] [--state-dir DIR] [--scratch DIR]
+    [--openapi FILE] [--state-dir DIR] [--scratch DIR] [--ui-origin ORIGIN ...]
 ```
 
 - `--scenario`: `finished` (default), `running`, `pending`, `failed`, `lost-create-acknowledgement` or `unknown`
@@ -1969,6 +1970,9 @@ E-01.7's verdict). The port is not yet in `tools/guest.py`'s `HOST_CENSUS_PORTS`
 - `--openapi`: the locked release `openapi.json` (v1.60.1, sha256 `3de49fac...e0d0`), downloaded from the release
   and never committed (decision 0005); its sha256 is checked. Without it every create is refused: a create is
   validated against `StartConversationRequest` before it is answered.
+- `--ui-origin`: an origin whose browser requests the UI face answers with CORS (GET only, never with credentials;
+  none by default: Agent Canvas reaches the UI face through upstream's static server, same-origin). The dispatcher's
+  face has no CORS.
 - `--log`: the call log, JSON lines outside the checkout (face, method, path, the catalog answer or the transport
   event; never a body).
 - It stops when `<state-dir>/stop-request` exists.

@@ -245,7 +245,13 @@ SERVED_EXPECTED_FAILURES = {
     'test_restart_matrix.Rows.test_j_prime_as_j_then_a_restore',
     'test_restart_matrix.Rows.test_k_the_messages_answer_is_lost_then_a_death',
 }
-TRANSPORT_KEYS = {('result', 'delivered')}     # the exchange delivery's key: E-01.8's seam adds it, never the fixture
+TRANSPORT_KEY = 'transport key'                # a row's mark: a key the transport adds (E-01.8's seam), not served
+
+
+def transport_keys():
+    """The (answer, path) of every served row marked a transport key (review ruling 7: read from the rows)."""
+    return {(row['answer'], path) for row in CATALOG['served']['provenance'] if TRANSPORT_KEY in row['marks']
+            for path in AC.field_paths(row['field'])}
 
 
 def locked_openapi():
@@ -268,17 +274,19 @@ def served_rows_by_path():
     return rows
 
 
-def composite(reads, rows):
-    """RESULT's ``body.stdout`` is one text whose marker lines are rows of their own (``body.stdout#<line>``): a read
-    of the text reads each of its lines the table marks read."""
-    out = []
-    for read in reads:
-        if (read['answer'], read['path']) == ('result', 'body.stdout'):
-            out += [dict(read, path=path) for (answer, path), row in rows.items()
-                    if answer == 'result' and path.startswith('body.stdout#') and row['read']]
-        else:
-            out.append(read)
-    return out
+def without_line(stdout: str, line: str) -> str:
+    """STDOUT with the marker line LINE removed (``frame``: the exchange frame's lines, from its first to its end)."""
+    lines, kept, framing = stdout.split('\n'), [], False
+    for text in lines:
+        if line == 'frame':
+            framing = framing or text.startswith('AIEH-EXCHANGE-PART ')
+            if framing:
+                framing = not text.startswith('AIEH-EXCHANGE-END ')
+                continue
+        elif text.startswith(f'AIEH-RESULT {line} ') or text == f'AIEH-RESULT {line}':
+            continue
+        kept.append(text)
+    return '\n'.join(kept)
 
 
 @unittest.skipIf(locked_openapi() is None, 'AIEH_LOCKED_OPENAPI is not given: the listener validates every create '
@@ -332,7 +340,17 @@ class ServedReadBinding(unittest.TestCase):
             with AC.recording(reads):
                 answer = case.core('POST', case.path, fixture.result_command(case.base))
                 fixture.AR.parse_result(answer, delivered_expected=False)
-            return {'reads': reads.to_json(), 'readers': reads.readers_json()}
+            stdout = answer['body']['stdout']
+            # review N-b: which marker lines the parser reads, shown by taking each away (never by the table)
+            needed = {}
+            for line in ('base', 'tree', 'commit', 'excluded', 'bundle', 'tests', 'test-output', 'done', 'frame'):
+                try:
+                    fixture.AR.parse_result({'status': 200, 'body': {'stdout': without_line(stdout, line),
+                                                                     'exit_code': 0}}, delivered_expected=False)
+                    needed[line] = False
+                except fixture.AR.DispatchRefused as refusal:
+                    needed[line] = refusal.code == 'RESULT_COMMAND_FAILED'
+            return {'reads': reads.to_json(), 'readers': reads.readers_json(), 'needed': needed}
         finally:
             case.doCleanups()
 
@@ -351,6 +369,17 @@ class ServedReadBinding(unittest.TestCase):
                 readers.setdefault((read['answer'], read['path']), set()).update(read['by'])
         return list(merged.values()), readers
 
+    def test_the_failed_scenarios_run_fails_on_its_refused_creates(self):
+        """Review N-c: the restart matrix in the failed scenario fails by design (every create is answered 401):
+        its own return code and failures, and that the dispatch path was given the 401 to read."""
+        (run,) = [(code, result) for name, extra, code, result in self.runs if extra]
+        code, result = run
+        self.assertEqual(code, 1)
+        self.assertGreater(len(result['failures']), 0)
+        self.assertGreater(result['answers'].get('unauthorized', 0), 0)
+        self.assertNotIn('create-new', result['answers'], 'no create was answered 201')
+        self.assertTrue(any('CREATE_REFUSED' in text and '401' in text for text in result['failed'].values()))
+
     def test_the_dispatch_suite_runs_against_the_served_core_failing_only_where_the_listener_refuses(self):
         results = self.finished()
         self.assertEqual(len(results), len(modules()))
@@ -367,15 +396,24 @@ class ServedReadBinding(unittest.TestCase):
     def test_over_the_wire_the_reads_are_rows_marked_read_none_clock_valued_or_not_served(self):
         rows = served_rows_by_path()
         reads, _ = self.all_reads()
-        transport = [r for r in reads if (r['answer'], r['path']) in TRANSPORT_KEYS]
+        keys = transport_keys()
+        self.assertEqual(keys, {('result', 'delivered')})
+        transport = [r for r in reads if (r['answer'], r['path']) in keys]
         self.assertEqual([(r['answer'], r['path'], r['present']) for r in transport], [('result', 'delivered', False)])
-        judged = composite([r for r in reads if (r['answer'], r['path']) not in TRANSPORT_KEYS], rows)
+        text = [r for r in reads if (r['answer'], r['path']) == ('result', 'body.stdout')]
+        self.assertEqual([r['present'] for r in text], [True], 'the parser reads RESULT\'s text')
+        judged = [r for r in reads if (r['answer'], r['path']) not in keys | {('result', 'body.stdout')}]
         violations, observed, _ = judge(judged, rows)
         self.assertEqual(violations, [], 'a read of a field not marked read, clock-valued, not served or not listed')
         observed_rows = {id(rows[key]) for key in observed}
+        needed = self.result_reads['needed']
         for row in CATALOG['served']['provenance']:
-            if row['read']:
-                with self.subTest(answer=row['answer'], field=row['field']):
+            paths = AC.field_paths(row['field'])
+            lines = [p[len('body.stdout#'):] for p in paths if p.startswith('body.stdout#')]
+            with self.subTest(answer=row['answer'], field=row['field']):
+                if lines:                 # a line is read when the parser refuses the text without it
+                    self.assertEqual({needed[line] for line in lines}, {row['read']})
+                elif row['read'] and TRANSPORT_KEY not in row['marks']:
                     self.assertIn(id(row), observed_rows, 'a served row marked read that nothing reads')
 
     def test_each_served_row_read_names_exactly_the_dispatch_functions_that_read_it(self):
@@ -388,7 +426,7 @@ class ServedReadBinding(unittest.TestCase):
                         key = (row['answer'], 'body.stdout' if path.startswith('body.stdout#') else path)
                         found |= readers.get(key, set())
                     self.assertEqual(set(row['readBy']), {by for by in found if not by.startswith('outside:')})
-                    self.assertTrue(row['served'])
+                    self.assertEqual(row['served'], TRANSPORT_KEY not in row['marks'])
                     self.assertNotIn('clock-valued', row['marks'])
 
 
