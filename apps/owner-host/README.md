@@ -321,6 +321,27 @@ before any browser was opened (the I1 design, section 6). They are not changed a
 **STOP** (and report, building nothing on it) if the server binds anything but `127.0.0.1`, or any flag above does
 not do what its help text says.
 
+**Observed (2026-11-17): PASS.** Windows 11, Node 24.19.0, the installed package's version and integrity equal to
+`package-lock.json`'s (npm's install record compared for the package, `sirv`, `httpxy` and `sirv`'s closure). The
+server was started exactly as the rule's command line, its environment `SystemRoot`, `windir`, `TEMP`, `TMP` and
+`MARS_WEB=0` only, the fixture serving on 13320 (scenario `finished`, a conversation created and its message sent on
+the dispatcher's face).
+
+1. One TCP listener on port 13330, `127.0.0.1`, owned by the server's node process; that process held no other TCP
+   listener and no UDP endpoint. `tools/guest.py host-census`: PASS, listing 13330 (`node`, found by port) and 13320
+   (`python`) on `127.0.0.1`.
+2. Upstream's ready line: `Static-server + proxy listening on http://127.0.0.1:13330/`, with the three routes
+   `/server_info`, `/sockets` and `/api` to `http://127.0.0.1:13320/ui`.
+3. Through 13330: `GET /server_info` 200 with the label (`ui-server-info`); `GET /api/conversations/<id>` 200 with
+   the label (`ui-conversation`, title `FIXTURE: ai-engineering-harness/agentfixture (not a live conversation)`);
+   the session socket's handshake labelled (`ui-socket`), then `sync` and `durable` after the first-frame
+   authentication; the fixture's call log names each on its UI face.
+4. and 5. The served `index.html` holds `window.__AGENT_CANVAS_SESSION_API_KEY__="agentfixture-ui-face-public-value";`
+   and `window.__AGENT_CANVAS_DO_NOT_TRACK__=true;` (in upstream's one injected script, before `</head>`).
+6. 400 files in each tree, the same set; one differs, `assets/root-DpxuifD3.css` (sha256 `32148826…2341` in the
+   package, `608907fc…3dc6` in the copy), equal to the original with exactly the two Google Fonts `@import` rules
+   (285 bytes) removed; no JavaScript or HTML file differs.
+
 ### G5: the conversation view in a real browser
 
 **Run.** The fixture serves on `127.0.0.1:13320` (scenario `finished`, the locked release document given). Before
@@ -350,6 +371,32 @@ answer from the label header and the call log, and that answer's provenance rows
 **STOP** (and report) if a request leaves loopback (an egress origin is the Owner's: decision 0018 point 4.7), or
 rendering needs an answer with no provenance row. A request the fixture refuses (its labelled 501) is recorded as
 failed; it does not stop the gate unless the view cannot render without it.
+
+**Observed (2026-11-17): STOP, on both conditions.** Headless Chrome (the host's installed
+`C:\Program Files\Google\Chrome\Application\chrome.exe`) with a throwaway profile, the rule's flags, driven over the
+DevTools protocol from the tools set's `websockets`; the fixture and the Canvas server as in G6; the page
+`http://127.0.0.1:13330/conversations/<id>`, observed until the browser's own `networkIdle` lifecycle event.
+
+- **A request left loopback.** The page made 14 `GET` requests to `https://cdn.simpleicons.org/...` (`github`,
+  `linear`, `gitlab`, `bitbucket`, `atlassian`, `jira`, `notion`, each twice), all answered 200: icons of the MCP
+  integration catalog that Canvas's bundled `@openhands/extensions` lists as `logoUrl` and renders as images on its
+  onboarding and home view's "Suggested" templates, from a Cloudflare address (`[2606:4700:3036::ac43:d892]:443`). Neither upstream's `--disable-telemetry` nor the font rule
+  touches them. No request went to `fonts.googleapis.com`, `fonts.gstatic.com` or a telemetry host. The request
+  headers were not recorded.
+- **The view did not render the conversation.** A fresh profile shows Canvas's onboarding ("Check your backend",
+  "Disconnected", with the default backend `http://127.0.0.1:13330` and the injected key filled in), and no request
+  for the conversation, its events or its socket was made. Canvas 1.36.0's local-backend check
+  (`dist/api/agent-server-compatibility.js` `validateLocalBackend`) calls `GET /api/settings` before
+  `/server_info`; the fixture answers it with its labelled 501, as it does `/api/llm/models/verified`,
+  `/api/profiles`, `/api/agent-profiles`, `/api/meta-profiles`, `/api/settings/agent-schema`,
+  `/api/automation/sdk-version` and `/api/automation/health` (28 refused requests in all), none of which has a
+  catalog answer or a provenance row. Onboarding is shown until Canvas's origin holds `openhands-onboarded` in its
+  `localStorage` (`dist/components/features/onboarding/use-onboarding-completion.js`).
+- Every other request (281 of 295) was to `127.0.0.1:13330`: the page, its assets, `/locales/en/openhands.json`, `/favicon.svg`
+  and `/mars/health` (answered by the static server's own fallback, `MARS_WEB=0`). No fixture answer was 2xx.
+
+Nothing is built on this gate: the engineering route, the frame and the source action wait for the decision on
+both conditions.
 
 ## Agent Canvas and assistant-ui in one React app
 
