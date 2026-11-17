@@ -73,6 +73,24 @@ LABEL_HEADER = 'X-AIEH-Fixture'
 KEY_HEADER = 'x-session-api-key'
 SCENARIOS = ('finished', 'running', 'pending', 'failed', 'lost-create-acknowledgement', 'unknown')
 RUNNING_READS = 7                  # the running scenario's UI window: D1's wait read the conversation seven times
+MAX_BODY_DEPTH = 64                # a body nested deeper is malformed: the core copies and walks bodies recursively
+LOOPBACK_ORIGIN = re.compile(r'http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?')
+
+
+class OriginRefused(ValueError):
+    """A configured UI origin that is not a loopback http origin (UI_ORIGIN_NOT_LOOPBACK)."""
+    code = 'UI_ORIGIN_NOT_LOOPBACK'
+
+
+def depth(value) -> int:
+    """VALUE's nesting depth (a scalar 0), walked without recursion."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        item, level = stack.pop()
+        if isinstance(item, (dict, list)):
+            deepest = max(deepest, level)
+            stack.extend((child, level + 1) for child in (item.values() if isinstance(item, dict) else item))
+    return deepest
 LOCKED_DOCUMENT_SHA256 = '3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0'
 CREATE_SCHEMA = '#/components/schemas/StartConversationRequest'
 SOCKET_ROUTE = '/sockets/session/'
@@ -130,6 +148,14 @@ class Fixture:
             raise ValueError(f'not a scenario: {scenario!r}')
         self.scenario = scenario
         self.ui_origins = tuple(ui_origins)
+        refused = [o for o in self.ui_origins if not isinstance(o, str) or LOOPBACK_ORIGIN.fullmatch(o) is None]
+        if refused:
+            # a loopback origin only (review round 2), so that ui-preflight's 200 stays the pinned CORS
+            # middleware's: it allows an origin whose host is localhost or 127.0.0.1
+            # (as:openhands/agent_server/middleware.py:52-60); [::1] is admitted as the ruling names it, though
+            # that rule does not list it
+            raise OriginRefused(f'{OriginRefused.code}: {refused!r}: a UI origin must be http on localhost, '
+                                '127.0.0.1 or [::1]')
         self._lock = None
         self.core = core if core is not None else core_module().AgentServerCore(
             scratch=scratch, ui_running_reads=RUNNING_READS if scenario == 'running' else 0)
@@ -326,6 +352,8 @@ async def _http(fixture: Fixture, scope, receive, send):
     if raw:
         try:
             body = json.loads(raw.decode('utf-8'))
+            if depth(body) > MAX_BODY_DEPTH:
+                raise ValueError('nested past the fixture\'s depth')
         except (ValueError, RecursionError):
             answer = fixture.core.malformed()
             fixture.note(face=face, method=method, path=path, event='answered', answer='malformed',
@@ -555,6 +583,11 @@ def main(argv=None) -> int:
     run.add_argument('--ui-origin', action='append', default=[],
                      help='an origin whose browser requests the UI face answers with CORS (GET only; none by default)')
     args = parser.parse_args(argv)
+    bad = [o for o in args.ui_origin if LOOPBACK_ORIGIN.fullmatch(o) is None]
+    if bad:
+        print(f'{OriginRefused.code}: {bad!r}: a UI origin must be http on localhost, 127.0.0.1 or [::1]',
+              file=sys.stderr)
+        return 2
     return serve(port=args.port, scenario=args.scenario, log=args.log, openapi=args.openapi, state_dir=args.state_dir,
                  scratch=args.scratch, ui_origins=args.ui_origin)
 

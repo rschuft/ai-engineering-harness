@@ -182,14 +182,14 @@ class InThread:
 
 
 def http(port: int, method: str, path: str, *, key: str | None = None, body=None, headers: dict | None = None,
-         timeout: float = 30) -> dict:
+         timeout: float = 30, raw: bytes | None = None) -> dict:
     """One raw HTTP request to the listener (the UI face's client in tests): {status, headers, label, body}."""
     import http.client
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     sent = dict(headers or {})
     if key is not None:
         sent['X-Session-API-Key'] = key
-    data = None if body is None else json.dumps(body).encode('utf-8')
+    data = raw if raw is not None else None if body is None else json.dumps(body).encode('utf-8')
     if data is not None:
         sent['Content-Type'] = 'application/json'
     try:

@@ -348,8 +348,8 @@ class ServedReadBinding(unittest.TestCase):
                     fixture.AR.parse_result({'status': 200, 'body': {'stdout': without_line(stdout, line),
                                                                      'exit_code': 0}}, delivered_expected=False)
                     needed[line] = False
-                except fixture.AR.DispatchRefused as refusal:
-                    needed[line] = refusal.code == 'RESULT_COMMAND_FAILED'
+                except fixture.AR.DispatchRefused:
+                    needed[line] = True             # any refusal: the parser needs the line (review round 2)
             return {'reads': reads.to_json(), 'readers': reads.readers_json(), 'needed': needed}
         finally:
             case.doCleanups()

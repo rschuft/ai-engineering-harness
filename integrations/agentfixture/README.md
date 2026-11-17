@@ -380,14 +380,15 @@ has room the UI face also shows it in the data (`title`, `tags`). `transport.py`
 
 **Refusals.** A request outside the catalog, or one whose answer would need a field no class admits (other than a
 property listed not served on the dispatcher's face), is answered HTTP 501 with the label (`FIXTURE_NO_OBSERVATION`
-and why). A body that cannot be parsed (not JSON, or nested past the parser's depth) is the labelled 400
-(`malformed`), never an unlabelled error. A refused socket is closed 1008 with the reason
+and why). A body that cannot be parsed, or that parses but is nested deeper than 64 levels (the core copies and
+walks bodies recursively), is the labelled 400 (`malformed`) before the core sees it, never an unlabelled error. A refused socket is closed 1008 with the reason
 `FIXTURE_NO_OBSERVATION: <why>` after a labelled handshake. A request line the HTTP layer itself rejects (uvicorn's
 own 400, before the application runs) carries no label: no application code sees it.
 
 **CORS** (the engineering manager's ruling 2 of E-01.7's review). The dispatcher's face has none: no browser drives
 it, so a preflight there is the labelled 501 and no answer carries an `Access-Control-*` header. The UI face answers a
-browser only from origins configured explicitly (`--ui-origin`; none by default), only for `GET` of a route its
+browser only from origins configured explicitly (`--ui-origin`; none by default; loopback `http` origins only,
+`localhost`, `127.0.0.1` or `[::1]`, another refused at start with `UI_ORIGIN_NOT_LOOPBACK`), only for `GET` of a route its
 catalog serves, asking for no header but `X-Session-API-Key`, and never with credentials: the preflight is the
 labelled `ui-preflight` (its status source-derived from the pinned server's own preflight through Starlette's
 `CORSMiddleware`, `as:openhands/agent_server/middleware.py:34-50`), with `Access-Control-Allow-Origin` (that origin),
@@ -593,7 +594,7 @@ lines).
 | both | `socket-refusal` | `fixture` | label | the fixture's label, on the handshake |  | no | yes |  |
 | ui | `ui-preflight` | `status` | source-derived | `as:openhands/agent_server/middleware.py:34-50` (the pinned server answers a CORS preflight through Starlette's CORSMiddleware: 200 for an origin it allows) | a preflight of a UI route for GET from a configured origin (the engineering manager's ruling 2 of E-01.7's review); its CORS headers are the listener's own policy, as the label header is, not fields of an answer | no | yes | source-derived |
 | ui | `ui-preflight` | `fixture` | label | the fixture's label, naming the source-derived field |  | no | yes |  |
-| both | `malformed` | `status` | label | the fixture's refusal of a body it cannot parse (not JSON, or nested past the parser's depth): `400` (E-01.7's review, N-d) |  | no | yes |  |
+| both | `malformed` | `status` | label | the fixture's refusal of a body it cannot parse (not JSON, or parsing but nested deeper than 64 levels): `400` (E-01.7's review, N-d and its second round) |  | no | yes |  |
 | both | `malformed` | `fixture` | label | the fixture's label, with the reason it refused |  | no | yes |  |
 
 **Source-derived entries** are on the UI face only, but for the core's one dispatcher-face entry (`message-event`),

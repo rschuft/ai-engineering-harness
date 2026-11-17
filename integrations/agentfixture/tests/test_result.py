@@ -207,6 +207,13 @@ class Refused(D1Shaped):
         self.assertEqual(self.core('POST', self.path, result_command(self.base))['status'], 200)
         self.assertTrue(self.core.conversations[S.CID]['result'])
 
+    def test_a_seed_that_times_out_is_a_labelled_refusal(self):
+        """Review round 2 (M27): SEED's timeout, as RESULT's: a labelled refusal, never an unlabelled error."""
+        import subprocess
+        from unittest import mock
+        with mock.patch.object(S.AC.subprocess, 'run', side_effect=subprocess.TimeoutExpired('python', 1)):
+            self.refused(self.core('POST', self.path, seed_body(self.base)), 'did not finish within its timeout')
+
     def test_a_result_with_an_exchange_delivery_is_refused_as_before(self):
         self.seeded()
         answer = self.core('POST', self.path, result_command(self.base), deliver={'part': 'bundle', 'name': 'x'})

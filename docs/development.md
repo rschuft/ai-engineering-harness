@@ -1971,7 +1971,8 @@ pid.
   and never committed (decision 0005); its sha256 is checked. Without it every create is refused: a create is
   validated against `StartConversationRequest` before it is answered.
 - `--ui-origin`: an origin whose browser requests the UI face answers with CORS (GET only, never with credentials;
-  none by default: Agent Canvas reaches the UI face through upstream's static server, same-origin). The dispatcher's
+  loopback only: `http` on `localhost`, `127.0.0.1` or `[::1]`, any port, another refused at start with
+  `UI_ORIGIN_NOT_LOOPBACK`; none by default: Agent Canvas reaches the UI face through upstream's static server, same-origin). The dispatcher's
   face has no CORS.
 - `--log`: the call log, JSON lines outside the checkout (face, method, path, the catalog answer or the transport
   event; never a body).

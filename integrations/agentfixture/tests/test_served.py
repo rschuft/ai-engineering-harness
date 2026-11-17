@@ -145,6 +145,13 @@ class Cors(Listener):
                     answer = self.preflight(path, origin=origin, method='POST')
                     self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
                     self.assertEqual(self.cors_headers(answer), {})
+        # review round 2 (M21): a GET preflight from a configured origin, on paths that share a UI template
+        for path in ('/server_info', CONVERSATION, CONVERSATION + '/events/search'):
+            with self.subTest(get_preflight=path):
+                answer = self.preflight(path)
+                self.assertEqual((answer['status'], answer['label']['answer'], self.cors_headers(answer)),
+                                 (501, 'refusal', {}))
+                self.assertIn('dispatcher', answer['label']['refused'])
         plain = S.http(self.served.port, 'OPTIONS', '/api/conversations')
         self.assertEqual((plain['status'], plain['label']['answer']), (501, 'refusal'))
         get = S.http(self.served.port, 'GET', '/api/conversations/count', key=S.DISPATCHER_ACCESS,
@@ -171,6 +178,20 @@ class Cors(Listener):
         self.assertEqual(self.cors_headers(get), {'access-control-allow-origin': self.ORIGIN})
         other = self.ui('GET', CONVERSATION, headers={'Origin': 'http://localhost:5173'})
         self.assertEqual(self.cors_headers(other), {})
+
+    def test_only_a_loopback_http_origin_can_be_configured(self):
+        """Review round 2: localhost, 127.0.0.1 or [::1], http, any port; anything else is refused at start, with a
+        stable code, by the fixture and by the command line."""
+        for origin in ('http://localhost', 'http://127.0.0.1:4173', 'http://[::1]:13330'):
+            SERVER.Fixture('finished', ui_origins=(origin,)).core.close()
+        for origin in ('https://127.0.0.1:4173', 'http://evil.example', 'http://127.0.0.2', 'http://localhost.evil',
+                       'http://127.0.0.1:4173/', 'null', 'http://0.0.0.0:80'):
+            with self.subTest(origin=origin):
+                with self.assertRaises(SERVER.OriginRefused) as caught:
+                    SERVER.Fixture('finished', ui_origins=(origin,))
+                self.assertIn('UI_ORIGIN_NOT_LOOPBACK', str(caught.exception))
+                self.assertEqual(SERVER.main(['serve', '--log', str(S.PACKAGE / 'never-written.jsonl'),
+                                              '--port', str(S.free_port()), '--ui-origin', origin]), 2)
 
     def test_with_no_configured_origin_every_preflight_is_refused(self):
         fixture = SERVER.Fixture('finished')
@@ -201,6 +222,23 @@ class Robustness(Listener):
                     connection.close()
                 self.assertEqual((response.status, label['answer']), (400, 'malformed'))
         self.assertEqual(self.core.calls, [])
+
+    def test_a_body_that_parses_but_is_nested_deep_is_a_labelled_400_and_changes_nothing(self):
+        """Review round 2: bodies of depth 600 and 900 parse, and the core's copy of them would not: both routes the
+        dispatcher's key reaches with a body, refused before the core, its state unchanged."""
+        self.held()
+        before = (len(self.core.calls), json.dumps(self.core.conversations, sort_keys=True, default=str))
+        for route in (CONVERSATION + '/events', CONVERSATION + '/bash/execute_bash_command', '/api/conversations'):
+            for deep in (65, 600, 900):
+                with self.subTest(route=route, depth=deep):
+                    raw = ('[' * deep + ']' * deep).encode('ascii')
+                    json.loads(raw)                                   # it parses
+                    answer = S.http(self.served.port, 'POST', route, key=S.DISPATCHER_ACCESS, raw=raw)
+                    self.assertEqual((answer['status'], answer['label']['answer']), (400, 'malformed'))
+        self.assertEqual((len(self.core.calls), json.dumps(self.core.conversations, sort_keys=True, default=str)),
+                         before)
+        shallow = [[[{'role': 'user'}]]]
+        self.assertEqual(SERVER.depth(shallow), 4)
 
     def test_a_long_core_call_runs_off_the_event_loop(self):
         """Review N-e: while a SEED holds the core (here, a call made to wait on the test's own event), the listener
