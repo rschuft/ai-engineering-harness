@@ -38,10 +38,10 @@
    "wall_s": 112.7
   },
   "store": {
-   "tests": 84,
+   "tests": 88,
    "launches": 205,
-   "mkdtemp": 108,
-   "wall_s": 10.5
+   "mkdtemp": 112,
+   "wall_s": 10.9
   },
   "effects": {
    "tests": 34,
@@ -92,10 +92,10 @@
    "wall_s": 2.4
   },
   "dispatch": {
-   "tests": 887,
+   "tests": 888,
    "launches": 419,
-   "mkdtemp": 1246,
-   "wall_s": 219.1
+   "mkdtemp": 1248,
+   "wall_s": 221.4
   },
   "repository": {
    "tests": 106,
@@ -122,10 +122,10 @@
    "wall_s": 8.2
   },
   "agentfixture": {
-   "tests": 89,
+   "tests": 90,
    "launches": 55,
-   "mkdtemp": 47,
-   "wall_s": 27.4
+   "mkdtemp": 49,
+   "wall_s": 30.8
   }
  },
  "categories": {
@@ -205,6 +205,19 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at d3a2d30 (E-01.8 and its review fixes: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "store",
+    "agentfixture",
+    "dispatch"
+   ],
+   "revision": "f730eb55c7f45f8248339bc74c45db7217c44e3f",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at f730eb5 (E-01.8, the store reconcile label: the engineering manager's request of the review round) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
