@@ -399,9 +399,11 @@ class ConfigurationRefusals(Rig):
 
 
 class RaceWindow(Rig):
-    """Only a race reaches the recorder's backstop after the reservation (decision of the engineering manager on
-    P-04.4, ruling B): its refusal leaves the receipt reserved and nothing in the project repository; once repaired,
-    the same message records exactly one acceptance; a process that ended after the commit is settled by reading the
+    """Only a race reaches the recorder's backstop after the reservation (the engineering manager's ruling B on P-04.4):
+    every refusal the project repository's own state would cause is checked before the reservation
+    (RepositoryStateRefusals), so here another process changes the repository between those checks and the commit.
+    The backstop's refusal leaves the receipt reserved and nothing in the project repository; once repaired, the same
+    message records exactly one acceptance; a process that ended after the commit is settled by reading the
     repository first."""
 
     def setUp(self):
@@ -513,6 +515,167 @@ class SessionBindingVerifier(Rig):
                 reason = self.verify(**kwargs)
                 self.assertIsInstance(reason, str)
                 self.assertTrue(reason)
+
+
+class CardChecks(Rig):
+    """The card the challenge names (review fix S1, N1): stored, an assistant message, the reply to the review, of the
+    same session, stored after the challenge was issued, and an ancestor of the acceptance; and the challenge's own
+    thread. Each case differs from an admitted acceptance by its one clause, and changes nothing."""
+
+    def direct(self, message_id, nonce, session=None, thread_id=None):
+        """The acceptance asked of the service directly, as app.py hands it a session (no credential check)."""
+        thread_id = thread_id or self.thread_id
+        digest = self.store.message(thread_id, message_id).sha256
+        try:
+            answer = self.accepter.record(self.store, thread_id, message_id, {'nonce': nonce, 'sha256': digest},
+                                          session or self.record.public())
+        except AC.AcceptanceRefused as exc:
+            return exc.status, {'code': exc.code, 'detail': exc.detail, 'remedy': exc.remedy}
+        return 200, answer
+
+    def test_a_card_stored_under_another_session_is_refused(self):
+        session = self.record.public()
+        card = self.challenge(store_card=False)
+        _credential, other = self.scratch.enroll(at=NOW)
+        self.append('Crd0001', 'The acceptance card.', 'Rev0001', role='assistant', record=other)
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        answer = self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.direct, 'Acc0001', card['nonce'], session, status=409)
+        self.assertIn('reply to the review in this session', answer['detail'])
+
+    def test_a_card_that_is_not_an_assistant_message_is_refused(self):
+        card = self.challenge(card='Usr0001', store_card=False)
+        self.append('Usr0001', 'An Owner message, not a card.', 'Rev0001')
+        self.append('Acc0001', ACCEPT, 'Usr0001')
+        self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
+
+    def test_a_card_that_is_not_the_reply_to_the_review_is_refused(self):
+        card = self.challenge(store_card=False)
+        self.append('Crd0001', 'A card under the capture card.', 'Cap0001', role='assistant')
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
+
+    def test_the_capture_card_named_as_the_card_and_the_accept_under_the_review_is_refused(self):
+        """The reviewer's P4: prepare names an earlier assistant message (the capture card, an ancestor of the review)
+        and the Accept goes directly under the review, after no card that showed the challenge."""
+        card = self.challenge(card='Cap0001', store_card=False)
+        self.append('Acc0001', ACCEPT, 'Rev0001')
+        self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
+
+    def test_a_card_and_an_accept_stored_before_the_challenge_are_refused(self):
+        """The reviewer's P3 (N1): the card and the Accept exist before prepare is asked, and prepare names that card."""
+        self.append('Crd0001', 'A card written before any challenge.', 'Rev0001', role='assistant')
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        card = self.challenge(store_card=False)
+        answer = self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
+        self.assertIn('before the challenge was issued', answer['detail'])
+
+    def test_a_challenge_of_another_thread_is_refused(self):
+        """A second thread holds messages under the same ids (ids are unique per thread), its card stored after the
+        challenge's seq: only the challenge's thread tells them apart."""
+        card = self.challenge(store_card=False)
+        other = self.store.initialize_thread(session_id=self.record.session_id, local_id='__LOCALID_accept2',
+                                             at=T.stamp(NOW))[0].thread_id
+        at = T.stamp(NOW)
+        for message_id, text, parent, role in (('Fil0001', 'one', None, 'user'), ('Fil0002', 'two', 'Fil0001', 'user'),
+                                               ('Fil0003', 'three', 'Fil0002', 'user'), ('Rev0001', REVIEW, 'Fil0003', 'user'),
+                                               ('Crd0001', 'The card.', 'Rev0001', 'assistant'),
+                                               ('Acc0001', ACCEPT, 'Crd0001', 'user')):
+            self.store.append_message(other, item(message_id, text, parent, role), session_id=self.record.session_id,
+                                      at=at)
+        self.refused('ACCEPTANCE_CHALLENGE_MISMATCH', self.direct, 'Acc0001', card['nonce'], thread_id=other,
+                     status=409)
+
+    def test_a_receipt_answers_only_its_own_nonce(self):
+        card = self.challenge()
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        self.accepted('Acc0001', card['nonce'])
+        self.refused('ACCEPTANCE_RECEIPT_CONFLICT', self.accept, 'Acc0001', 'ab' * 16, status=409)
+
+
+class RepositoryStateRefusals(Rig):
+    """Review fix S2: what the recorder or the repository-access module would refuse for the project repository's own
+    state is refused before the receipt is reserved (acceptance.preflight, the module's own write_commit asked to
+    commit nothing), so that only a race reaches the backstop. Each refusal leaves the project repository (HEAD, every
+    ref, the index file, the work tree, the object store's count), the conversation store and the integration store
+    as they were; once repaired, the same message records exactly one acceptance."""
+
+    def setUp(self):
+        super().setUp()
+        self.card = self.challenge()
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+
+    def state(self):
+        git_dir = self.project / '.git'
+        return (*super().state(), (git_dir / 'index').read_bytes(), fx.git(self.project, 'for-each-ref'),
+                fx.git(self.project, 'count-objects', '-v'))
+
+    def repaired_records_once(self):
+        answer = self.accepted('Acc0001', self.card['nonce'])
+        self.assertEqual(self.acceptance_commits(), [answer['commit']])
+        self.assertEqual([e.to_state for e in self.receipt('Acc0001')[1]], ['reserved', 'dispatched', 'confirmed'])
+
+    def test_a_client_hook_is_refused_before_the_reservation(self):
+        hook = self.project / '.git' / 'hooks' / 'pre-commit'
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text('#!/bin/sh\nexit 0\n', encoding='ascii')
+        self.refused('HOOKS_UNSUPPORTED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        hook.unlink()
+        self.repaired_records_once()
+
+    def test_local_changes_to_the_change_are_refused_before_the_reservation(self):
+        meta = self.project / CHANGE_DIR / '.openspec.yaml'
+        original = meta.read_bytes()
+        meta.write_bytes(original + b'# an uncommitted edit\n')
+        answer = self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        self.assertIn('local changes', answer['detail'])
+        meta.write_bytes(original)
+        self.repaired_records_once()
+
+    def test_commit_signing_is_refused_before_the_reservation(self):
+        fx.git(self.project, 'config', 'commit.gpgSign', 'true')
+        answer = self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        self.assertIn('gpgSign', answer['detail'])
+        fx.git(self.project, 'config', '--unset', 'commit.gpgSign')
+        self.repaired_records_once()
+
+    def test_a_detached_head_is_refused_before_the_reservation(self):
+        fx.git(self.project, 'checkout', '--quiet', '--detach')
+        self.refused('CAPTURE_PROJECT_UNAVAILABLE', self.accept, 'Acc0001', self.card['nonce'], status=503)
+        fx.git(self.project, 'checkout', '--quiet', 'main')
+        self.repaired_records_once()
+
+    def test_unmerged_index_entries_are_refused_before_the_reservation(self):
+        fx.git(self.project, 'checkout', '--quiet', '-b', 'other')
+        (self.project / 'README.md').write_bytes(b'Other.\n')
+        fx.commit_all(self.project, 'other')
+        fx.git(self.project, 'checkout', '--quiet', 'main')
+        (self.project / 'README.md').write_bytes(b'Main.\n')
+        fx.commit_all(self.project, 'main')
+        with self.assertRaises(Exception):
+            fx.git(self.project, 'merge', '--quiet', 'other')
+        self.assertIn('UU README.md', fx.git(self.project, 'status', '--porcelain'))
+        answer = self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        self.assertIn('unmerged', answer['detail'])
+        fx.git(self.project, 'merge', '--abort')
+        self.repaired_records_once()
+
+    def test_a_refused_read_of_the_repository_is_git_failed(self):
+        def broken(*_args):
+            raise AC.ra.RepositoryError('GIT_FAILED', 'a read the repository refused')
+        with mock.patch.object(AC.Acceptance, '_amend', staticmethod(broken)):
+            answer = self.refused('GIT_FAILED', self.accept, 'Acc0001', self.card['nonce'], status=500)
+        self.assertEqual(answer['remedy'], REC.REMEDIES['GIT_FAILED'])
+
+
+class CodeParity(unittest.TestCase):
+    def test_the_shell_knows_every_acceptance_refusal(self):
+        import re
+        text = (T.REPO / 'apps' / 'owner-host' / 'src' / 'identity' / 'owner-session.ts').read_text(encoding='utf-8')
+        block = text.split('export const ACCEPTANCE_CODES = [', 1)[1].split('] as const;', 1)[0]
+        self.assertEqual(sorted(re.findall(r'"([A-Z_]+)"', block)),
+                         sorted((set(AC.STATUS) - {'REQUEST_INVALID'}) | set(AC.PASSED_ON)))
+        self.assertEqual(set(AC.STATUS), set(AC.REMEDIES))
+        self.assertTrue(set(AC.PASSED_ON) <= set(REC.REMEDIES))
 
 
 class NoModelNoSocket(Rig):

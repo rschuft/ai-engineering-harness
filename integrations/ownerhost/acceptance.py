@@ -21,40 +21,57 @@ project repository, never from text the request carries:
    the message from the store: a user message, author ``owner``, made under the requesting session, with that digest
    and text, and the challenge issued to that session.
 
-In order, each refusal with a stable code, and **nothing changed** (the project repository, the conversation store,
-the integration store):
+The card's id is the one id a request proposes rather than names (decision 0025 point 8, "server-held ids only"): at
+``prepare`` the card is still being written by the shell, so the challenge is held with the id the shell will store it
+under, and at ``record`` that id is checked against the server-held store: the card must be stored by then, after the
+challenge was issued, as the assistant reply to the review, in the same session. A card the shell never stores only
+leaves its challenge unusable.
 
-- the project configuration (``components.owner_host``, capture.py's ``project_config``: ``CAPTURE_PROJECT_UNCONFIGURED``,
-  ``CAPTURE_CONFIG_INVALID``); the body (``REQUEST_INVALID``);
-- the message: an assistant message is ``ACCEPTANCE_MODEL_AUTHORED`` (display state the shell wrote, or a model's or an
-  agent's text: never the Owner's statement), a user message not authored by ``owner`` ``STATEMENT_NOT_OWNER``; the
-  request of a challenge must be an Owner message (``ACCEPTANCE_NOT_A_STATEMENT``); the sha256 of its stored bytes must
-  be the request's (``ACCEPTANCE_MESSAGE_MISMATCH``); it must be made under the requesting session
-  (``ACCEPTANCE_SESSION_MISMATCH``: an acceptance not made in the Owner's session); its layout
-  (``ACCEPTANCE_LAYOUT_INVALID``);
-- the principal and the commit identity (capture.py's ``session_principal`` and ``capture_identities``:
-  ``CAPTURE_SESSION_UNRECOGNIZED``, ``COMMIT_IDENTITY_UNAVAILABLE``, ``_INVALID``, ``_PLACEHOLDER``; decision 0028: the
-  commit's author and committer are the session principal's configured identity, passed to the recorder, which
-  commits with it as both); the project repository (``CAPTURE_PROJECT_UNAVAILABLE``, ``CAPTURE_PROJECT_IS_HARNESS``);
-- the challenge, **before the receipt is reserved**: unknown (``ACCEPTANCE_CHALLENGE_UNKNOWN``), issued to another
-  session (``ACCEPTANCE_SESSION_MISMATCH``), of another thread or item (``ACCEPTANCE_CHALLENGE_MISMATCH``), the
-  acceptance not after its card (``ACCEPTANCE_NOT_AFTER_CARD``: the card must be the stored assistant reply to the
-  request, of the same session, and an ancestor of the acceptance), already used (``CHALLENGE_CONSUMED``: a decision
-  record of the change at HEAD carries its nonce, read as the recorder reads them), expired
-  (``CHALLENGE_EXPIRED``), or the proposal changed at HEAD since it was prepared (``CHALLENGE_STALE``); the change's
-  x-outcomes must read (``OUTCOME_METADATA_INVALID``). Whether this is a re-acceptance (the recorder's amend, which
-  keeps the outcome id) is read from x-outcomes at HEAD: the item already has its id.
+An acceptance's refusals, in the order ``record`` checks them, each with a stable code and **nothing changed** (the
+project repository, the conversation store, the integration store):
+
+1. the project configuration (``components.owner_host``, capture.py's ``project_config``:
+   ``CAPTURE_PROJECT_UNCONFIGURED``, ``CAPTURE_CONFIG_INVALID``); the body (``REQUEST_INVALID``);
+2. the message: an assistant message is ``ACCEPTANCE_MODEL_AUTHORED`` (display state the shell wrote, or a model's or
+   an agent's text: never the Owner's statement), a user message not authored by ``owner`` ``STATEMENT_NOT_OWNER``; the
+   sha256 of its stored bytes must be the request's (``ACCEPTANCE_MESSAGE_MISMATCH``);
+3. the principal (capture.py's ``session_principal``: ``CAPTURE_SESSION_UNRECOGNIZED``), and the message must be made
+   under the requesting session (``ACCEPTANCE_SESSION_MISMATCH``: an acceptance not made in the Owner's session);
+4. the commit identity (capture.py's ``capture_identities``: ``COMMIT_IDENTITY_UNAVAILABLE``, ``_INVALID``,
+   ``_PLACEHOLDER``; decision 0028: the commit's author and committer are the session principal's configured identity,
+   passed to the recorder, which commits with it as both);
+5. the layout (``ACCEPTANCE_LAYOUT_INVALID``); the project repository (``CAPTURE_PROJECT_UNAVAILABLE``,
+   ``CAPTURE_PROJECT_IS_HARNESS``);
+6. an earlier receipt of this message (below: answered or settled, never recorded twice; ``ACCEPTANCE_RECEIPT_CONFLICT``
+   for another request);
+7. the challenge: unknown (``ACCEPTANCE_CHALLENGE_UNKNOWN``), issued to another session
+   (``ACCEPTANCE_SESSION_MISMATCH``), of another thread or item (``ACCEPTANCE_CHALLENGE_MISMATCH``); the card
+   (``ACCEPTANCE_NOT_AFTER_CARD``): stored, an assistant message, the reply to the review, of the same session, stored
+   after the challenge was issued (its seq above the thread's highest when ``prepare`` ran), and an ancestor of the
+   acceptance (which is therefore stored after it too); already used (``CHALLENGE_CONSUMED``: a decision record of the
+   change at HEAD carries its nonce, read with the recorder's own reader); expired (``CHALLENGE_EXPIRED``); the proposal
+   changed at HEAD since it was prepared (``CHALLENGE_STALE``);
+8. the change's x-outcomes must read (``OUTCOME_METADATA_INVALID``): whether this is a re-acceptance (the recorder's
+   amend, which keeps the outcome id) is read from them at HEAD;
+9. the project repository's own state, as the commit would find it (``preflight``): the repository-access module's
+   ``write_commit`` is asked to commit the change's two existing files with their HEAD bytes, which it refuses after
+   every check of its own and before it writes anything (``nothing-to-commit`` means every check passed). Any other
+   refusal is the recorder's code: ``HOOKS_UNSUPPORTED`` (a client hook), ``COMMIT_REFUSED`` (HEAD not a branch,
+   ``commit.gpgSign``, an unmerged or unsupported index, local changes to the change's files, a path in the way),
+   ``GIT_FAILED``. A read the repository refuses on this path is ``GIT_FAILED`` too.
 
 Then the write-ahead receipt ``owner-ui/objective-acceptance/v1/<thread>/<message>`` is reserved in the integration
 store, and the recorder makes its one commit (the decision record, the item's acceptance and, the first time, the
 minted outcome id; resolved through the lineage objective resolver before the branch moves). The receipt goes to
-``dispatched`` and ``confirmed`` with the commit, the outcome and the decision. **The race window**: the recorder's own
-checks are the backstop for a change between those checks and its commit (another process moving the project
-repository); if it refuses then, the receipt stays ``reserved`` (the integration store's receipts are never deleted)
-and nothing is written to the project repository. The same message may be recorded again once the cause is repaired:
-a receipt left ``reserved`` or ``dispatched`` is settled **by reading the repository first** (every local branch and
-every parent: a commit whose message carries the recorder's line ``Statement: <reference> (owner-ui).``), and only
-when none is found is the recorder asked again.
+``dispatched`` and ``confirmed`` with the commit, the outcome and the decision. **The race window**: only another
+process changing the project repository between these checks and the recorder's commit reaches the recorder's own
+checks, the backstop. If it refuses then, the receipt stays ``reserved`` (the integration store's receipts are never
+deleted) and nothing is written to the project repository. The same message may be sent again once the cause is
+repaired: a receipt left ``reserved`` or ``dispatched`` is settled **by reading the repository first** (every local
+branch and every parent: a commit whose message carries the recorder's line ``Statement: <reference> (owner-ui).``),
+and only when none is found is the recorder asked again. If the race also outlives the challenge (it expires, or the
+process restarts), that message cannot be recorded any more: the Owner reviews again and sends a new Accept message,
+which is a new receipt key; the old receipt stays ``reserved``, by the store's invariant.
 
 Idempotent by message id: a confirmed receipt answers its commit and writes nothing, only for the request it was made
 for (its project, change, item, message digest and nonce: ``ACCEPTANCE_RECEIPT_CONFLICT`` otherwise). A refusal of
@@ -154,6 +171,13 @@ REMEDIES = {
     'ACCEPTANCE_OUTCOME_UNKNOWN': 'a commit may have been made and the receipt does not say so; read the project '
                                   'repository before anything else, then send the same acceptance again',
 }
+# The acceptance recorder's codes this path can answer: its prepare's, its readers' and its commit's (the preflight
+# and the backstop). The shell knows each (apps/owner-host/src/identity/owner-session.ts ACCEPTANCE_CODES).
+PASSED_ON = ('CHALLENGE_INVALID', 'PROJECT_UNAVAILABLE', 'GIT_FAILED', 'CHANGE_MISSING', 'ITEM_NOT_OBJECTIVE',
+             'INTENT_RECORD_INVALID', 'OUTCOME_METADATA_INVALID', 'OBJECT_NAME_INVALID', 'OUTCOME_ALREADY_MINTED',
+             'OUTCOME_NOT_MINTED', 'ACCEPTANCE_ALREADY_RECORDED', 'ACCEPTANCE_REFERENCE_INVALID', 'RESOLUTION_FAILED',
+             'HOOKS_UNSUPPORTED', 'COMMIT_REFUSED', 'SESSION_BINDING_REQUIRED', 'SESSION_BINDING_REFUSED')
+PREFLIGHT_MESSAGE = 'preflight of an objective acceptance (never committed)'
 RECORDER_STATUS = {'PROJECT_UNAVAILABLE': 503, 'GIT_FAILED': 500, 'RESOLUTION_FAILED': 500, 'CHANGE_MISSING': 404,
                    'ITEM_NOT_OBJECTIVE': 422, 'OBJECT_NAME_INVALID': 422}
 
@@ -174,6 +198,11 @@ def _refused(exc) -> AcceptanceRefused:
         return AcceptanceRefused(exc.code, exc.detail, exc.status, exc.remedy)
     return AcceptanceRefused(exc.code, exc.detail, STATUS.get(exc.code, RECORDER_STATUS.get(exc.code, 409)),
                              exc.remedy)
+
+
+def _git_failed(exc) -> AcceptanceRefused:
+    """A read or check the project repository refused, as GIT_FAILED (the recorder's code and remedy)."""
+    return AcceptanceRefused('GIT_FAILED', f'the project repository: {exc}', 500, recorder.REMEDIES['GIT_FAILED'])
 
 
 def receipt_key(thread_id: str, message_id: str) -> str:
@@ -212,12 +241,14 @@ def _timestamp(text: str) -> datetime.datetime:
 
 @dataclasses.dataclass
 class Held:
-    """A challenge as this process issued it: to SESSION, in THREAD, on the REQUEST message, shown in CARD."""
+    """A challenge as this process issued it: to SESSION, in THREAD, on the REQUEST message, shown in CARD, when the
+    thread's highest seq was SEQ (the card must be stored after it)."""
     challenge: dict
     thread: str
     request: str
     card: str
     session: str
+    seq: int = 0
 
     @property
     def subject(self) -> dict:
@@ -317,7 +348,8 @@ class Acceptance:
                                          expires_in_minutes=EXPIRY_MINUTES)
         except recorder.RecorderError as exc:
             raise _refused(exc) from None
-        self._hold(Held(challenge, thread_id, message_id, card, session['sessionId']), now)
+        seq = max((m.seq for m in store.messages(thread_id)), default=0)
+        self._hold(Held(challenge, thread_id, message_id, card, session['sessionId'], seq), now)
         shown, subject = challenge['shown'], challenge['subject']
         return {'nonce': shown['nonce'], 'change': subject['change'], 'item': subject['item'],
                 'revision': subject['revision'], 'proposal': subject['proposal'], 'summary': shown['summary'],
@@ -372,6 +404,7 @@ class Acceptance:
             held = self._checked(store, repo, thread_id, message_id, stored, change, item, body['nonce'],
                                  session['sessionId'])
             amend = self._amend(repo, change, item)
+            preflight(repo, change, identity)
             if path is None:
                 raise AcceptanceRefused('ACCEPTANCE_STORE_UNAVAILABLE', 'no integration store is named; nothing was '
                                                                         'changed')
@@ -385,6 +418,10 @@ class Acceptance:
             written = f'the commit {progress.commit} is on the branch' if progress.commit else 'nothing was committed'
             raise AcceptanceRefused(code, f'the integration store refused: {type(exc).__name__}: {exc}; '
                                           f'{written}') from None
+        except capture.CaptureRefused as exc:      # capture.py's branch reader, settling a receipt
+            raise _refused(exc) from None
+        except (ra.RepositoryError, ra.CannotRun) as exc:
+            raise _git_failed(exc) from None
         finally:
             repo.close()
 
@@ -404,6 +441,8 @@ class Acceptance:
         if card is None or card.role != 'assistant' or card.parent_id != held.request or card.session_id != session_id:
             raise AcceptanceRefused('ACCEPTANCE_NOT_AFTER_CARD', 'the card is not the stored reply to the review in '
                                                                  'this session')
+        if card.seq <= held.seq:
+            raise AcceptanceRefused('ACCEPTANCE_NOT_AFTER_CARD', 'the card was stored before the challenge was issued')
         ancestor, seen = stored.parent_id, set()
         while ancestor is not None and ancestor != held.card and ancestor not in seen:
             seen.add(ancestor)
@@ -505,6 +544,33 @@ class Acceptance:
         if work_tree is not None:
             answer['workTree'] = work_tree
         return answer
+
+
+def preflight(repo, change: str, identity: str) -> None:
+    """The project repository's own state as the recorder's commit would find it, checked by the repository-access
+    module's own ``write_commit``: asked to commit the change's two existing files with their HEAD bytes, it runs every
+    refusal of its own (client hooks, the object format, ``commit.gpgSign``, HEAD a branch, the index, local changes
+    and paths in the way of those files) and then ``nothing-to-commit``, before it writes anything. That answer means
+    every check passed; any other is the refusal, under the recorder's code (``HOOKS_UNSUPPORTED``,
+    ``COMMIT_REFUSED``, ``OBJECT_NAME_INVALID``, else ``GIT_FAILED``). Nothing is ever written."""
+    head = repo.head().commit
+    files = {}
+    for name in ('proposal.md', '.openspec.yaml'):
+        path = f'{capture.CHANGES_DIR}/{change}/{name}'
+        found = repo.read(f'{head}:{path}')
+        if found is None or found[1] != 'blob':
+            raise AcceptanceRefused('CHANGE_MISSING', f'{path} is not a file at HEAD', 404,
+                                    recorder.REMEDIES['CHANGE_MISSING'])
+        files[path] = found[2]
+    try:
+        repo.write_commit(files, PREFLIGHT_MESSAGE, identity=identity, expected_head=head)
+    except ra.RepositoryError as exc:
+        if exc.code == 'COMMIT_REFUSED' and exc.details.get('reason') == 'nothing-to-commit':
+            return
+        code = exc.code if exc.code in ('HOOKS_UNSUPPORTED', 'COMMIT_REFUSED', 'OBJECT_NAME_INVALID') else 'GIT_FAILED'
+        raise AcceptanceRefused(code, f'{exc.message} (checked before anything was reserved)', 409 if code != 'GIT_FAILED'
+                                else 500, recorder.REMEDIES[code]) from None
+    raise AssertionError('the preflight committed')   # unreachable: its tree is HEAD's
 
 
 def same_intent(reservation, intent: dict, key: str) -> None:
