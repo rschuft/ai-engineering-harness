@@ -111,7 +111,9 @@ no duplicate key and no NaN or Infinity (`REQUEST_INVALID`, 400). The store's re
 `MESSAGE_PARENT_NOT_FOUND`, `MESSAGE_ID_CONFLICT`, `MESSAGE_IMMUTABLE` and `THREAD_DELETE_REFUSED` (409), each changing
 nothing. The methods stay `GET` and `POST` (the CORS allowlist is unchanged), so a thread delete is a `POST` to its own
 route. The log names the route template (`accepted POST /threads/{thread_id}/messages 200 session=<public id>`): no
-thread id, message id or text reaches it.
+thread id, message id or text reaches it. Any current session reads and writes every thread, threads created under
+superseded sessions included (decision 0025: one Owner, no per-session isolation); a row names the session that wrote
+it.
 
 ## Pending decisions across a restart (U-02.2)
 
@@ -122,7 +124,8 @@ state of its own, so after it stops and starts again the history load answers th
 store. `test_pending_decision.py` shows it with the shell's own requests (recorded and checked by the shell's test,
 `apps/owner-host/src/areas/fixtures/pending-decision.wire.json`) against a real process: it starts `app.serve` itself
 on a free loopback port, never `127.0.0.1:13310`, so a running Owner instance is neither needed nor touched, and it
-stops only the processes it started.
+stops only the processes it started. It stops the process gracefully, by its stop request: a killed process is not
+exercised.
 
 ## What it never does
 

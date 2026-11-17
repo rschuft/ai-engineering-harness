@@ -26,6 +26,7 @@ immutable under ``update``.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -55,6 +56,9 @@ L = _load('aieh_lineage_for_conversation_tests', REPO / 'integrations' / 'lineag
 storecore = CS.storecore
 AT = '2026-11-16T12:00:00Z'
 LOCAL = '__LOCALID_8spf4drozrs'
+A_DIGEST = hashlib.sha256(b'A').hexdigest()
+INSERT_TRIGGERS = ('thread_insert_never_replaces', 'thread_event_insert_never_replaces', 'message_insert_never_replaces',
+                   'message_revision_insert_never_replaces')                   # migration 0003
 # An Owner statement with multi-byte characters and characters a normalizer would change: the bytes are kept as
 # received (no NFC, no trimming, no line-ending change).
 STATEMENT = '  Ship the capture form — café 中文 \U0001F600\r\nAcceptance: exact bytes.  '
@@ -123,9 +127,10 @@ class Base(unittest.TestCase):
 class Migration(Base):
     def test_the_store_is_at_migration_0002_with_its_four_tables(self):
         summary = self.store.summary()
-        self.assertEqual(summary['schema_version'], 2)
+        self.assertEqual(summary['schema_version'], 3)
         self.assertEqual([m['name'] for m in summary['migrations']],
-                         ['0001_store_identity_and_sessions.sql', '0002_threads_and_messages.sql'])
+                         ['0001_store_identity_and_sessions.sql', '0002_threads_and_messages.sql',
+                          '0003_insert_never_replaces.sql'])
         tables = {r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
         self.assertEqual(tables, {'schema_migration', 'owner_session', 'thread', 'thread_event', 'message',
                                   'message_revision'})
@@ -144,9 +149,59 @@ class Migration(Base):
             CS.open_store(old_path / CS.DB_NAME, apply_migrations=False)
         migrated = CS.open_store(old_path / CS.DB_NAME)
         self.addCleanup(migrated.close)
-        self.assertEqual(migrated.schema_version(), 2)
+        self.assertEqual(migrated.schema_version(), 3)
         self.assertEqual([s.session_id for s in migrated.sessions()], [enrolled.session_id])
         CS.check_schema(migrated.conn)
+
+    def test_a_store_made_at_0002_migrates_to_0003_and_keeps_its_threads_and_messages(self):
+        at_0002 = self.tmp / 'at-0002'
+        at_0002.mkdir()
+        for name in ('0001_store_identity_and_sessions.sql', '0002_threads_and_messages.sql'):
+            shutil.copy(CS.MIGRATIONS_DIR / name, at_0002)
+        old_path = self.tmp / 'old-0002'
+        old_path.mkdir()
+        old = CS.open_store(old_path / CS.DB_NAME, migrations_dir=at_0002)
+        session = old.enroll_session(session_id=str(uuid.uuid4()), verifier='b' * 64,
+                                     issued_at='2026-11-16T00:00:00Z', expires_at='2026-11-16T12:00:00Z')
+        thread = old.initialize_thread(session_id=session.session_id, local_id=LOCAL, at=AT)[0].thread_id
+        old.append_message(thread, user_item('U000001', STATEMENT), session_id=session.session_id, at=AT)
+        old.append_message(thread, assistant_item('A000001', 'U000001'), session_id=session.session_id, at=AT)
+        old.rename_thread(thread, 'Kept', session_id=session.session_id, at=AT)
+        self.assertEqual(old.schema_version(), 2)
+        loaded, threads = old.load(thread), old.threads()
+        old.close()
+        with self.assertRaises(CS.MigrationError):           # pending migration 0003: refused without migrating
+            CS.open_store(old_path / CS.DB_NAME, apply_migrations=False)
+        migrated = CS.open_store(old_path / CS.DB_NAME)
+        self.addCleanup(migrated.close)
+        self.assertEqual(migrated.schema_version(), 3)
+        CS.check_schema(migrated.conn)
+        self.assertEqual((migrated.load(thread), migrated.threads()), (loaded, threads))
+        self.assertEqual(migrated.message_content(thread, 'U000001'), STATEMENT.encode('utf-8'))
+        triggers = {r[0] for r in migrated.conn.execute("SELECT name FROM sqlite_schema WHERE type = 'trigger'")}
+        self.assertLessEqual(set(INSERT_TRIGGERS), triggers)
+        with self.assertRaises(sqlite3.IntegrityError):     # and the migrated store refuses a replace
+            migrated.conn.execute("INSERT OR REPLACE INTO message_revision VALUES (?, 'U000001', 1, x'41', ?, ?, ?)",
+                                  (thread, A_DIGEST, session.session_id, AT))
+        self.assertEqual(migrated.message_content(thread, 'U000001'), STATEMENT.encode('utf-8'))
+
+    def test_a_store_without_an_insert_trigger_of_0003_is_refused_at_open(self):
+        thread = self.thread()
+        self.append(thread, user_item('U000001', STATEMENT))
+        self.store.close()
+        for name in INSERT_TRIGGERS:
+            with self.subTest(trigger=name):
+                copy = self.tmp / f'without-{name}'
+                copy.mkdir()
+                shutil.copy(self.tmp / CS.DB_NAME, copy / CS.DB_NAME)
+                conn = sqlite3.connect(copy / CS.DB_NAME)
+                conn.executescript(f'DROP TRIGGER {name};')
+                conn.close()
+                for kw in ({}, {'apply_migrations': False}):
+                    with self.assertRaises(CS.SchemaAltered) as caught:
+                        CS.open_store(copy / CS.DB_NAME, **kw)
+                    self.assertEqual(caught.exception.code, 'CONVERSATION_STORE_ALTERED')
+                    self.assertIn(name, str(caught.exception))
 
     def test_an_altered_store_is_refused_at_open(self):
         thread = self.thread()
@@ -352,11 +407,160 @@ class Refusals(Base):
             # an author that does not match the role (at the right sequence number)
             ("INSERT INTO message VALUES (?, 'Z000002', 8, NULL, 'user', 'owner-host', ?, "
              "'2026-11-16T12:00:00.000Z', ?)", (thread, sid, AT)),
+            # Migration 0003 (review finding S1): REPLACE's implicit delete fires no delete trigger and an upsert is no
+            # UPDATE statement, so an insert of an existing key is refused before any conflict resolution runs.
+            ("INSERT OR REPLACE INTO message_revision VALUES (?, 'U000001', 1, x'41', ?, ?, ?)",
+             (thread, A_DIGEST, sid, AT)),
+            ("REPLACE INTO message_revision VALUES (?, 'A000001', 1, x'41', ?, ?, ?)", (thread, A_DIGEST, sid, AT)),
+            ("INSERT INTO message_revision VALUES (?, 'U000001', 1, x'41', ?, ?, ?) ON CONFLICT DO UPDATE "
+             'SET content = excluded.content, sha256 = excluded.sha256', (thread, A_DIGEST, sid, AT)),
+            # the reviewer's role flip: the user message's row replaced by an assistant row at the next seq
+            ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', 8, NULL, 'assistant', 'owner-host', ?, NULL, ?)",
+             (thread, sid, AT)),
+            ("REPLACE INTO message VALUES (?, 'U000001', 8, NULL, 'user', 'owner', ?, '2026-11-16T12:00:00.123Z', ?)",
+             (thread, sid, AT)),
+            ("INSERT INTO message VALUES (?, 'U000001', 8, NULL, 'user', 'owner', ?, '2026-11-16T12:00:00.123Z', ?) "
+             "ON CONFLICT (thread_id, message_id) DO UPDATE SET role = 'assistant', author = 'owner-host', "
+             'created_at = NULL', (thread, sid, AT)),
+            ("INSERT OR REPLACE INTO thread VALUES (1, ?, ?, '__LOCALID_x', ?)", (thread, sid, AT)),
+            ("INSERT OR REPLACE INTO thread VALUES (2, ?, ?, '__LOCALID_x', ?)", (thread, sid, AT)),   # by thread_id
+            ("INSERT INTO thread VALUES (1, ?, ?, '__LOCALID_x', ?) ON CONFLICT DO UPDATE SET local_id = "
+             'excluded.local_id', (thread, sid, AT)),
+            ("INSERT OR REPLACE INTO thread_event VALUES (1, ?, 'rename', 'B', ?, ?)", (thread, sid, AT)),
+            ("INSERT INTO thread_event VALUES (1, ?, 'rename', 'B', ?, ?) ON CONFLICT (seq) DO UPDATE SET title = 'B'",
+             (thread, sid, AT)),
         ]
         for statement, args in statements:
             with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
                 self.store.conn.execute(statement, args)
         self.assertEqual(self.store.canonical_dump(), before)
+
+    def test_each_insert_trigger_of_0003_alone_refuses_a_replace(self):
+        # For thread_event and message_revision the *_is_next triggers of 0002 already refuse an existing key; each
+        # 0003 trigger is shown here on its own, with every other insert trigger of its table lifted (on a copy).
+        thread = self.thread()
+        self.conversation(thread)
+        sid = self.session.session_id
+        self.store.rename_thread(thread, 'A title', session_id=sid, at=AT)
+        self.store.close()
+        cases = {
+            'thread_insert_never_replaces': ("INSERT OR REPLACE INTO thread VALUES (1, ?, ?, '__LOCALID_x', ?)",
+                                             (thread, sid, AT)),
+            'thread_event_insert_never_replaces': ("INSERT OR REPLACE INTO thread_event VALUES (1, ?, 'rename', 'B', ?, ?)",
+                                                   (thread, sid, AT)),
+            'message_insert_never_replaces': ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', 1, NULL, 'assistant', "
+                                              "'owner-host', ?, NULL, ?)", (thread, sid, AT)),
+            'message_revision_insert_never_replaces': (
+                "INSERT OR REPLACE INTO message_revision VALUES (?, 'U000001', 1, x'41', ?, ?, ?)", (thread, A_DIGEST, sid, AT)),
+        }
+        for trigger, (statement, args) in cases.items():
+            with self.subTest(trigger=trigger):
+                copy = self.tmp / f'alone-{trigger}'
+                copy.mkdir()
+                shutil.copy(self.tmp / CS.DB_NAME, copy / CS.DB_NAME)
+                conn = sqlite3.connect(copy / CS.DB_NAME, isolation_level=None)
+                try:
+                    table = conn.execute('SELECT tbl_name FROM sqlite_schema WHERE name = ?', (trigger,)).fetchone()[0]
+                    for (other,) in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ? "
+                                                 "AND name <> ? AND sql LIKE '%BEFORE INSERT%'", (table, trigger)).fetchall():
+                        conn.execute(f'DROP TRIGGER "{other}"')
+                    with self.assertRaisesRegex(sqlite3.IntegrityError, 'an insert never replaces'):
+                        conn.execute(statement, args)
+                finally:
+                    conn.close()
+
+    def test_the_role_flip_through_replace_is_refused_at_every_step(self):
+        # The reviewer's path (finding S1), in one transaction as a direct writer would run it: replace the Owner's
+        # statement by an assistant row, give it a second revision, replace it back by a user row.
+        thread = self.thread()
+        self.conversation(thread)
+        before = self.store.canonical_dump()
+        sid, conn = self.session.session_id, self.store.conn
+        changed = b'Replaced.'
+        steps = (
+            ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', ?, NULL, 'assistant', 'owner-host', ?, NULL, ?)",
+             lambda seq: (thread, seq, sid, AT)),
+            ("INSERT INTO message_revision VALUES (?, 'U000001', 2, ?, ?, ?, ?)",
+             lambda seq: (thread, changed, hashlib.sha256(changed).hexdigest(), sid, AT)),
+            ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', ?, NULL, 'user', 'owner', ?, "
+             "'2026-11-16T12:00:00.123Z', ?)", lambda seq: (thread, seq, sid, AT)),
+        )
+        conn.execute('BEGIN')
+        try:
+            for statement, args in steps:
+                seq = conn.execute('SELECT max(seq) + 1 FROM message WHERE thread_id = ?', (thread,)).fetchone()[0]
+                with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
+                    conn.execute(statement, args(seq))
+        finally:
+            conn.execute('COMMIT')
+        self.assertEqual(self.store.canonical_dump(), before)
+        self.reopen()
+        self.assertEqual(self.store.message_content(thread, 'U000001'), STATEMENT.encode('utf-8'))
+        self.assertEqual(self.store.message(thread, 'U000001').seq, 1)
+
+
+class Invariants(Base):
+    """verify(): what a writer of the file that keeps the schema (it lifts a trigger and puts it back, decision 0010
+    point 1's same-account residual) could still leave behind is refused at open, and by the read-only readers."""
+
+    def rewrite(self, *statements):
+        """Run STATEMENTS on the closed store with every trigger lifted, then put the triggers back as they were."""
+        self.store.close()
+        conn = sqlite3.connect(self.tmp / CS.DB_NAME, isolation_level=None)
+        try:
+            triggers = conn.execute("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger'").fetchall()
+            conn.execute('BEGIN')
+            for name, _ in triggers:
+                conn.execute(f'DROP TRIGGER "{name}"')
+            for statement, args in statements:
+                conn.execute(statement, args)
+            for _, sql in triggers:
+                conn.execute(sql)
+            conn.execute('COMMIT')
+            CS.check_schema(conn)                       # the schema is exactly as migrated again
+        finally:
+            conn.close()
+
+    def assert_refused_at_open(self, pattern):
+        for kw in ({}, {'apply_migrations': False}):
+            with self.assertRaisesRegex(CS.StoreError, pattern):
+                CS.open_store(self.tmp / CS.DB_NAME, **kw)
+
+    def test_a_user_message_with_a_second_revision_is_refused(self):
+        thread = self.thread()
+        self.conversation(thread)
+        changed = b'Replaced.'
+        self.rewrite(("INSERT INTO message_revision VALUES (?, 'U000001', 2, ?, ?, ?, ?)",
+                      (thread, changed, hashlib.sha256(changed).hexdigest(), self.session.session_id, AT)))
+        self.assert_refused_at_open(r"user message .*/U000001 has revisions '1,2', not exactly 1")
+
+    def test_a_gap_in_a_threads_sequence_is_refused(self):
+        thread = self.thread()
+        self.conversation(thread)
+        self.rewrite(("UPDATE message SET seq = 9 WHERE message_id = 'A000004' AND thread_id = ?", (thread,)))
+        self.assert_refused_at_open(r'message seq runs 1\.\.9 over 7 messages, not 1\.\.n')
+
+    def test_a_parent_after_its_child_is_refused(self):
+        thread = self.thread()
+        self.conversation(thread)
+        self.rewrite(("UPDATE message SET seq = 100 WHERE message_id = 'U000001' AND thread_id = ?", (thread,)),
+                     ("UPDATE message SET seq = 1 WHERE message_id = 'A000001' AND thread_id = ?", (thread,)),
+                     ("UPDATE message SET seq = 2 WHERE message_id = 'U000001' AND thread_id = ?", (thread,)))
+        self.assert_refused_at_open(r'message .*/A000001 comes before its parent U000001')
+
+    def test_the_role_flip_left_by_a_writer_without_the_triggers_is_refused(self):
+        # The reviewer's outcome on a store at 0002 (no insert trigger): the statement now at seq 8, revision 2.
+        thread = self.thread()
+        self.conversation(thread)
+        sid, changed = self.session.session_id, b'Replaced.'
+        self.rewrite(
+            ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', 8, NULL, 'assistant', 'owner-host', ?, NULL, ?)",
+             (thread, sid, AT)),
+            ("INSERT INTO message_revision VALUES (?, 'U000001', 2, ?, ?, ?, ?)",
+             (thread, changed, hashlib.sha256(changed).hexdigest(), sid, AT)),
+            ("INSERT OR REPLACE INTO message VALUES (?, 'U000001', 9, NULL, 'user', 'owner', ?, "
+             "'2026-11-16T12:00:00.123Z', ?)", (thread, sid, AT)))
+        self.assert_refused_at_open('not exactly 1|not 1\\.\\.n|comes before its parent')
 
 
 class AssistantRevisions(Base):

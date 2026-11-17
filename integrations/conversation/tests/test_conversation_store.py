@@ -54,9 +54,10 @@ class Identity(Base):
     def test_the_store_kind_and_its_migration(self):
         summary = self.store.summary()
         self.assertEqual((summary['store_kind'], summary['application_id'], summary['schema_version']),
-                         ('conversation', 0x41494356, 2))
+                         ('conversation', 0x41494356, 3))
         self.assertEqual([m['name'] for m in summary['migrations']], ['0001_store_identity_and_sessions.sql',
-                                                                      '0002_threads_and_messages.sql'])
+                                                                      '0002_threads_and_messages.sql',
+                                                                      '0003_insert_never_replaces.sql'])
         self.assertEqual(summary['pragmas'], {'journal_mode': 'wal', 'synchronous': 2, 'foreign_keys': 1,
                                               'busy_timeout': storecore.DEFAULT_BUSY_TIMEOUT_MS})
         tables = [r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table' "
@@ -185,7 +186,10 @@ class AlteredSchema(Base):
                           'thread_seq_is_next', 'thread_event_seq_is_next', 'message_seq_is_next',
                           'message_revision_is_next', 'message_revision_user_is_immutable', 'thread_no_update',
                           'thread_no_delete', 'thread_event_no_update', 'thread_event_no_delete', 'message_no_update',
-                          'message_no_delete', 'message_revision_no_update', 'message_revision_no_delete'})
+                          'message_no_delete', 'message_revision_no_update', 'message_revision_no_delete',
+                          # migration 0003 (the U-02.1 and U-02.2 review, finding S1)
+                          'thread_insert_never_replaces', 'thread_event_insert_never_replaces',
+                          'message_insert_never_replaces', 'message_revision_insert_never_replaces'})
 
     def test_resurrecting_a_superseded_session_by_dropping_the_triggers_is_refused_at_open(self):
         self.tamper('DROP TRIGGER owner_session_no_delete; DROP TRIGGER owner_session_no_update; '

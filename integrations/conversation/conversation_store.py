@@ -28,6 +28,10 @@ Migration 0002 holds the threads and messages (U-02.1; decision 0025 point 6), e
   canonical JSON; ``update_message`` is an upsert that appends a revision;
 - an **edit** in assistant-ui is a new message under the same parent: both are kept. Nothing is deleted.
 
+Migration 0003 (the U-02.1 and U-02.2 review, finding S1) refuses an insert of a key that exists in those four tables,
+so SQLite's REPLACE conflict resolution and an upsert cannot change a row either; ``verify`` checks, reading only, that
+a user message has exactly revision 1, that each thread's ``seq`` runs 1..n and that a parent comes before its child.
+
 Python standard library only. Writers: the Owner's ``enroll`` (sessions) and the Integration process (threads and
 messages, from U-02.1). There is no command line here; the ownerhost commands open it.
 """
@@ -305,6 +309,22 @@ def _verify_kind_invariants(conn: sqlite3.Connection) -> None:
                     content.decode('utf-8')
                 except UnicodeDecodeError:
                     raise StoreError(f'user message {thread}/{message} is not UTF-8 text') from None
+        # A user message (an Owner statement) is immutable: it has exactly one revision, revision 1.
+        for thread, message, revisions in conn.execute(
+                "SELECT m.thread_id, m.message_id, group_concat(r.revision) FROM message m "
+                'LEFT JOIN message_revision r USING (thread_id, message_id) '
+                "WHERE m.role = 'user' GROUP BY m.thread_id, m.message_id"):
+            if revisions != '1':
+                raise StoreError(f'user message {thread}/{message} has revisions {revisions!r}, not exactly 1')
+        # A thread's messages are numbered 1..n without a gap, and a parent comes before its child.
+        for thread, count, low, high in conn.execute(
+                'SELECT thread_id, count(*), min(seq), max(seq) FROM message GROUP BY thread_id'):
+            if (low, high) != (1, count):
+                raise StoreError(f'thread {thread} message seq runs {low}..{high} over {count} messages, not 1..n')
+        for thread, message, parent in conn.execute(
+                'SELECT c.thread_id, c.message_id, c.parent_id FROM message c JOIN message p '
+                'ON p.thread_id = c.thread_id AND p.message_id = c.parent_id WHERE p.seq >= c.seq'):
+            raise StoreError(f'message {thread}/{message} comes before its parent {parent}')
 
 
 def _after_restore(conn: sqlite3.Connection, ctx) -> None:
@@ -371,8 +391,9 @@ def check_schema(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR
 
 def verify(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> None:
     """The store's own integrity checks, which only read: its schema objects are exactly what its migrations
-    create (SchemaAltered otherwise), the session chain is unbroken, and every stored content matches its recorded
-    sha256 (StoreError otherwise). ``open_store`` runs them; a read-only reader (the lineage message and conversation
+    create (SchemaAltered otherwise), the session chain is unbroken, every stored content matches its recorded
+    sha256, a user message has exactly revision 1, each thread's seq runs 1..n and a parent's seq is lower than its
+    child's (StoreError otherwise). ``open_store`` runs them; a read-only reader (the lineage message and conversation
     resolvers, U-02.2) runs them on its own read-only connection."""
     check_schema(conn, migrations_dir)
     _verify_kind_invariants(conn)
