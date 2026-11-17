@@ -8,7 +8,8 @@ only. The Owner UI shell ([`apps/owner-host`](../../apps/owner-host/README.md)) 
 credential, `cred-owner-ui-session`, which the Owner mints himself at a console.
 
 Behind the credential: `POST /session` answers the authenticated session's public id and validity (the shell's
-sign-in), and since U-02.1 the thread and history routes keep the Owner chat in the conversation store (below).
+sign-in), and since U-02.1 the thread and history routes keep the Owner chat in the conversation store (below);
+since U-02.2 a pending decision kept there survives a restart of the process and a reopened browser, once.
 Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. It has no dispatch endpoint.
 
 ## Files
@@ -27,6 +28,8 @@ Capture (P-01.3), acceptance (P-04.4) and the projection (U-04.1) attach later. 
 | `tests/test_listener.py` | The real start and stop on a throwaway layout: the listener table, the host census by port, every request over HTTP, the refusals, the environment and command line read from outside, the records and logs, the live import census, no window, no orphan (integration, Windows) |
 | `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
 | `tests/test_history_listener.py` | U-02.1's proof against the real service: a reload after a restart, repeats, the refusals, a quote cut from a received statement and a changed source byte (integration, Windows) |
+| `tests/test_pending_decision.py` | U-02.2's proof against a real Integration process the test starts (`app.serve` through `serve_on_port.py`) on a free loopback port and a throwaway state directory, stopped by its stop request and started again twice: the shell's recorded pending-decision requests replayed, the thread and its pending call back once, a reconnect adding nothing, the answer an update of the same id; the lineage resolvers reading the store it wrote (integration) |
+| `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
 ## The credential
@@ -110,6 +113,17 @@ nothing. The methods stay `GET` and `POST` (the CORS allowlist is unchanged), so
 route. The log names the route template (`accepted POST /threads/{thread_id}/messages 200 session=<public id>`): no
 thread id, message id or text reaches it.
 
+## Pending decisions across a restart (U-02.2)
+
+No route changes. A run paused on the shell's `owner_decision` human tool is appended as an assistant message with
+status `requires-action` (`POST /threads/{thread_id}/messages`); the Owner's answer is its update
+(`POST /threads/{thread_id}/messages/{message_id}`), which the store keeps as the next revision. The process keeps no
+state of its own, so after it stops and starts again the history load answers the paused message, once, from the
+store. `test_pending_decision.py` shows it with the shell's own requests (recorded and checked by the shell's test,
+`apps/owner-host/src/areas/fixtures/pending-decision.wire.json`) against a real process: it starts `app.serve` itself
+on a free loopback port, never `127.0.0.1:13310`, so a running Owner instance is neither needed nor touched, and it
+stops only the processes it started.
+
 ## What it never does
 
 Decision 0025 point 2, each with its test: it opens no outbound connection (its one socket is `bind_listener`'s
@@ -166,11 +180,13 @@ integrations/credentials, gitea, dispatch, inference or owner, and neither has t
 ```
 
 The listener tests start the real service on `127.0.0.1:13310` with a throwaway layout and stop it; they fail,
-rather than skip, when the port is already held.
+rather than skip, when the port is already held. `test_pending_decision.py` uses a free port of its own instead.
 
 ## Not yet verified
 
 - The Owner's own enrollment and sign-in with his real credential (OA-32 (a)); a real browser against the service.
-- U-02.1's verdict (built 2026-11-16; its tests PASS offline and against the real service with throwaway layouts).
+- U-02.1's and U-02.2's verdicts (built 2026-11-16; their tests PASS offline and against the real process with
+  throwaway layouts).
+- A pending decision asked by a real producer: no chat model is connected, so only the tests ask one.
 - Linux and macOS (the platform contract's adapters, F-06.4 and F-06.5).
 - Ending with the Owner's session or a reboot (the job's declared behaviour, as for Gitea).

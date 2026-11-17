@@ -1,6 +1,7 @@
 # The Owner conversation store (`integrations/conversation/`)
 
-Plan leaf **U-01.3** (the store and its session table) and **U-02.1** (threads and messages, migration 0002).
+Plan leaf **U-01.3** (the store and its session table), **U-02.1** (threads and messages, migration 0002) and
+**U-02.2** (the pending decision kept across a reopen; the store read by the lineage resolvers).
 [Decision 0025](../../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md)
 (accepted at U-01.3's verdict), points 3 and 6. Python standard library only (`sqlite3`), on the shared mechanics of
 [`integrations/storecore`](../storecore/storecore.py).
@@ -19,7 +20,7 @@ command.
 | `migrations/0001_store_identity_and_sessions.sql` | The store's identity, the migration ledger and the `owner_session` table with its triggers |
 | `migrations/0002_threads_and_messages.sql` | The `thread`, `thread_event`, `message` and `message_revision` tables and their append-only triggers (U-02.1) |
 | `tests/test_conversation_store.py` | Identity and refusal of other kinds, the migration ledger, locations, the session table's rules (unit) |
-| `tests/test_threads_and_messages.py` | U-02.1's proof at the store level: reload, repeats, refusals, the triggers, assistant revisions, quotes cut with `lineage.span_reference` (unit) |
+| `tests/test_threads_and_messages.py` | U-02.1's proof at the store level: reload, repeats, refusals, the triggers, assistant revisions, quotes cut with `lineage.span_reference`; U-02.2's `PendingDecision`: the shell's recorded requests for a paused decision replayed, the pending call back once after a reopen, its completion a revision, a user message immutable under `update` (unit) |
 
 ## Migration 0001
 
@@ -93,6 +94,25 @@ store.canonical_dump()                      # deterministic bytes of every canon
 There is no command line: the ownerhost commands open it. Backup and restore are not decided (decision 0025, "Not
 decided here"): the kind's `after_restore` refuses.
 
+## Pending decisions and the readers (U-02.2)
+
+- **The assistant-message upsert.** `update_message` is an upsert keyed on the message id for assistant messages
+  only (decision 0025 point 6): a run paused on a human tool (the shell's `owner_decision`) is appended as an
+  assistant message with status `requires-action` and its tool call without a result; when the Owner answers, the
+  completed message is an update of the same id, recorded as the next revision in `message_revision`. The paused
+  revision stays (nothing is updated in place); `load` answers each message once, at its latest revision. A user
+  message is immutable: an update with other bytes is `MESSAGE_IMMUTABLE`, an update of an unknown user message is
+  `MESSAGE_NOT_FOUND`, and SQLite's trigger refuses a second revision of one whatever writes the row. An update that
+  changes a message's parent or role is `MESSAGE_ID_CONFLICT`. These rules are U-02.1's; U-02.2 tests them with the
+  requests the shell actually sends (`apps/owner-host/src/areas/fixtures/pending-decision.wire.json`).
+- **A repeated append is a repeat of the latest revision.** An append of an id whose latest revision has other
+  bytes is `MESSAGE_ID_CONFLICT`, also when those bytes were an earlier revision's: the shell sends a message's
+  append before any update of it (one thread's writes in call order), and a reopen writes nothing.
+- **Read-only readers.** `verify(conn)` runs the store's own checks, which only read (its schema objects are exactly
+  its migrations', the session chain is unbroken, every content matches its recorded sha256); `open_store` runs it,
+  and so does the lineage reader, on its own read-only connection
+  ([`integrations/lineage`](../lineage/README.md#statements-u-022): the `message` and `conversation` resolvers).
+
 ## Commands
 
 ```
@@ -101,6 +121,6 @@ decided here"): the kind's `after_restore` refuses.
 
 ## Not yet verified
 
-- U-02.1's verdict (built 2026-11-16; its tests PASS offline); the lineage resolver over the store (U-02.2).
+- U-02.1's and U-02.2's verdicts (built 2026-11-16; their tests PASS offline).
 - The Owner's own conversation with his own session in a real browser.
 - Backup and restore of this store (not decided).

@@ -46,6 +46,7 @@ mounted while the area changes.
 | `ChatArea`, `StoredChat` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`; signed in, `useRemoteThreadListRuntime` over `useLocalRuntime` with `ThreadListPrimitive`, `ActionBarPrimitive.Edit` and `BranchPickerPrimitive`. |
 | `createThreadListAdapter`, `createHistoryAdapter` | `src/areas/conversation-adapters.ts` | The `RemoteThreadListAdapter` and the per-thread `ThreadHistoryAdapter` (through `unstable_useAdapters`) over the Integration process's thread and history routes (U-02.1). |
 | `acknowledgingChatAdapter`, `modelFreeChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run. |
+| `DecisionToolUI`, `UnknownToolUI`, `HUMAN_TOOL_NAMES` | `src/areas/decision-tool.tsx` | The tool UI for a pending Owner decision (U-02.2): the `owner_decision` human tool's question and one button per option while it is pending, the answer once given; any other tool call is named, never run. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
 | `CanvasMount` | `src/engineering/CanvasMount.tsx` | `AgentServerUIProviders` (analytics off, host i18n). Its `children` prop is the seam where U-01.2 places the selected session. |
@@ -188,6 +189,36 @@ completed by an update; per-thread history; a title stream with no model.
 [`src/areas/stored-chat.test.tsx`](src/areas/stored-chat.test.tsx) runs the
 stored chat against a fake Integration process. A real browser and the Owner's
 own session are **not yet verified**.
+
+## Pending decisions and reconnect (U-02.2)
+
+A decision the Owner is asked is a human tool, `owner_decision`
+([`src/areas/decision-tool.tsx`](src/areas/decision-tool.tsx)): the stored chat's
+runtime pauses a run on it (`unstable_humanToolNames`), and the paused assistant
+message (status `requires-action`, the tool call without a result) is appended
+to the Owner conversation store like any message. The assistant message renders
+its tool calls through `MessagePrimitive.Parts`' tool components: the decision
+card shows the question and one button per option while the call is pending,
+and the answer once given.
+
+After the browser is closed and reopened, or the Integration process restarts,
+the history adapter's `load` brings the paused message back, once, and the card
+shows it still pending (gate G2: a pending tool call is restored through the
+history adapter, so `useExternalStoreRuntime` is not needed). The Owner's answer
+(`addResult`) resumes the run with the chat's model adapter, and the completed
+message is an `update` of the same id, which the store keeps as a new revision.
+Reopening again shows the answered card, once; reopening writes nothing.
+
+No chat model is connected, so the shell asks no decision itself yet:
+`StoredChat` takes the run's model adapter as `chatModel` (the fixed
+acknowledgement by default), and the test supplies one that asks a decision.
+[`src/areas/pending-decision.test.tsx`](src/areas/pending-decision.test.tsx)
+closes and reopens the browser in jsdom against a fake Integration process with
+the store's rules, and compares the requests the shell sent with
+[`src/areas/fixtures/pending-decision.wire.json`](src/areas/fixtures/pending-decision.wire.json),
+which the Integration process's test replays against a real process it stops
+and starts (`integrations/ownerhost/tests/test_pending_decision.py`). A real
+browser and a decision asked by a real producer are **not yet verified**.
 
 ## Agent Canvas and assistant-ui in one React app
 
