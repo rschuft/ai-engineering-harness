@@ -5590,6 +5590,144 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - a fixture label is never live, `{'fixture': None}` included;
     - the example's attempts are built in a throwaway store.
   - **Not verified:** anything live (the inspect from the guest's root facts, a live refusal, a live resolver: E-01.6); repeated live inspects (review N5); the guest-per-attempt lifecycle (review N2); Linux and macOS.
+- <a id="owner-direction-git-attribution-2026-11-16"></a>**2026-11-16: The Owner's direction on git attribution, for P-01.3 and every future repository-writing component (recorded verbatim by the engineering manager, in the session where it was given; decision 0018 point 7).** It was given in the I1 execution session, in three messages. The first replied to the engineering manager's P-01.3 ruling, which had made a fixed component identity, `aieh-owner-host <aieh-owner-host@localhost.invalid>`, both author and committer of the capture's commit. Each later message replaced the one before. **The third message governs.**
+
+  **First message:**
+
+  > Reconsider the P-01.3 Git attribution decision.
+  >
+  > When the Owner submits an objective through the Owner UI, the resulting OpenSpec commit should attribute authorship to the Owner.
+  >
+  > Use Git's distinct author and committer identities:
+  >
+  > - Author: the authenticated Owner's configured Git attribution identity.
+  > - Committer: aieh-owner-host <aieh-owner-host@localhost.invalid>.
+  >
+  > Do not use the privileged aieh-owner Gitea identity or its credentials.
+  >
+  > Git author metadata conveys attribution, not authorization. Preserve the separate decision and authorization records.
+  >
+  > Support an explicitly configured, privacy-safe Owner Git identity without silently publishing personal email addresses.
+  >
+  > Apply this convention consistently to human-authored intent, while retaining agent attribution for agent-generated implementation.
+  >
+  > Keep the change within P-01.3's scope and continue engineering execution.
+
+  **Second message (superseded by the third):**
+
+  > Finalize the Git attribution policy for P-01.3 and future repository-writing components.
+  >
+  > Git history may be public or shared across organizations. Every author and committer must be meaningful, externally attributable, and associated with a legitimate provider identity.
+  >
+  > Requirements:
+  >
+  > 1. Human-authored intent uses the human's explicitly configured Git provider identity as author.
+  >
+  > 2. Automated commits use the actual authenticated service or bot identity responsible for the commit as committer.
+  >
+  > 3. Agent-authored implementations retain appropriate agent attribution. Do not misrepresent AI-generated code as human-authored.
+  >
+  > 4. Reuse existing Gitea service accounts where their roles and permissions are appropriate. Do not introduce new accounts unnecessarily.
+  >
+  > 5. Do not use fixed local placeholder identities, such as aieh-owner-host@localhost.invalid, in durable repository history.
+  >
+  > 6. Automation identities must correspond to identifiable provider accounts, without collisions between unrelated installations.
+  >
+  > 7. Support verified, privacy-preserving provider email addresses, including GitHub noreply addresses associated with the relevant account. Arbitrary .invalid addresses are not acceptable substitutes for real attribution.
+  >
+  > 8. Never use or impersonate the privileged aieh-owner authority identity for routine repository commits.
+  >
+  > 9. Git authorship, committer identity, originating Owner, agent execution, Work item, and authorization are distinct concepts.
+  >
+  >    Preserve the original intent, agent execution, Work and decision references independently of Git metadata.
+  >
+  > 10. If a required legitimate identity is unavailable, refuse publication rather than silently substituting a placeholder.
+  >
+  > 11. Apply the convention consistently to P-01.3, P-04.4, and future repository-writing components. Preserve existing valid agent attribution.
+  >
+  > 12. Do not require me to configure my Git identity before the planned I1 demonstration.
+  >
+  > 13. Keep implementation proportionate to I1. Prefer existing Git and Gitea facilities rather than building a new identity system.
+  >
+  > Record this convention, communicate it to the active engineer, reconcile any work already underway, and continue execution.
+  >
+  > No additional Owner approval is required for routine implementation decisions.
+
+  **Third message (governing):**
+
+  > Correct the Git attribution policy for the AI Engineering Harness.
+  >
+  > The previous proposal misunderstood the system's operating model.
+  >
+  > The harness performs engineering work on behalf of its users. AI agents are implementation mechanisms, not independent Git contributors.
+  >
+  > Adopt the following conventions:
+  >
+  > 1. The Git author for a change commissioned by a user is that user's explicitly configured, provider-associated Git identity.
+  >
+  >    This applies whether the content was written directly by the user or generated by an AI agent acting on their behalf.
+  >
+  > 2. The Git committer represents the identity actually performing the commit.
+  >
+  >    When the harness commits through a service account, use that account's legitimate, provider-associated Git identity.
+  >
+  >    When committing under the user's identity, use the user's configured Git identity.
+  >
+  > 3. Do not create Git accounts or identities for individual AI agents, models, or agent roles.
+  >
+  >    Record agent identity, model, execution, provenance, and contribution details in the harness's evidence and lineage records instead.
+  >
+  > 4. In a multi-user environment, attribute work to the specific authenticated user who commissioned it.
+  >
+  >    Never default every user's work to the installation owner or a shared identity.
+  >
+  > 5. Reuse existing legitimate provider accounts for automated commits where appropriate.
+  >
+  >    Do not use invented local placeholder identities such as @localhost.invalid.
+  >
+  > 6. Support verified privacy-preserving Git identities, including provider-associated noreply addresses.
+  >
+  >    Never expose personal email addresses without the user's explicit configuration or consent.
+  >
+  > 7. Preserve the distinction between attribution, execution, and authorization.
+  >
+  >    Git authorship is not an authorization grant.
+  >
+  >    Never use the privileged aieh-owner Gitea authority identity for routine commits unless a separately authorized operation specifically requires that identity.
+  >
+  > 8. Preserve the originating user, objective, Work item, agent execution, and decisions as independent provenance.
+  >
+  > 9. If a required identity is unavailable, refuse publication rather than substitute an invented identity.
+  >
+  > 10. Apply this convention consistently to P-01.3, P-04.4, AI-generated implementation, and future repository-writing components.
+  >
+  > 11. Do not rewrite existing D1 history.
+  >
+  > 12. Do not require me to configure my Git identity until the I1 demonstration.
+  >
+  > Keep implementation proportionate to I1. Use existing Git, Gitea, configuration, and credential infrastructure.
+  >
+  > Record this as the governing attribution convention, reconcile the active engineer's work, and continue execution under delegated authority.
+  >
+  > No additional Owner approval is required for routine implementation decisions.
+
+  - **How execution applies the governing message** (the engineering manager's rulings, under delegated authority, decision 0018 point 3.1):
+    - **A commit the harness makes on a user's behalf:** the author and the committer are both that user's explicitly configured git identity. This is the "committing under the user's identity" case of item 2. It needs no service account, and no Gitea account's registered email is involved.
+      - P-01.3's capture commit and P-04.4's acceptance commit follow it.
+      - The result commit of AI-generated implementation, decision 0024 point 4's `aieh-bot-builder` identity, follows it at E-01.8 (slice 11), through a decision record.
+    - **Binding to the user:** the identity is configured per authenticated user under the Integration process's configuration, looked up by the session's principal. There is no shared or installation-owner default.
+    - **Configuration:** it is explicit only, never read from git config or inferred. If it is absent, the write is refused and nothing is written. A placeholder domain (`.invalid`, `.localhost`, `.example`, `.test`, `localhost`) is refused. A provider noreply address is accepted, and so is any other address the user configured explicitly.
+    - **No git identity for any agent, model or role.** Agent execution and provenance stay in the intent record (`normalized_by`), the lineage and the evidence.
+    - **The Owner configures his identity at the I1 demonstration,** consolidated with OA-32 and OA-33 (item 12).
+    - **Not changed:** existing D1 history, and the recorder's `aieh-owner` merge, which is a separately authorized operation (decision 0012).
+    - **Discovered work for planning:** the harness registers its Gitea service accounts with `localhost.invalid` emails (`gitea_host.EMAIL_DOMAIN`). Any future commit made through a service account needs that account's legitimate, provider-associated identity first.
+  - **Reconciled:**
+    - P-01.3's engineer was told to hold, and then given the governing rule.
+    - The engineering manager's earlier option (a) and the architecture consultation it would have needed are withdrawn. The governing message settles the semantics.
+  - **Facts observed** (the engineering manager, 2026-11-16):
+    - the Gitea service accounts include `aieh-bot-planner` (`integrations/gitea/gitea_host.py`, `BOT_ACCOUNTS`);
+    - their registered email domain is `localhost.invalid` (`gitea_host.EMAIL_DOMAIN`);
+    - decision 0024 point 4's result commit uses `aieh-bot-builder <aieh-bot-builder@localhost.invalid>`.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
