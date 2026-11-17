@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -795,7 +796,10 @@ class CommittedPlanTests(unittest.TestCase):
     def test_a_next_wave_criteria_change_is_refused(self):
         copy = committed_copy(self)
         task, text = committed_task(copy, 'U-04.2')
-        rewrite(task, text.replace('- [ ] #1 ', '- [ ] #1 Roughly: ', 1))
+        # the criterion's line whether its box is ticked or not (a Done task's criteria are ticked: f216d41)
+        changed, count = re.subn(r'^(- \[[ x]\] #1 )', r'\1Roughly: ', text, count=1, flags=re.MULTILINE)
+        self.assertEqual(count, 1)
+        rewrite(task, changed)
         with self.assertRaises(pc.Refusal) as ctx:
             pc.report('U-06.1', backlog_dir=copy)
         self.assertEqual(ctx.exception.code, 'TASK_CRITERIA_MISMATCH')
