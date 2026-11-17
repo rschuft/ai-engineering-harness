@@ -51,14 +51,20 @@
         "anchor": "@<message>: the thread as it stood through that message (the branch of the thread that ends at it)",
         "pinning": "optional"
       },
-      "validation_rule": "Resolve a durable message or explicitly report missing source. (#authority, link 'Original statement')",
-      "status": "authority-unavailable",
-      "resolver": null,
+      "validation_rule": "Resolve a durable message or explicitly report missing source. (#authority, link 'Original statement') The thread is read from the Owner conversation store, opened read-only; unpinned it resolves at its last message (by the store's seq), pinned at @<message>, which must be one of its messages. observed_revision is that message's id and observed_digest the sha256 of its content (its latest revision); current answers at the last message, so a thread that went on after the pin is superseded.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.ConversationResolver (the Owner conversation store opened read-only: storecore.open_read_only, query_only, check_current and the store's own checks)",
+      "outcomes": ["resolved", "missing", "revision-mismatch", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "CONVERSATION_MISSING",
+        "revision-mismatch": "CONVERSATION_MESSAGE_MISSING",
+        "authority-unavailable": "CONVERSATION_STORE_UNAVAILABLE (absent, of another kind, needing a migration, altered, or a content that does not match its digest)"
+      },
       "supplied_by": ["U-02.1", "U-02.2"],
-      "verified": "not yet verified",
-      "examples": ["conversation:thread-42", "conversation:qual-06@message-3"],
-      "citations": ["blueprint #authority", "blueprint #integration-contracts", "plan U-02.1"],
-      "open": ["Whether a message id names immutable content, and how an edit branches a thread, are U-02.1's edit semantics; the message kind's content digest is what pins bytes."]
+      "verified": "offline on throwaway Owner conversation stores made by the store's own API, and on the store the Integration process wrote over HTTP (integrations/lineage/tests, integrations/ownerhost/tests); the Owner's own store has not been read",
+      "examples": ["conversation:thread-42", "conversation:qual-06@message-3", "conversation:3f2a9c1e-7b4d-4e8a-9c0b-1d2e3f405162@U000001"],
+      "citations": ["blueprint #authority", "blueprint #integration-contracts", "plan U-02.1", "plan U-02.2", "decision 0025 point 6"],
+      "open": ["A thread id is the store's (a UUID version 4) and a message id assistant-ui's (seven characters of [0-9A-Za-z]); a reference of another shape is answered missing, never refused as malformed, because the grammar takes any native segment.", "Backup and restore of the store are not decided (decision 0025, 'Not decided here')."]
     },
     {
       "kind": "message",
@@ -86,20 +92,27 @@
           "re_extraction": "the quote is content[start : start + length] read from the durable source; it is verified when its sha256 equals the anchor's, byte for byte (Overseer ruling D2, evidence/P-01.2-intent-skill-qualification.md: a U+00A0 did not survive the model channel, so quotes are filled mechanically from the durable source and the model references spans)"
         }
       },
-      "validation_rule": "Resolve a durable message or explicitly report missing source (#authority). With a digest: the content's sha256 equals it. With a span: the span lies within the content on character boundaries and its bytes' sha256 equals the anchor's; otherwise digest-mismatch. Implemented as lineage.check_message_content, ready for the U-02.1 store.",
-      "status": "authority-unavailable",
-      "resolver": null,
+      "validation_rule": "Resolve a durable message or explicitly report missing source (#authority). With a digest: the content's sha256 equals it. With a span: the span lies within the content on character boundaries and its bytes' sha256 equals the anchor's; otherwise digest-mismatch. Implemented as lineage.check_message_content, applied unchanged to the content the Owner conversation store keeps for an Owner statement (a user message: the UTF-8 bytes of its one text part as received). A user message is immutable, so current applies the same check, with the same anchors. An assistant message is display state the shell wrote, never a statement: it answers missing.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.MessageResolver (the Owner conversation store opened read-only: storecore.open_read_only, query_only, check_current and the store's own checks)",
+      "outcomes": ["resolved", "missing", "digest-mismatch", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "CONVERSATION_MISSING, MESSAGE_MISSING, MESSAGE_NOT_A_STATEMENT (an assistant message)",
+        "digest-mismatch": "MESSAGE_DIGEST_MISMATCH, SPAN_DIGEST_MISMATCH, SPAN_OUT_OF_RANGE, SPAN_NOT_ON_CHARACTER_BOUNDARY",
+        "authority-unavailable": "CONVERSATION_STORE_UNAVAILABLE (absent, of another kind, needing a migration, altered, or a content that does not match its digest)"
+      },
       "supplied_by": ["U-02.1", "U-02.2"],
-      "verified": "not yet verified",
+      "verified": "offline on throwaway Owner conversation stores made by the store's own API, and on the store the Integration process wrote over HTTP (integrations/lineage/tests, integrations/ownerhost/tests); the Owner's own store has not been read",
       "examples": [
         "conversation:thread-42/message-8",
         "conversation:qual-02/message-1",
         "conversation:qual-02/message-2#sha256:5f0c7b9a1e3d2c4b6a8f0e1d3c5b7a9f2e4d6c8b0a1f3e5d7c9b2a4f6e8d0c1b",
         "conversation:qual-08/message-1#span:12+57:sha256:0d4f2c6e8a1b3d5f7092c4e6a8b0d2f4618a3c5e7b9d1f3a5c7e9b2d4f6a8c0e",
-        "conversation:thread%20with%20space/m%C3%A9ssage"
+        "conversation:thread%20with%20space/m%C3%A9ssage",
+        "conversation:3f2a9c1e-7b4d-4e8a-9c0b-1d2e3f405162/U000001"
       ],
-      "citations": ["blueprint #authority", "evidence/P-01.2-intent-skill-qualification.md (D2)", "plan U-02.1", "plan P-03.2"],
-      "open": ["Which parts of a multi-part assistant-ui message form its content bytes, and how they are joined, is U-02.1's to define; the P-01.2 corpus message text stands in until then."]
+      "citations": ["blueprint #authority", "evidence/P-01.2-intent-skill-qualification.md (D2)", "plan U-02.1", "plan U-02.2", "plan P-03.2", "decision 0025 point 6"],
+      "open": ["An Owner statement has exactly one text part (U-02.1: the store refuses any other user message), so its content is that part's bytes; an assistant message's parts are not a statement's content.", "A thread id is the store's (a UUID version 4) and a message id assistant-ui's (seven characters of [0-9A-Za-z]); a reference of another shape is answered missing, never refused as malformed, because the grammar takes any native segment."]
     },
     {
       "kind": "objective",
@@ -216,7 +229,8 @@
       "citations": ["blueprint #authority", "blueprint #integration-contracts (backlog task view <id> --json)", "integrations/planning/README.md", "plan P-02.2"],
       "open": [
         "The Backlog.md task has no content digest anchor: its JSON output is the tool's, not an immutable record, so a digest-mismatch cannot arise for this kind.",
-        "Backlog.md 1.55.3 refuses task list --json when two tasks share an id (P-02.2); the resolver then answers authority-unavailable with Backlog.md's message, not ambiguous."
+        "Backlog.md 1.55.3 refuses task list --json when two tasks share an id (P-02.2); the resolver then answers authority-unavailable with Backlog.md's message, not ambiguous.",
+        "An archived task resolves: Backlog.md 1.55.3's task view --json reads it (archived: true, its file under backlog/archive/tasks/), while task list --json omits it, so its id is shown unique among the listed tasks only; Backlog.md does not give an archived task's id to a new task (gate G11, observed live). The traversal enumerates tasks with task list --json, so it never reaches an archived task through the fulfilled_by link."
       ]
     },
     {

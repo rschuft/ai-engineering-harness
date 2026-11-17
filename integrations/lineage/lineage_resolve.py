@@ -12,7 +12,10 @@ Resolvers exist only where a local authority and adapter already exist:
   Backlog.md from an export of that commit;
 - ``commit``: git, in a registered local clone;
 - ``effect-receipt``: the F-05.2 effects store's read methods, on a store the caller
-  opens (its custody decides who may).
+  opens (its custody decides who may);
+- ``message`` and ``conversation``: the Owner conversation store (U-02.2; decision 0025
+  point 6), opened read-only; a message's content is checked with
+  ``lineage.check_message_content``, unchanged.
 
 Every other kind answers through the ``Registry``: ``authority-unavailable`` with the
 leaf that supplies it, or ``unsupported-kind`` when its identity is not settled.
@@ -22,6 +25,7 @@ Usage (from the repository root):
     python -I -B integrations/lineage/lineage_resolve.py parse REF [REF ...]
     python -I -B integrations/lineage/lineage_resolve.py resolve REF [REF ...] [--current]
         [--project DIR] [--backlog CMD] [--repo NAME=DIR ...] [--effects-root DIR [--effects-principal SID]]
+        [--conversations DB]
 
 Exit status: 0 PASS (every reference parsed or resolved), 1 FAIL (a malformed
 reference, a schema problem, or any outcome other than resolved), 2 could not run.
@@ -547,14 +551,203 @@ class EffectReceiptResolver:
 
 
 # ---------------------------------------------------------------------------
+# conversation and message: the Owner conversation store (plan leaf U-02.2; decision 0025, point 6)
+
+def _conversation_module():
+    """The Owner conversation store library (integrations/conversation; loaded on first use)."""
+    return _load('aieh_conversation_store', REPO / 'integrations' / 'conversation' / 'conversation_store.py')
+
+
+class ReadOnlyConversationStore:
+    """The Owner conversation store's reads on a read-only connection.
+
+    The store's own ``open_store`` migrates (a write transaction) and creates an absent file,
+    so it is not used. As ``lineage_trace.ReadOnlyIntegrationStore`` does for the integration
+    store: the existing file is opened with SQLite's ``mode=ro`` (``storecore.open_read_only``),
+    ``query_only`` is set, and ``storecore.check_current`` verifies the store kind and its
+    migrations without migrating; then the store's own checks run, read only
+    (``conversation_store.verify``: its schema objects are exactly the migrations', and every
+    stored content has its recorded sha256). An absent file, a database of another kind, one
+    that would need a migration, an altered schema and a content that does not match its digest
+    are each refused (``StoreError``) and nothing is changed. Only ``thread``, ``message`` and
+    ``messages`` are exposed. As with any SQLite reader of a WAL database, the read may create or
+    update the ``-wal`` and ``-shm`` sidecar files; no database page changes.
+    """
+
+    def __init__(self, path):
+        cs = self.store_mod = _conversation_module()
+        storecore = cs.storecore
+        storecore.check_sqlite_version()
+        resolved = storecore.check_local_path(Path(path))
+        if not resolved.is_file():
+            raise cs.StoreError(f'no Owner conversation store file: {resolved.name}')
+        self._conn = storecore.open_read_only(resolved)
+        try:
+            self._conn.execute('PRAGMA query_only = ON')
+            if self._conn.execute('PRAGMA query_only').fetchone()[0] != 1:
+                raise cs.StoreError('the connection did not take query_only')
+            self.version = storecore.check_current(self._conn, cs.KIND)
+            cs.verify(self._conn)
+            self._store = cs.ConversationStore(self._conn, resolved)
+        except BaseException:
+            self._conn.close()
+            raise
+
+    def thread(self, thread_id):
+        return self._store.thread(thread_id)
+
+    def message(self, thread_id, message_id):
+        return self._store.message(thread_id, message_id)
+
+    def messages(self, thread_id):
+        return self._store.messages(thread_id)
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+STATEMENT_ROLE = 'user'      # an Owner statement: a user message, author owner (decision 0025 point 6)
+
+
+class _ConversationStoreResolver:
+    """What the message and conversation resolvers share: the store at ``path``, opened read-only
+    for each question and closed after it."""
+    authority = 'Owner conversation store'
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def _ask(self, reference, query, read):
+        """READ(store, say) inside one read-only opening; a refused or failed store answers
+        authority-unavailable (CONVERSATION_STORE_UNAVAILABLE)."""
+        def say(outcome, code=None, detail='', **extra):
+            return L.answer(reference, outcome, self.authority, code, detail, query=query, **extra)
+
+        cs = _conversation_module()
+        try:
+            with ReadOnlyConversationStore(self.path) as store:
+                return read(store, say)
+        except cs.ConversationRefused as exc:     # a read the store refused: answered by READ itself
+            raise AssertionError(f'unhandled store refusal {exc.code}') from None
+        except (cs.StoreError, sqlite3.Error, OSError) as exc:
+            return say(L.AUTHORITY_UNAVAILABLE, 'CONVERSATION_STORE_UNAVAILABLE', f'{type(exc).__name__}: {exc}')
+
+    @staticmethod
+    def _thread(store, thread_id, say):
+        """The thread, or the missing answer (None, answer)."""
+        cs = _conversation_module()
+        try:
+            return store.thread(thread_id), None
+        except cs.ConversationRefused:
+            return None, say(L.MISSING, 'CONVERSATION_MISSING',
+                             f'the Owner conversation store has no thread {thread_id!r}')
+
+
+class MessageResolver(_ConversationStoreResolver):
+    """Owner statements: user messages of the Owner conversation store, read-only.
+
+    The content is the message's durable bytes as the store keeps them (the UTF-8 bytes of its
+    text as received), and the kind's rule is applied to them by ``lineage.check_message_content``,
+    unchanged: a content digest or a span anchor must match. A user message is immutable (its one
+    revision), so ``current`` applies the same check, with the same anchors, as ``resolve``. An
+    assistant message is display state the shell wrote, never a statement: it answers missing
+    (MESSAGE_NOT_A_STATEMENT)."""
+    kind = 'message'
+    outcomes = frozenset({L.RESOLVED, L.MISSING, L.DIGEST_MISMATCH, L.AUTHORITY_UNAVAILABLE})
+
+    def resolve(self, reference):
+        return self._ask(reference, 'reference', lambda store, say: self._read(store, say, reference))
+
+    def current(self, reference):
+        return self._ask(reference, 'current', lambda store, say: self._read(store, say, reference))
+
+    def _statement(self, store, reference, say):
+        """(StoredMessage, None) for an Owner statement, else (None, the missing answer)."""
+        cs = _conversation_module()
+        thread, missing = self._thread(store, reference.thread, say)
+        if thread is None:
+            return None, missing
+        try:
+            stored = store.message(reference.thread, reference.message)
+        except cs.ConversationRefused:
+            return None, say(L.MISSING, 'MESSAGE_MISSING',
+                             f'thread {reference.thread} has no message {reference.message!r}')
+        if stored.role != STATEMENT_ROLE:
+            return None, say(L.MISSING, 'MESSAGE_NOT_A_STATEMENT',
+                             f'message {reference.message} is an {stored.role} message (display state the Owner '
+                             'UI shell wrote), not an Owner statement')
+        return stored, None
+
+    def _read(self, store, say, reference):
+        stored, missing = self._statement(store, reference, say)
+        if stored is None:
+            return missing
+        result = L.check_message_content(reference, stored.content, self.authority)
+        return say(result.outcome, result.code, result.detail or f'Owner statement {reference.message} of thread '
+                   f'{reference.thread} (seq {stored.seq})', observed_digest=result.observed_digest)
+
+    def content(self, reference):
+        """The durable bytes of the Owner statement REFERENCE names, or None (absent, not a statement, or the
+        store unavailable). Read-only."""
+        def read(store, say):
+            stored, _ = self._statement(store, reference, say)
+            return stored.content if stored is not None else None
+        result = self._ask(reference, 'reference', read)
+        return result if isinstance(result, bytes) else None
+
+
+class ConversationResolver(_ConversationStoreResolver):
+    """Owner conversation threads, read-only. Unpinned, a thread resolves at its last message (by the
+    store's ``seq``); pinned ``@<message>``, the thread as it stood through that message, which must be one of
+    its messages (else revision-mismatch, CONVERSATION_MESSAGE_MISSING). The answer reports that message's
+    id as ``observed_revision`` and the sha256 of its content (its latest revision) as ``observed_digest``;
+    ``current`` answers at the thread's last message, so a thread that went on after the pin shows as
+    superseded."""
+    kind = 'conversation'
+    outcomes = frozenset({L.RESOLVED, L.MISSING, L.REVISION_MISMATCH, L.AUTHORITY_UNAVAILABLE})
+
+    def resolve(self, reference):
+        return self._ask(reference, 'reference', lambda store, say: self._read(store, say, reference, True))
+
+    def current(self, reference):
+        return self._ask(reference, 'current', lambda store, say: self._read(store, say, reference, False))
+
+    def _read(self, store, say, reference, pinned):
+        thread, missing = self._thread(store, reference.thread, say)
+        if thread is None:
+            return missing
+        messages = store.messages(reference.thread)
+        if pinned and reference.through_message is not None:
+            through = [m for m in messages if m.message_id == reference.through_message]
+            if not through:
+                return say(L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING',
+                           f'thread {reference.thread} has no message {reference.through_message!r}')
+            at = through[0]
+        else:
+            at = messages[-1] if messages else None
+        if at is None:
+            return say(L.RESOLVED, detail=f'thread {reference.thread} (no message yet)')
+        return say(L.RESOLVED, detail=f'thread {reference.thread} through message {at.message_id} (seq {at.seq} '
+                   f'of {len(messages)})', observed_revision=at.message_id, observed_digest=at.sha256)
+
+
+# ---------------------------------------------------------------------------
 # Registry and command line
 
-def build_registry(*, project=None, backlog=None, repositories=None, open_effects=None, schema=None):
+def build_registry(*, project=None, backlog=None, repositories=None, open_effects=None, conversations=None,
+                   schema=None):
     """A Registry with the resolvers the given configuration allows.
 
     ``project`` enables design (and, with ``backlog``, an argv prefix, work);
     ``repositories`` maps repository names to local clones for commit;
-    ``open_effects`` opens the effects store for effect-receipt.
+    ``open_effects`` opens the effects store for effect-receipt;
+    ``conversations`` (the path of an Owner conversation store) enables message and conversation.
     """
     resolvers = []
     if project is not None:
@@ -567,6 +760,9 @@ def build_registry(*, project=None, backlog=None, repositories=None, open_effect
     if open_effects is not None:
         resolvers.append(open_effects if isinstance(open_effects, EffectReceiptResolver)
                          else EffectReceiptResolver(open_effects))
+    if conversations is not None:
+        resolvers.append(MessageResolver(conversations))
+        resolvers.append(ConversationResolver(conversations))
     return L.Registry(resolvers, schema)
 
 
@@ -598,6 +794,8 @@ def main(argv=None):
     p_resolve.add_argument('--repo', action='append', default=[])
     p_resolve.add_argument('--effects-root', type=Path)
     p_resolve.add_argument('--effects-principal')
+    p_resolve.add_argument('--conversations', type=Path,
+                           help='an Owner conversation store (conversation.sqlite), read-only: message and conversation')
     args = parser.parse_args(argv)
     try:
         if args.command == 'schema':
@@ -629,7 +827,7 @@ def main(argv=None):
         effects = (EffectReceiptResolver.for_root(args.effects_root, args.effects_principal)
                    if args.effects_root else None)
         registry = build_registry(project=args.project, backlog=backlog, repositories=_repositories(args.repo),
-                                  open_effects=effects)
+                                  open_effects=effects, conversations=args.conversations)
         failed = False
         for text in args.references:
             try:

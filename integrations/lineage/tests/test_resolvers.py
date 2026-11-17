@@ -1,11 +1,13 @@
 """Tests for integrations/lineage/lineage_resolve.py: the read-only resolvers and the
-command line (stdlib unittest, plan leaf P-03.1).
+command line (stdlib unittest, plan leaves P-03.1 and U-02.2).
 
 Offline. Every resolver is exercised for each outcome it declares, against throwaway git
-repositories, the P-02 fake Backlog.md and its recorded fixtures, and F-05.2 effects-store
-fixtures. The effects fixtures reuse the effects tests' own permission helpers, which set
-the DACL of directories these tests create (custody principal: the test process's SID),
-and the library-only fixture location policy.
+repositories, the P-02 fake Backlog.md and its recorded fixtures (and Backlog.md 1.55.3's own
+recorded output for an archived task, gate G11), F-05.2 effects-store fixtures, and
+throwaway Owner conversation stores made by the store's own API. The effects fixtures reuse
+the effects tests' own permission helpers, which set the DACL of directories these tests
+create (custody principal: the test process's SID), and the library-only fixture location
+policy.
 """
 import contextlib
 import hashlib
@@ -13,6 +15,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -51,6 +54,9 @@ import fake_backlog  # noqa: E402
 
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(PLANNING_TESTS / 'fake_backlog.py')]
 RECORDED = PLANNING_TESTS / 'fixtures'
+# Backlog.md 1.55.3's own output in a throwaway project where TASK-1 was archived (gate G11, I1 slice 6): its
+# task view --json reads the archived task ("archived": true), its task list --json does not list it.
+ARCHIVED = HERE / 'fixtures' / 'archived-task'
 CHANGE = fx.CHANGE
 CLI = [sys.executable, '-I', '-B', str(LINEAGE_DIR / 'lineage_resolve.py')]
 WAIT_CEILING_S = 120
@@ -514,6 +520,36 @@ class WorkResolution(TempDirCase):
         self.assertEqual(result.outcome, L.RESOLVED)
         self.assertNotIn('Done', json.dumps(result.to_json()))
 
+    def test_an_archived_task_resolves_through_the_work_resolver(self):
+        # Gate G11: Backlog.md lists the live TASK-2 only; its task view reads the archived TASK-1.
+        listed = json.loads((ARCHIVED / 'task-list.json').read_text(encoding='utf-8'))['tasks']
+        self.assertEqual([t['id'] for t in listed], ['TASK-2'])
+        viewed = json.loads((ARCHIVED / 'task-view-TASK-1.json').read_text(encoding='utf-8'))['task']
+        self.assertEqual((viewed['id'], viewed['archived'], viewed['path'].split('/')[:3]),
+                         ('TASK-1', True, ['backlog', 'archive', 'tasks']))
+        with mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': str(ARCHIVED)}):
+            for task in ('TASK-1', 'TASK-2'):
+                with self.subTest(task=task):
+                    for method in (self.resolver.resolve, self.resolver.current):
+                        result = method(L.parse(f'backlog:{task}'))
+                        self.assertEqual((result.outcome, result.code), (L.RESOLVED, None))
+                        self.assertIn(task, result.detail)
+            missing = self.resolve('backlog:TASK-9')
+        self.assertEqual((missing.outcome, missing.code), (L.MISSING, 'WORK_MISSING'))
+
+    def test_an_archived_task_reference_that_does_not_resolve_is_a_failure(self):
+        # The same project after the archived task's file was removed: Backlog.md cannot view it, so the
+        # reference answers missing, an explicit failure, never a silent success.
+        gone = self.tmp / 'archived-task-removed'
+        shutil.copytree(ARCHIVED, gone, dirs_exist_ok=True)
+        (gone / 'task-view-TASK-1.json').unlink()
+        with mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': str(gone)}):
+            result = self.resolve('backlog:TASK-1')
+        self.assertEqual((result.outcome, result.code), (L.MISSING, 'WORK_MISSING'))
+        self.assertFalse(result.resolved)
+        with self.assertRaises(TypeError):
+            bool(result)
+
     def test_recorded_p02_fixtures(self):
         cases = [('two-task/recorded', 'TASK-1', L.RESOLVED), ('two-task/recorded', 'TASK-2', L.RESOLVED),
                  ('readiness/missing', 'TASK-3', L.RESOLVED), ('readiness/missing', 'TASK-2', L.MISSING),
@@ -732,6 +768,225 @@ class EffectReceiptResolution(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # registry and command line
 
+# ---------------------------------------------------------------------------
+# message and conversation: the Owner conversation store (plan leaf U-02.2)
+
+def _example():
+    """The lineage example module (its Owner conversation store builder), loaded once."""
+    sys.path.insert(0, str(HERE))
+    import lineage_example  # noqa: E402
+    return lineage_example
+
+
+def assistant_item(message_id, parent, status='complete', content=None):
+    return {'parentId': parent, 'message': {
+        'id': message_id, 'role': 'assistant', 'createdAt': '2026-11-07T00:00:01.000Z',
+        'status': {'type': status, 'reason': 'unknown' if status == 'complete' else 'tool-calls'},
+        'content': content or [{'type': 'text', 'text': 'Recorded.'}], 'metadata': {'custom': {}}}}
+
+
+def store_state(path):
+    """The database file's bytes and the store's canonical content, read without the resolver."""
+    cs = R._conversation_module()
+    conn = cs.storecore.open_read_only(Path(path))
+    try:
+        dump = cs._canonical_dump(conn)
+    finally:
+        conn.close()
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest(), hashlib.sha256(dump).hexdigest()
+
+
+class ConversationResolution(TempDirCase):
+    """The message and conversation resolvers against a real Owner conversation store, read-only."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.E = _example()
+        cls.cs = R._conversation_module()
+        cls.path = cls.E.build_conversations(cls.tmp / 'cv' / 'conversation.sqlite')
+        cls.thread = cls.E.THREADS['qual-02']
+        cls.other = cls.E.THREADS['qual-08']
+        with cls.cs.open_store(cls.path) as store:
+            # A reply (display state the shell wrote) after the first statement's thread went on.
+            store.append_message(cls.thread, assistant_item('A000001', 'Q02msg2'), session_id=cls.E.SESSION,
+                                 at=cls.E.STORE_AT)
+            empty, _ = store.initialize_thread(session_id=cls.E.SESSION, local_id='__LOCALID_empty',
+                                               at=cls.E.STORE_AT, mint=lambda: '2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901')
+        cls.empty = empty.thread_id
+        cls.content = cls.E.corpus_bytes('conversation:qual-02/message-1')
+        cls.message = R.MessageResolver(cls.path)
+        cls.conversation = R.ConversationResolver(cls.path)
+        cls.registry = R.build_registry(conversations=cls.path)
+
+    def setUp(self):
+        self.before = store_state(self.path)
+
+    def tearDown(self):
+        self.assertEqual(store_state(self.path), self.before)  # every resolution only read
+
+    def both(self, text):
+        """(resolve, current) of TEXT through the registry."""
+        return self.registry.resolve(text), self.registry.current(text)
+
+    def test_an_owner_statement_resolves_authoritatively_by_digest_and_span(self):
+        base = f'conversation:{self.thread}/Q02msg1'
+        whole = hashlib.sha256(self.content).hexdigest()
+        start = self.content.index(b'new stock')
+        span = L.span_reference(self.thread, 'Q02msg1', self.content, start, len(b'new stock')).text
+        cases = {
+            base: (L.RESOLVED, None, whole),
+            f'{base}#sha256:{whole}': (L.RESOLVED, None, whole),
+            f'{base}#sha256:{"0" * 64}': (L.DIGEST_MISMATCH, 'MESSAGE_DIGEST_MISMATCH', whole),
+            span: (L.RESOLVED, None, hashlib.sha256(b'new stock').hexdigest()),
+            span.replace(f'#span:{start}+', f'#span:{start + 1}+'): (L.DIGEST_MISMATCH, 'SPAN_DIGEST_MISMATCH', None),
+            f'{base}#span:{len(self.content)}+1:sha256:{whole}': (L.DIGEST_MISMATCH, 'SPAN_OUT_OF_RANGE', whole),
+        }
+        for text, (outcome, code, digest) in cases.items():
+            with self.subTest(text=text):
+                for result in self.both(text):
+                    self.assertEqual((result.outcome, result.code, result.kind, result.authority),
+                                     (outcome, code, 'message', 'Owner conversation store'))
+                    if digest:
+                        self.assertEqual(result.observed_digest, digest)
+        self.assertEqual(self.message.content(L.parse(base)), self.content)
+        # The content is the store's bytes, checked by lineage.check_message_content unchanged.
+        expected = L.check_message_content(L.parse(span), self.content)
+        result = self.message.resolve(L.parse(span))
+        self.assertEqual((result.outcome, result.code, result.observed_digest),
+                         (expected.outcome, expected.code, expected.observed_digest))
+
+    def test_a_span_that_splits_a_character(self):
+        text = self.E.corpus_bytes('conversation:qual-08/message-1')
+        start = text.index('\u00a0'.encode()) + 1          # inside the two bytes of U+00A0
+        digest = hashlib.sha256(text[start:start + 2]).hexdigest()
+        result = self.registry.resolve(f'conversation:{self.other}/Q08msg1#span:{start}+2:sha256:{digest}')
+        self.assertEqual((result.outcome, result.code), (L.DIGEST_MISMATCH, 'SPAN_NOT_ON_CHARACTER_BOUNDARY'))
+
+    def test_what_is_not_an_owner_statement_is_missing(self):
+        cases = {
+            f'conversation:{self.thread}/Q02msg9': 'MESSAGE_MISSING',
+            f'conversation:{self.thread}/message-1': 'MESSAGE_MISSING',            # not an assistant-ui id
+            f'conversation:{self.empty}/Q02msg1': 'MESSAGE_MISSING',
+            f'conversation:{self.thread}/A000001': 'MESSAGE_NOT_A_STATEMENT',        # an assistant message
+            'conversation:3f2a9c1e-7b4d-4e8a-9c0b-1d2e3f405162/Q02msg1': 'CONVERSATION_MISSING',
+            'conversation:qual-02/message-1': 'CONVERSATION_MISSING',               # a corpus id, not a store id
+            'conversation:..%2Fcv/Q02msg1': 'CONVERSATION_MISSING',
+        }
+        for text, code in cases.items():
+            with self.subTest(text=text):
+                for result in self.both(text):
+                    self.assertEqual((result.outcome, result.code), (L.MISSING, code))
+                    self.assertFalse(result.resolved)
+                self.assertIsNone(self.message.content(L.parse(text)))
+
+    def test_a_thread_resolves_at_its_last_message_or_through_a_pinned_one(self):
+        with self.cs.open_store(self.path, apply_migrations=False) as store:
+            last = store.messages(self.thread)[-1]
+            first = store.message(self.thread, 'Q02msg1')
+        resolved, current = self.both(f'conversation:{self.thread}')
+        for result in (resolved, current):
+            self.assertEqual((result.outcome, result.kind, result.observed_revision, result.observed_digest),
+                             (L.RESOLVED, 'conversation', 'A000001', last.sha256))
+        pinned, current = self.both(f'conversation:{self.thread}@Q02msg1')
+        self.assertEqual((pinned.outcome, pinned.observed_revision, pinned.observed_digest),
+                         (L.RESOLVED, 'Q02msg1', first.sha256))
+        self.assertEqual((current.outcome, current.query, current.observed_revision), (L.RESOLVED, 'current', 'A000001'))
+        result = self.registry.resolve(f'conversation:{self.thread}@Q02msg7')
+        self.assertEqual((result.outcome, result.code), (L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING'))
+        self.assertEqual(self.registry.current(f'conversation:{self.thread}@Q02msg7').outcome, L.RESOLVED)
+        for text in ('conversation:qual-02', 'conversation:3f2a9c1e-7b4d-4e8a-9c0b-1d2e3f405162'):
+            with self.subTest(text=text):
+                for result in self.both(text):
+                    self.assertEqual((result.outcome, result.code), (L.MISSING, 'CONVERSATION_MISSING'))
+        empty = self.registry.resolve(f'conversation:{self.empty}')
+        self.assertEqual((empty.outcome, empty.observed_revision, empty.observed_digest), (L.RESOLVED, None, None))
+
+    def test_an_unavailable_store_is_explicit_and_unchanged(self):
+        def absent(path):
+            return path / 'conversation.sqlite'
+
+        def other_kind(path):
+            target = path / 'conversation.sqlite'
+            conn = sqlite3.connect(target)
+            conn.execute('CREATE TABLE thread (x)')
+            conn.commit()
+            conn.close()
+            return target
+
+        def needs_migration(path):
+            old = path / 'migrations'
+            old.mkdir()
+            shutil.copy(self.cs.MIGRATIONS_DIR / '0001_store_identity_and_sessions.sql', old)
+            target = path / 'conversation.sqlite'
+            self.cs.open_store(target, migrations_dir=old).close()
+            return target
+
+        def altered(path):
+            target = path / 'conversation.sqlite'
+            shutil.copy(self.path, target)
+            conn = sqlite3.connect(target)
+            conn.executescript('DROP TRIGGER message_revision_no_update;')
+            conn.close()
+            return target
+
+        def content_changed(path):
+            target = altered(path)
+            conn = sqlite3.connect(target)
+            conn.execute("UPDATE message_revision SET content = CAST('x' AS BLOB) WHERE message_id = 'Q02msg1'")
+            conn.commit()
+            conn.close()
+            return target
+
+        for name, make in (('absent', absent), ('another kind', other_kind), ('needs a migration', needs_migration),
+                           ('altered', altered), ('a content that does not match its digest', content_changed)):
+            with self.subTest(case=name):
+                where = self.tmp / f'unavailable-{name.replace(" ", "-")}'
+                where.mkdir()
+                path = make(where)
+                before = path.read_bytes() if path.exists() else None
+                for resolver, text in ((R.MessageResolver(path), f'conversation:{self.thread}/Q02msg1'),
+                                       (R.ConversationResolver(path), f'conversation:{self.thread}')):
+                    for method in (resolver.resolve, resolver.current):
+                        result = method(L.parse(text))
+                        self.assertEqual((result.outcome, result.code),
+                                         (L.AUTHORITY_UNAVAILABLE, 'CONVERSATION_STORE_UNAVAILABLE'))
+                self.assertIsNone(R.MessageResolver(path).content(L.parse(f'conversation:{self.thread}/Q02msg1')))
+                self.assertEqual(path.read_bytes() if path.exists() else None, before)
+                self.assertEqual(path.exists(), before is not None)    # an absent store is not created
+
+    def test_reads_beside_an_open_writer_and_cannot_write(self):
+        target = self.tmp / 'writer' / 'conversation.sqlite'
+        self.E.build_conversations(target)
+        with self.cs.open_store(target) as writer:
+            writer.append_message(self.thread, assistant_item('A000009', 'Q02msg2'), session_id=self.E.SESSION,
+                                  at=self.E.STORE_AT)                           # in the WAL, not yet checkpointed
+            database = hashlib.sha256(target.read_bytes()).hexdigest()
+            result = R.ConversationResolver(target).resolve(L.parse(f'conversation:{self.thread}'))
+            self.assertEqual((result.outcome, result.observed_revision), (L.RESOLVED, 'A000009'))
+            self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), database)
+            with R.ReadOnlyConversationStore(target) as view:
+                for name in ('append_message', 'update_message', 'initialize_thread', 'enroll_session',
+                             'archive_thread', 'conn'):
+                    self.assertFalse(hasattr(view, name), name)
+                with self.assertRaises(sqlite3.Error):
+                    view._conn.execute("DELETE FROM message")
+                with self.assertRaises(sqlite3.Error):
+                    view._conn.execute("INSERT INTO thread_event (seq, thread_id, kind, title, session_id, "
+                                       "recorded_at) VALUES (99, 'x', 'archive', NULL, 'x', '2026-11-07T00:00:00Z')")
+
+    def test_the_registry_holds_both_resolvers_to_the_schema(self):
+        self.assertEqual(sorted(self.registry.resolvers), ['conversation', 'message'])
+        kinds = L.schema_kinds(L.load_schema())
+        for kind in ('message', 'conversation'):
+            with self.subTest(kind=kind):
+                self.assertEqual(kinds[kind]['status'], 'implemented')
+                self.assertEqual(set(self.registry.resolvers[kind].outcomes), set(kinds[kind]['outcomes']))
+        unconfigured = R.build_registry().resolve(f'conversation:{self.thread}/Q02msg1')
+        self.assertEqual((unconfigured.outcome, unconfigured.code),
+                         (L.AUTHORITY_UNAVAILABLE, 'RESOLVER_NOT_CONFIGURED'))
+
+
 class RegistryAndCommandLine(TempDirCase):
     category = 'contract'
 
@@ -787,6 +1042,28 @@ class RegistryAndCommandLine(TempDirCase):
         self.assertEqual(self.cli('resolve', 'backlog:TASK-1', '--backlog', 'x').returncode, 2)
         self.assertEqual(self.cli('resolve', 'backlog:TASK-1', '--repo', 'nameonly').returncode, 2)
         self.assertEqual(self.cli('resolve', 'effect:fx1-' + 'a' * 64, '--effects-principal', 'S-1').returncode, 2)
+
+    def test_resolve_command_reads_the_owner_conversation_store(self):
+        example = _example()
+        path = example.build_conversations(self.tmp / 'cli-cv' / 'conversation.sqlite')
+        thread = example.THREADS['qual-02']
+        before = store_state(path)
+        ok = self.cli('resolve', f'conversation:{thread}/Q02msg1', f'conversation:{thread}@Q02msg2',
+                      '--conversations', str(path))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        rows = [json.loads(line) for line in ok.stdout.splitlines()]
+        self.assertEqual([(r['kind'], r['outcome'], r['authority']) for r in rows],
+                         [('message', L.RESOLVED, 'Owner conversation store'),
+                          ('conversation', L.RESOLVED, 'Owner conversation store')])
+        # An unresolved statement is a failure: exit 1 and a FAIL line naming its code.
+        failing = self.cli('resolve', f'conversation:{thread}/Q02msg9', '--conversations', str(path))
+        self.assertEqual(failing.returncode, 1)
+        self.assertIn(f'FAIL conversation:{thread}/Q02msg9: missing MESSAGE_MISSING', failing.stderr)
+        absent = self.cli('resolve', f'conversation:{thread}/Q02msg1', '--conversations', str(self.tmp / 'no.sqlite'))
+        self.assertEqual(absent.returncode, 1)
+        self.assertEqual(json.loads(absent.stdout)['code'], 'CONVERSATION_STORE_UNAVAILABLE')
+        self.assertFalse((self.tmp / 'no.sqlite').exists())
+        self.assertEqual(store_state(path), before)
 
     def test_resolve_command_uses_the_live_effects_policy(self):
         root = self.tmp / 'effects-root'

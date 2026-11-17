@@ -282,7 +282,7 @@ class Schema(unittest.TestCase):
 
     def test_the_overseer_kinds_and_statuses(self):
         expected = {
-            'conversation': 'authority-unavailable', 'message': 'authority-unavailable', 'objective': 'implemented',
+            'conversation': 'implemented', 'message': 'implemented', 'objective': 'implemented',
             'design': 'implemented', 'work': 'implemented', 'attempt': 'authority-unavailable',
             'commit': 'implemented', 'review': 'authority-unavailable', 'ci': 'authority-unavailable',
             'authorization': 'authority-unavailable', 'effect-receipt': 'implemented', 'release': 'unknown',
@@ -463,9 +463,7 @@ class _Stub:
 class RegistryContract(unittest.TestCase):
     def test_declared_but_unavailable_kinds_name_their_leaves(self):
         registry = L.Registry()
-        for text, leaves in (('conversation:thread-42', ('U-02.1', 'U-02.2')),
-                             ('conversation:thread-42/message-8', ('U-02.1', 'U-02.2')),
-                             ('openhands:conversation/' + UUID, ('E-01.3.1', 'E-01.4.1')),
+        for text, leaves in (('openhands:conversation/' + UUID, ('E-01.3.1', 'E-01.4.1')),
                              (f'gitea:o/r/pulls/7/reviews/31@{C40}', ('E-03.3.1', 'E-03.3.2', 'D-01.1')),
                              (f'gitea:o/r/actions/runs/9@{C40}', ('Q-03.1', 'Q-03.2')),
                              (f'gitea:o/r/branches/main@{C40}#sha256:{D}', ('G-03.1', 'G-04.3.1'))):
@@ -508,7 +506,8 @@ class RegistryContract(unittest.TestCase):
     def test_implemented_kinds_without_configuration(self):
         registry = L.Registry()
         for text in ('backlog:TASK-1', f'git:r@{C40}', 'effect:' + KEY, f'outcome:{OUTCOME}',
-                     f'openspec:changes/x/design.md@{C40}#sha256={D}'):
+                     f'openspec:changes/x/design.md@{C40}#sha256={D}',
+                     'conversation:thread-42', 'conversation:thread-42/message-8'):  # implemented at U-02.2
             with self.subTest(text=text):
                 result = registry.resolve(text)
                 self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'RESOLVER_NOT_CONFIGURED'))

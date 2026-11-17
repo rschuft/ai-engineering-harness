@@ -11,17 +11,28 @@
   replayed by the fake Backlog.md, so the tasks carry the real design pointers;
 - an integration store (F-05.1) with one attempt reservation per task, made through the
   store's own API, whose intent cites the task (``workRef``) and the outcome
-  (``outcomeRef``).
+  (``outcomeRef``);
+- an Owner conversation store (U-02.2), made through the store's own API and holding no
+  thread: the qual-02 change cites the P-01.2 corpus's statements
+  (``conversation:qual-02/...``), which are not Owner conversation store identities.
 
-``example`` traces the outcome, pinned at the declaring commit, twice: with the sample
-authorities (``lineage_samples.py``: the whole chain resolves, and is marked sample) and
-with the real registry only (statements and attempts are ``authority-unavailable``).
+``example`` traces the outcome, pinned at the declaring commit, twice, with the real
+registry, whose statement resolver reads that store (the statements are answered missing):
+once with the attempt sample (``lineage_samples.py``: the attempts resolve, and are marked
+sample) and once with the real registry only (the attempts are ``authority-unavailable``).
+Until U-02.2 a statement sample over the corpus stood in for the Owner conversation store;
+it is retired (I1 work design, R5).
+
+``build_conversations`` makes, for the tests, an Owner conversation store that holds the
+three corpus statements the tests quote, under store identities (``STATEMENTS``), and
+``cite_store`` points a throwaway project's intent record at them.
 
 Record or refresh the committed example (offline):
 
     python -I -B integrations/lineage/tests/lineage_example.py --record
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -56,6 +67,7 @@ import fake_backlog  # noqa: E402
 
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(PLANNING_TESTS / 'fake_backlog.py')]
 RECORDED_TASKS = PLANNING_TESTS / 'fixtures' / 'two-task' / 'recorded'
+CORPUS = REPO / 'tools' / 'tests' / 'fixtures' / 'intent_qualification' / 'corpus'
 EXAMPLES = LINEAGE_DIR / 'examples'
 FILES = {'sample': 'projection-sample-authorities.json', 'real': 'projection-real-registry.json'}
 CHANGE = fx.CHANGE
@@ -147,12 +159,15 @@ def task_intent(task, outcome=OUTCOME):
     return intent
 
 
-def registry(repo, backlog=FAKE_BACKLOG):
-    return R.build_registry(project=repo, backlog=backlog)
+def registry(repo, backlog=FAKE_BACKLOG, conversations=None):
+    """The real registry over REPO, Backlog.md and the Owner conversation store (by default the one beside
+    REPO, ``conversations_path``)."""
+    return R.build_registry(project=repo, backlog=backlog,
+                            conversations=conversations_path(repo) if conversations is None else conversations)
 
 
-def authorities(repo, samples=True, backlog=FAKE_BACKLOG):
-    return T.Authorities(registry(repo, backlog), S.sample_authorities() if samples else None)
+def authorities(repo, samples=True, backlog=FAKE_BACKLOG, conversations=None):
+    return T.Authorities(registry(repo, backlog, conversations), S.sample_authorities() if samples else None)
 
 
 def run_trace(outcome, auth, repo, store, backlog=FAKE_BACKLOG, snapshot=RECORDED_TASKS):
@@ -164,6 +179,77 @@ def run_trace(outcome, auth, repo, store, backlog=FAKE_BACKLOG, snapshot=RECORDE
         return T.trace(outcome, auth, project=repo, backlog=backlog, store=store)
 
 
+# ---------------------------------------------------------------------------
+# The Owner conversation store (plan leaf U-02.2)
+
+def conversation_module():
+    return R._conversation_module()
+
+
+def conversations_path(repo):
+    """Where the example and the tests keep the Owner conversation store of the project REPO."""
+    return Path(repo).parent / 'cv' / 'conversation.sqlite'
+
+
+# Store identities for the P-01.2 corpus statements the tests quote: thread ids are the store's (UUID version 4,
+# minted here by the store's own mint seam) and message ids assistant-ui's grammar (seven of [0-9A-Za-z]).
+SESSION = '6a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+THREADS = {'qual-02': '0f6b2a7c-3d4e-4f5a-9b8c-7d6e5f4a3b2c', 'qual-08': '1e2d3c4b-5a69-4788-a7b6-c5d4e3f2a1b0'}
+STATEMENTS = {'conversation:qual-02/message-1': ('qual-02', 'Q02msg1'),
+              'conversation:qual-02/message-2': ('qual-02', 'Q02msg2'),
+              'conversation:qual-08/message-1': ('qual-08', 'Q08msg1')}
+STORE_AT = '2026-11-07T00:00:00Z'
+
+
+def store_reference(corpus_reference):
+    """The Owner conversation store reference of a corpus statement (``conversation:<thread>/<message>``)."""
+    corpus_thread, message = STATEMENTS[corpus_reference]
+    return f'conversation:{THREADS[corpus_thread]}/{message}'
+
+
+def corpus_bytes(corpus_reference):
+    """The corpus message's bytes (LF on every host): what the store keeps as the statement's content."""
+    thread, message = L.parse(corpus_reference).thread, L.parse(corpus_reference).message
+    return (CORPUS / thread / f'{message}.txt').read_bytes()
+
+
+def build_conversations(path, statements=True):
+    """An Owner conversation store at PATH, made by the store's own API. With STATEMENTS it holds the corpus
+    statements of ``STATEMENTS`` as Owner statements (user messages, each the corpus file's text exactly), one
+    thread per corpus thread, under one session; else it holds nothing."""
+    cs = conversation_module()
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with cs.open_store(path) as store:
+        if not statements:
+            return path
+        store.enroll_session(session_id=SESSION, verifier=hashlib.sha256(b'lineage example session').hexdigest(),
+                             issued_at=STORE_AT, expires_at='2026-11-08T00:00:00Z')
+        last = {}
+        for corpus_reference, (corpus_thread, message) in STATEMENTS.items():
+            thread = THREADS[corpus_thread]
+            store.initialize_thread(session_id=SESSION, local_id='__LOCALID_' + corpus_thread.replace('-', ''),
+                                    at=STORE_AT, mint=lambda thread=thread: thread)
+            text = corpus_bytes(corpus_reference).decode('utf-8')
+            store.append_message(thread, {'parentId': last.get(thread), 'message': {
+                'id': message, 'role': 'user', 'createdAt': '2026-11-07T00:00:00.000Z',
+                'content': [{'type': 'text', 'text': text}], 'attachments': [], 'metadata': {'custom': {}}}},
+                session_id=SESSION, at=STORE_AT)
+            last[thread] = message
+    return path
+
+
+def cite_store(repo, change_dir=CHANGE_DIR):
+    """Point the throwaway project's intent record (proposal.md and the x-outcomes declaration) at the store
+    identities of the corpus statements it cites."""
+    for name in ('proposal.md', '.openspec.yaml'):
+        target = Path(repo) / change_dir / name
+        data = target.read_bytes()
+        for corpus_reference in STATEMENTS:
+            data = data.replace(corpus_reference.encode(), store_reference(corpus_reference).encode())
+        target.write_bytes(data)
+
+
 def build(work):
     """Build the example's sources under WORK; return (repo, store, declared commit)."""
     work = Path(work)
@@ -171,6 +257,7 @@ def build(work):
     _design, declared = build_project(repo)
     store = work / 'st' / 'integration.sqlite'
     build_store(store, [(operation_key(t), task_intent(t)) for t in ('TASK-1', 'TASK-2')])
+    build_conversations(conversations_path(repo), statements=False)
     return repo, store, declared
 
 

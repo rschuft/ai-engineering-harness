@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-view",
+  "task": {
+    "id": "TASK-2",
+    "title": "Second task",
+    "status": "To Do",
+    "archived": false,
+    "type": null,
+    "priority": null,
+    "project": null,
+    "assignees": [],
+    "reporter": null,
+    "labels": [],
+    "milestone": null,
+    "parentTaskId": null,
+    "acceptanceCriteriaCompleted": 0,
+    "acceptanceCriteriaCount": 0,
+    "references": [],
+    "modifiedFiles": [],
+    "ordinal": 2000,
+    "createdAt": "2026-11-16T23:53:00Z",
+    "updatedAt": null,
+    "dueDate": null,
+    "isReady": true,
+    "path": "backlog/tasks/task-2 - Second-task.md",
+    "description": null,
+    "dependencies": [],
+    "dependencyGraph": {
+      "root": "TASK-2",
+      "nodes": [
+        {
+          "id": "TASK-2",
+          "title": "Second task",
+          "status": "To Do",
+          "state": "resolved",
+          "completed": false,
+          "dependencyDepth": 0,
+          "dependentDepth": 0
+        }
+      ],
+      "edges": []
+    },
+    "readiness": {
+      "isReady": true,
+      "isBlocked": false,
+      "blockingDependencies": [],
+      "missingDependencies": []
+    },
+    "documentation": [],
+    "subtasks": [],
+    "acceptanceCriteria": [],
+    "definitionOfDone": [],
+    "implementationPlan": null,
+    "implementationNotes": null,
+    "comments": [],
+    "finalSummary": null
+  }
+}

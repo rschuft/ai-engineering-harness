@@ -39,12 +39,14 @@ Where each edge's assertion comes from:
 
 Every node is resolved through ``Authorities``: the lineage ``Registry`` (P-03.1), plus
 optional, clearly labelled sample authorities that may stand in only for kinds whose real
-authority does not exist yet (``lineage_samples.py``). Nothing here writes, runs
-OpenSpec, or reads a Backlog.md status.
+authority does not exist yet (``lineage_samples.py``). A statement's content, which an
+original quote is checked against, is taken from the resolver that answered it: the Owner
+conversation store's, read-only (U-02.2). Nothing here writes, runs OpenSpec, or reads a
+Backlog.md status.
 
 Usage (from the repository root):
     python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project DIR
-        [--backlog CMD] [--store DB]
+        [--backlog CMD] [--store DB] [--conversations DB]
 
 Exit status: 0 the projection is complete, 1 it carries uncertainty, 2 could not run.
 The command line uses the real authorities only. Standard library only, plus the shared
@@ -155,9 +157,11 @@ class Authorities:
         return result, (UNAVAILABLE if result.outcome == L.AUTHORITY_UNAVAILABLE else AUTHORITATIVE)
 
     def content(self, reference):
-        """The durable bytes of a statement, when its (sample) authority can return them."""
-        sample = self.samples.get(reference.kind)
-        reader = getattr(sample, 'content', None)
+        """The durable bytes of a statement, from the authority that answers its kind (a sample's, where one
+        stands in; else the registry's resolver, the Owner conversation store's for a message), or None when that
+        authority returns no content."""
+        source = self.samples.get(reference.kind) or self.registry.resolvers.get(reference.kind)
+        reader = getattr(source, 'content', None)
         return reader(reference) if reader else None
 
 
@@ -697,10 +701,12 @@ def main(argv=None):
     p_trace.add_argument('--project', type=Path, required=True)
     p_trace.add_argument('--backlog')
     p_trace.add_argument('--store', type=Path)
+    p_trace.add_argument('--conversations', type=Path,
+                         help='the Owner conversation store (conversation.sqlite), read-only: the statements')
     args = parser.parse_args(argv)
     try:
         backlog = planning.tool_argv(args.backlog) if args.backlog else None
-        registry = resolve_mod.build_registry(project=args.project, backlog=backlog)
+        registry = resolve_mod.build_registry(project=args.project, backlog=backlog, conversations=args.conversations)
         projection = trace(args.outcome, Authorities(registry), project=args.project, backlog=backlog,
                            store=args.store)
     except L.MalformedReference as exc:

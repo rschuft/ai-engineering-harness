@@ -9,10 +9,14 @@ is run only with task list and task view. LiveObjective adds the decision 0008
 declaration to the throwaway copy only, then runs openspec validate --strict and
 openspec archive --yes there. LiveTrace (P-03.2) runs the lineage traversal over the tasks
 the pinned Backlog.md created and lists itself, then again after a real openspec archive.
+LiveWork also archives a task with the pinned Backlog.md in a throwaway copy of the project
+and resolves it (gate G11, plan leaf U-02.2): task view --json reads an archived task, task
+list --json does not list it.
 """
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -93,6 +97,30 @@ class LiveWork(unittest.TestCase):
         result = self.resolve(f'backlog:TASK-1@{self.design_commit}')
         self.assertEqual(result.outcome, L.AUTHORITY_UNAVAILABLE)
         self.assertIn(result.code, ('BACKLOG_LIST_FAILED', 'BACKLOG_VIEW_FAILED'))
+
+    def test_an_archived_task_resolves_and_a_removed_one_is_a_failure(self):
+        copy = self.work / 'archived'
+        shutil.copytree(self.repo, copy)
+        with mock.patch.dict(os.environ, self.env):
+            fx.run_tool([*self.backlog, 'task', 'archive', 'TASK-1'], copy)    # Backlog.md's own archive
+            archived = fx.commit_all(copy, 'Backlog.md archives TASK-1')
+            resolver = R.WorkResolver(copy, self.backlog)
+            listed = [t['id'] for t in R.ReadOnlyBacklog(self.backlog, copy).list_tasks()]
+            view = R.ReadOnlyBacklog(self.backlog, copy).view('TASK-1')
+            results = [resolver.resolve(L.parse('backlog:TASK-1')), resolver.current(L.parse('backlog:TASK-1')),
+                       resolver.resolve(L.parse(f'backlog:TASK-1@{archived}'))]
+            for path in (copy / 'backlog' / 'archive' / 'tasks').glob('task-1 *.md'):
+                path.unlink()
+            gone = resolver.resolve(L.parse('backlog:TASK-1'))
+            still = resolver.resolve(L.parse(f'backlog:TASK-1@{archived}'))   # the pinned commit still holds it
+        self.assertNotIn('TASK-1', listed)
+        self.assertIn('TASK-2', listed)
+        self.assertTrue(view['archived'])
+        self.assertTrue(view['path'].startswith('backlog/archive/tasks/'))
+        self.assertEqual([(r.outcome, r.code) for r in results], [(L.RESOLVED, None)] * 3)
+        self.assertEqual(results[2].observed_revision, archived)
+        self.assertEqual((gone.outcome, gone.code), (L.MISSING, 'WORK_MISSING'))
+        self.assertEqual(still.outcome, L.RESOLVED)
 
     def test_a_tasks_design_references_resolve(self):
         view = self.capture['task-view-TASK-2.json']['task']
@@ -193,6 +221,8 @@ class LiveTrace(unittest.TestCase):
             cls.declared = fx.commit_all(cls.repo, 'declare the outcome of O1')
         cls.store = cls.work / 'st' / 'integration.sqlite'
         example.build_store(cls.store, [(example.operation_key(t), example.task_intent(t)) for t in ('TASK-1', 'TASK-2')])
+        # The real Owner conversation store (U-02.2), holding no corpus thread: the statement sample is retired.
+        cls.conversations = example.build_conversations(cls.work / 'cv' / 'conversation.sqlite', statements=False)
 
     @classmethod
     def tearDownClass(cls):
@@ -200,7 +230,8 @@ class LiveTrace(unittest.TestCase):
 
     def trace(self, outcome):
         with mock.patch.dict(os.environ, self.env):
-            auth = self.T.Authorities(R.build_registry(project=self.repo, backlog=self.backlog),
+            auth = self.T.Authorities(R.build_registry(project=self.repo, backlog=self.backlog,
+                                                       conversations=self.conversations),
                                       self.E.S.sample_authorities())
             before = fx.git(self.repo, 'status', '--porcelain', '--untracked-files=all', '--ignored')
             projection = self.T.trace(outcome, auth, project=self.repo, backlog=self.backlog, store=self.store)
@@ -209,8 +240,13 @@ class LiveTrace(unittest.TestCase):
 
     def test_the_chain_through_live_backlog_then_after_archive(self):
         projection = self.trace(f'outcome:{OUTCOME}@{self.declared}')
-        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority'},
+        # Since U-02.2 the corpus statements are asked of the real Owner conversation store, which does not hold
+        # them; the attempts are still answered by their sample.
+        self.assertEqual({(u['reason'], u['code']) for u in projection['uncertainties']},
+                         {('sample-authority', 'SAMPLE_AUTHORITY'), ('unresolved', 'CONVERSATION_MISSING')},
                          json.dumps(projection['uncertainties'], indent=1))
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'unresolved'},
+                         {'conversation:qual-02/message-1', 'conversation:qual-02/message-2'})
         tasks = {e['to'] for e in projection['edges'] if e['relation'] == self.T.FULFILLED_BY}
         self.assertEqual(tasks, {'backlog:TASK-1', 'backlog:TASK-2'})
         cited = {e['to'] for e in projection['edges'] if e['relation'] == self.T.CITES}

@@ -8,8 +8,8 @@
     "store_schema_version": 3
   },
   "authority_modes": {
-    "authoritative": 9,
-    "sample": 4,
+    "authoritative": 11,
+    "sample": 2,
     "unavailable": 0
   },
   "nodes": [
@@ -17,31 +17,31 @@
       "reference": "conversation:qual-02/message-1",
       "kind": "message",
       "role": "statement",
-      "authority": "SAMPLE statement store (P-01.2 corpus), standing in for the Owner conversation store",
-      "authority_mode": "sample",
+      "authority": "Owner conversation store",
+      "authority_mode": "authoritative",
       "pinned": false,
       "resolution": {
         "query": "reference",
-        "outcome": "resolved",
-        "code": null,
-        "detail": "",
+        "outcome": "missing",
+        "code": "CONVERSATION_MISSING",
+        "detail": "the Owner conversation store has no thread 'qual-02'",
         "observed_revision": null,
-        "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+        "observed_digest": null
       },
       "current": {
         "query": "current",
-        "outcome": "resolved",
-        "code": null,
-        "detail": "",
+        "outcome": "missing",
+        "code": "CONVERSATION_MISSING",
+        "detail": "the Owner conversation store has no thread 'qual-02'",
         "observed_revision": null,
-        "observed_digest": "86e7385f4e806089abc008f8bd11f9d041f98eebe510fec3568ad5e09b70856c"
+        "observed_digest": null
       },
-      "freshness": "current",
+      "freshness": "unknown",
       "quotes": [
         {
           "item": "Q1",
-          "span": "conversation:qual-02/message-1#span:0+198:sha256:30f890af4ef45e4e91312448b518529ab7cbf40e0656e3f36b2d7164dafa48f4",
-          "outcome": "resolved"
+          "outcome": "not-checked",
+          "detail": "the statement did not resolve, so the quote cannot be checked"
         }
       ]
     },
@@ -49,26 +49,26 @@
       "reference": "conversation:qual-02/message-2",
       "kind": "message",
       "role": "statement",
-      "authority": "SAMPLE statement store (P-01.2 corpus), standing in for the Owner conversation store",
-      "authority_mode": "sample",
+      "authority": "Owner conversation store",
+      "authority_mode": "authoritative",
       "pinned": false,
       "resolution": {
         "query": "reference",
-        "outcome": "resolved",
-        "code": null,
-        "detail": "",
+        "outcome": "missing",
+        "code": "CONVERSATION_MISSING",
+        "detail": "the Owner conversation store has no thread 'qual-02'",
         "observed_revision": null,
-        "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+        "observed_digest": null
       },
       "current": {
         "query": "current",
-        "outcome": "resolved",
-        "code": null,
-        "detail": "",
+        "outcome": "missing",
+        "code": "CONVERSATION_MISSING",
+        "detail": "the Owner conversation store has no thread 'qual-02'",
         "observed_revision": null,
-        "observed_digest": "298dcfe6e4bbc5776f3283ab3220dafd6cfced600be9cbf6e04c67f2d6b74063"
+        "observed_digest": null
       },
-      "freshness": "current"
+      "freshness": "unknown"
     },
     {
       "reference": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
@@ -569,15 +569,17 @@
   "uncertainties": [
     {
       "reference": "conversation:qual-02/message-1",
-      "reason": "sample-authority",
-      "code": "SAMPLE_AUTHORITY",
-      "detail": "resolved only by a sample authority (SAMPLE statement store (P-01.2 corpus), standing in for the Owner conversation store); no live authority was asked"
+      "reason": "unresolved",
+      "code": "CONVERSATION_MISSING",
+      "detail": "the Owner conversation store has no thread 'qual-02'",
+      "outcome": "missing"
     },
     {
       "reference": "conversation:qual-02/message-2",
-      "reason": "sample-authority",
-      "code": "SAMPLE_AUTHORITY",
-      "detail": "resolved only by a sample authority (SAMPLE statement store (P-01.2 corpus), standing in for the Owner conversation store); no live authority was asked"
+      "reason": "unresolved",
+      "code": "CONVERSATION_MISSING",
+      "detail": "the Owner conversation store has no thread 'qual-02'",
+      "outcome": "missing"
     },
     {
       "reference": "openhands:conversation/7ba9bc0d-5cec-5c9b-ade8-c83221abf8e0",

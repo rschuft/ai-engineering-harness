@@ -4,9 +4,13 @@ plan leaf P-03.2).
 
 Offline. Each case builds a throwaway project repository (the P-02.1 qual-02 change and an
 x-outcomes declaration, never the P-01.2 fixture itself), the fake Backlog.md (replaying
-Backlog.md's own recorded P-02.1 output, or its own small state), and an integration
-store made through the store's own API. Sample authorities (lineage_samples.py) stand in
-for the Owner conversation store and the Agent Server where a case needs them.
+Backlog.md's own recorded P-02.1 output, or its own small state), an integration store made
+through the store's own API, and an Owner conversation store made through its own API that
+holds the corpus statements the cases quote under store identities
+(``lineage_example.build_conversations``; a case that needs a statement to resolve cites
+them, ``cite_store``). The attempt sample (lineage_samples.py) stands in for the Agent Server
+where a case needs it. Since U-02.2 no sample stands in for the Owner conversation store: its
+statement sample is retired (I1 work design, R5), and statements are read from the real store.
 """
 import hashlib
 import json
@@ -33,7 +37,11 @@ ARCHIVED_DIR = f'openspec/changes/archive/2026-11-07-{CHANGE}'
 OTHER_OUTCOME = '0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70'
 FAKE_FILES = ('.fake-backlog.json', '.fake-backlog-argv.jsonl')
 CLI = [sys.executable, '-I', '-B', str(E.LINEAGE_DIR / 'lineage_trace.py')]
-QUAL08 = S.CORPUS / 'qual-08' / 'message-1.txt'
+QUAL08 = E.CORPUS / 'qual-08' / 'message-1.txt'
+M1, M2 = E.store_reference('conversation:qual-02/message-1'), E.store_reference('conversation:qual-02/message-2')
+Q8 = E.store_reference('conversation:qual-08/message-1')
+THREAD02, THREAD08 = E.THREADS['qual-02'], E.THREADS['qual-08']
+SPEC = 'specs/catalogue-search/new-product-visibility/spec.md'
 NBSP = '\u00a0'.encode()  # U+00A0, written as an escape
 
 
@@ -87,6 +95,7 @@ class Case(unittest.TestCase):
         self.repo = self.tmp / 'p'
         self.design, self.declared = E.build_project(self.repo)
         self.store = self.tmp / 'st' / 'integration.sqlite'
+        self.conversations = E.build_conversations(E.conversations_path(self.repo))
 
     def reserve(self, *intents):
         E.build_store(self.store, intents)
@@ -141,21 +150,30 @@ class Example(unittest.TestCase):
                 self.assertIsNone(fx.MACHINE_PATH.search(E.dumps(projection)))
 
     def test_sample_authorities_resolve_the_whole_chain_and_say_so(self):
+        # Since U-02.2 the attempt sample is the only one: the statements are asked of the real Owner conversation
+        # store, which holds no corpus thread (the qual-02 change cites corpus ids, not store ids), and say so.
         projection = self.projections['sample']
         self.assertEqual(projection['format'], T.PROJECTION_FORMAT)
         roles = {node['role'] for node in projection['nodes']}
         self.assertEqual(roles, {'statement', 'objective', 'design', 'work', 'attempt'})
         for node in projection['nodes']:
             with self.subTest(node=node['reference']):
+                if node['role'] == 'statement':
+                    self.assertEqual((node['authority_mode'], node['authority'], node['resolution']['outcome'],
+                                      node['resolution']['code']),
+                                     (T.AUTHORITATIVE, 'Owner conversation store', L.MISSING, 'CONVERSATION_MISSING'))
+                    continue
                 self.assertEqual((node['resolution']['outcome'], node['freshness']), (L.RESOLVED, T.CURRENT))
-                expected = T.SAMPLE if node['role'] in ('statement', 'attempt') else T.AUTHORITATIVE
+                expected = T.SAMPLE if node['role'] == 'attempt' else T.AUTHORITATIVE
                 self.assertEqual(node['authority_mode'], expected)
                 if expected == T.SAMPLE:
                     self.assertTrue(node['authority'].startswith('SAMPLE'))
         self.assertEqual(projection['verdict'], 'incomplete')
-        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority'})
-        self.assertEqual({u['reference'] for u in projection['uncertainties']},
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority', 'unresolved'})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'sample-authority'},
                          {n['reference'] for n in projection['nodes'] if n['authority_mode'] == T.SAMPLE})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'unresolved'},
+                         {n['reference'] for n in projection['nodes'] if n['role'] == 'statement'})
 
     def test_the_chain_runs_from_the_original_message_to_the_attempts(self):
         projection = self.projections['sample']
@@ -170,11 +188,11 @@ class Example(unittest.TestCase):
             (f'backlog:{task}', f'openhands:conversation/{store_mod.conversation_id_for(E.operation_key(task))}')
             for task in ('TASK-1', 'TASK-2')})
         self.assertEqual(len(edges(projection, T.SHAPED_BY)), 3)  # proposal, design, spec at the declaring commit
+        # The statement did not resolve (the store holds no corpus thread), so Q1's quote is not checked here; it is
+        # checked against the store's bytes in StoreStatements.test_the_whole_chain_resolves_against_the_store.
         quote = by_reference(projection)[message1]['quotes'][0]
-        self.assertEqual((quote['item'], quote['outcome']), ('Q1', L.RESOLVED))
-        span = L.parse(quote['span'])
-        content = QUAL02_MESSAGE1.read_bytes()
-        self.assertEqual(L.span_bytes(span, content), content.rstrip(b'\n'))
+        self.assertEqual((quote['item'], quote['outcome']), ('Q1', 'not-checked'))
+        self.assertNotIn('span', quote)
 
     def test_every_edge_carries_its_provenance(self):
         for projection in self.projections.values():
@@ -199,22 +217,25 @@ class Example(unittest.TestCase):
         projection = self.projections['real']
         for node in projection['nodes']:
             with self.subTest(node=node['reference']):
-                if node['role'] in ('statement', 'attempt'):
+                if node['role'] == 'statement':  # asked of the real store since U-02.2: missing there
+                    self.assertEqual((node['authority_mode'], node['resolution']['outcome'],
+                                      node['resolution']['code']),
+                                     (T.AUTHORITATIVE, L.MISSING, 'CONVERSATION_MISSING'))
+                elif node['role'] == 'attempt':
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome'],
                                       node['resolution']['code']),
                                      (T.UNAVAILABLE, L.AUTHORITY_UNAVAILABLE, 'AUTHORITY_NOT_YET_AVAILABLE'))
-                    self.assertTrue(node['resolution']['detail'].endswith(
-                        'U-02.1, U-02.2' if node['role'] == 'statement' else 'E-01.3.1, E-01.4.1'))
+                    self.assertTrue(node['resolution']['detail'].endswith('E-01.3.1, E-01.4.1'))
                 else:
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome']),
                                      (T.AUTHORITATIVE, L.RESOLVED))
         self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'unresolved'})
-        self.assertEqual(projection['authority_modes'], {'authoritative': 9, 'sample': 0, 'unavailable': 4})
+        self.assertEqual(projection['authority_modes'], {'authoritative': 11, 'sample': 0, 'unavailable': 2})
         # The same edges as with the samples: the links are asserted by records, not by the authorities.
         self.assertEqual(edges(projection), edges(self.projections['sample']))
 
 
-QUAL02_MESSAGE1 = S.CORPUS / 'qual-02' / 'message-1.txt'
+QUAL02_MESSAGE1 = E.CORPUS / 'qual-02' / 'message-1.txt'
 
 
 # ---------------------------------------------------------------------------
@@ -383,9 +404,9 @@ class DigestMismatch(Case):
         digest = hashlib.sha256(relayed).hexdigest()
         # The anchor's digest taken over the relayed bytes, at the durable offsets; and the
         # relayed bytes' own length, which now ends inside a character of the durable text.
-        bad = f'conversation:qual-08/message-1#span:{start}+{len(quote)}:sha256:{digest}'
-        short = f'conversation:qual-08/message-1#span:{start}+{len(relayed)}:sha256:{digest}'
-        good = L.span_reference('qual-08', 'message-1', content, start, len(quote)).text
+        bad = f'{Q8}#span:{start}+{len(quote)}:sha256:{digest}'
+        short = f'{Q8}#span:{start}+{len(relayed)}:sha256:{digest}'
+        good = L.span_reference(THREAD08, 'Q08msg1', content, start, len(quote)).text
         for reference, outcome, code in ((bad, L.DIGEST_MISMATCH, 'SPAN_DIGEST_MISMATCH'),
                                          (short, L.DIGEST_MISMATCH, 'SPAN_NOT_ON_CHARACTER_BOUNDARY'),
                                          (good, L.RESOLVED, None)):
@@ -412,7 +433,7 @@ class DigestMismatch(Case):
             with self.subTest(expected=expected):
                 self.setUp()
                 E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', b'- source: conversation:qual-02/message-1\n',
-                       b'- source: conversation:qual-08/message-1\n')
+                       f'- source: {Q8}\n'.encode())
                 proposal = self.repo / CHANGE_DIR / 'proposal.md'
                 data = proposal.read_bytes()
                 old = data[data.index(b'```text\n', data.index(b'#### Q1')) + 8:]
@@ -420,10 +441,10 @@ class DigestMismatch(Case):
                 E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', old, quote)
                 self.commit('quote qual-08')
                 projection = self.trace(f'outcome:{OUTCOME}')
-                node = by_reference(projection)['conversation:qual-08/message-1']
+                node = by_reference(projection)[Q8]
                 if expected:
                     self.assertEqual(node['quotes'][0]['outcome'], L.DIGEST_MISMATCH)
-                    self.assertUncertain(projection, 'conversation:qual-08/message-1', 'quote-unverified', expected)
+                    self.assertUncertain(projection, Q8, 'quote-unverified', expected)
                 else:
                     self.assertEqual(node['quotes'][0]['outcome'], L.RESOLVED)
                     span = L.parse(node['quotes'][0]['span'])
@@ -434,14 +455,16 @@ class MissingNode(Case):
     def test_the_statement_is_missing(self):
         for path in (f'{CHANGE_DIR}/proposal.md', f'{CHANGE_DIR}/.openspec.yaml'):
             data = (self.repo / path).read_bytes()
-            (self.repo / path).write_bytes(data.replace(b'conversation:qual-02/message-2', b'conversation:qual-02/message-9'))
+            (self.repo / path).write_bytes(data.replace(b'conversation:qual-02/message-2',
+                                                        f'conversation:{THREAD02}/Q02msg9'.encode()))
         declared = self.commit('cite a message the store does not hold')
         self.reserve_tasks('TASK-1', 'TASK-2')
         projection = self.trace(f'outcome:{OUTCOME}@{declared}')
-        node = by_reference(projection)['conversation:qual-02/message-9']
+        missing = f'conversation:{THREAD02}/Q02msg9'      # a thread of the store; no such message in it
+        node = by_reference(projection)[missing]
         self.assertEqual((node['resolution']['outcome'], node['resolution']['code']), (L.MISSING, 'MESSAGE_MISSING'))
-        self.assertUncertain(projection, 'conversation:qual-02/message-9', 'unresolved', 'MESSAGE_MISSING')
-        self.assertIn((projection['root'], 'conversation:qual-02/message-9', T.ACCEPTED_BY), edges(projection))
+        self.assertUncertain(projection, missing, 'unresolved', 'MESSAGE_MISSING')
+        self.assertIn((projection['root'], missing, T.ACCEPTED_BY), edges(projection))
 
     def test_a_task_id_whose_task_does_not_exist(self):
         self.reserve_tasks('TASK-1', 'TASK-2', 'TASK-9')
@@ -636,9 +659,10 @@ class Statements(Case):
     def test_an_original_quote_without_its_quote(self):
         data, start, end = self.quote_block()
         (self.repo / CHANGE_DIR / 'proposal.md').write_bytes(data[:start] + data[end + 1:])
+        E.cite_store(self.repo)        # Q1's source must resolve for its quote to be looked for
         self.commit('Q1 without its quote')
         projection = self.trace(f'outcome:{OUTCOME}')
-        self.assertUncertain(projection, 'conversation:qual-02/message-1', 'quote-unverified', 'QUOTE_MISSING')
+        self.assertUncertain(projection, M1, 'quote-unverified', 'QUOTE_MISSING')
 
     def test_an_original_quote_of_a_thread(self):
         E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', b'- source: conversation:qual-02/message-1\n',
@@ -681,24 +705,110 @@ class Statements(Case):
 
     def test_a_quote_that_occurs_twice(self):
         E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', b'- source: conversation:qual-02/message-1\n',
-               b'- source: conversation:qual-08/message-1\n')
+               f'- source: {Q8}\n'.encode())
         proposal = self.repo / CHANGE_DIR / 'proposal.md'
         data = proposal.read_bytes()
         old = data[data.index(b'```text\n', data.index(b'#### Q1')) + 8:]
         E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', old[:old.index(b'\n```')], b'\xc2\xa0\xe2\x82\xac')
         self.commit('a quote that occurs twice')
         projection = self.trace(f'outcome:{OUTCOME}')
-        self.assertUncertain(projection, 'conversation:qual-08/message-1', 'quote-unverified', 'QUOTE_SPAN_AMBIGUOUS')
+        self.assertUncertain(projection, Q8, 'quote-unverified', 'QUOTE_SPAN_AMBIGUOUS')
 
     def test_a_quote_cannot_be_checked_without_content(self):
-        class NoContent(S.SampleStatementStore):
-            content = None
-        samples = S.sample_authorities()
-        samples['message'] = NoContent()
-        auth = T.Authorities(E.registry(self.repo), samples)
+        class NoContent(T.Authorities):
+            """The statement resolves, but its authority returns no content."""
+            def content(self, reference):
+                return None
+        E.cite_store(self.repo)
+        self.commit('the intent record cites the Owner conversation store')
+        auth = NoContent(E.registry(self.repo), S.sample_authorities())
         self.reserve_tasks('TASK-1', 'TASK-2')
         projection = E.run_trace(f'outcome:{OUTCOME}', auth, self.repo, self.store)
-        self.assertUncertain(projection, 'conversation:qual-02/message-1', 'quote-unverified', 'QUOTE_SOURCE_UNREADABLE')
+        self.assertEqual(by_reference(projection)[M1]['resolution']['outcome'], L.RESOLVED)
+        self.assertUncertain(projection, M1, 'quote-unverified', 'QUOTE_SOURCE_UNREADABLE')
+
+
+class StoreStatements(Case):
+    """The statements of the chain read from the real Owner conversation store (plan leaf U-02.2)."""
+
+    def test_the_whole_chain_resolves_against_the_store(self):
+        E.cite_store(self.repo)
+        cited = self.commit('the intent record cites the Owner conversation store')
+        self.reserve_tasks('TASK-1', 'TASK-2')
+        projection = self.trace(f'outcome:{OUTCOME}@{cited}')
+        root = projection['root']
+        self.assertIn((M1, root, T.ORIGINATES), edges(projection))
+        self.assertIn((root, M2, T.ACCEPTED_BY), edges(projection))
+        nodes = by_reference(projection)
+        for reference in (M1, M2):
+            with self.subTest(reference=reference):
+                node = nodes[reference]
+                self.assertEqual((node['kind'], node['role'], node['authority'], node['authority_mode'],
+                                  node['resolution']['outcome'], node['freshness']),
+                                 ('message', 'statement', 'Owner conversation store', T.AUTHORITATIVE, L.RESOLVED,
+                                  T.CURRENT))
+                self.assertFalse({u for u in projection['uncertainties'] if u['reference'] == reference})
+        # D2: Q1's quote is located in the statement's durable bytes, read from the store, and its span verifies.
+        quote = nodes[M1]['quotes'][0]
+        self.assertEqual((quote['item'], quote['outcome']), ('Q1', L.RESOLVED))
+        content = QUAL02_MESSAGE1.read_bytes()
+        self.assertEqual(L.span_bytes(L.parse(quote['span']), content), content.rstrip(b'\n'))
+        self.assertTrue(quote['span'].startswith(M1 + '#span:'))
+
+    def test_an_unresolved_statement_is_a_failure(self):
+        # A message the store does not hold, an assistant message (display state, never a statement) and a store
+        # that cannot be read: each is an explicit unresolved uncertainty, and the projection is incomplete.
+        cases = ((f'conversation:{THREAD02}/Q02msg9', L.MISSING, 'MESSAGE_MISSING'),
+                 (f'conversation:{THREAD02}/A000001', L.MISSING, 'MESSAGE_NOT_A_STATEMENT'))
+        for reference, outcome, code in cases:
+            with self.subTest(code=code):
+                self.setUp()
+                with E.conversation_module().open_store(self.conversations) as store:
+                    store.append_message(THREAD02, {'parentId': 'Q02msg2', 'message': {
+                        'id': 'A000001', 'role': 'assistant', 'createdAt': '2026-11-07T00:00:01.000Z',
+                        'status': {'type': 'complete', 'reason': 'unknown'},
+                        'content': [{'type': 'text', 'text': 'Noted.'}], 'metadata': {'custom': {}}}},
+                        session_id=E.SESSION, at=E.STORE_AT)
+                E.cite_store(self.repo)
+                E.edit(self.repo, f'{CHANGE_DIR}/proposal.md', f'- source: Q1, {M2}\n'.encode(),
+                       f'- source: Q1, {M2}, {reference}\n'.encode())
+                self.commit('cite a statement the store does not resolve')
+                self.reserve_tasks('TASK-1', 'TASK-2')
+                projection = self.trace(f'outcome:{OUTCOME}')
+                node = by_reference(projection)[reference]
+                self.assertEqual((node['authority_mode'], node['resolution']['outcome'], node['resolution']['code']),
+                                 (T.AUTHORITATIVE, outcome, code))
+                self.assertUncertain(projection, reference, 'unresolved', code)
+        self.setUp()
+        E.cite_store(self.repo)
+        self.commit('the intent record cites the Owner conversation store')
+        self.reserve_tasks('TASK-1', 'TASK-2')
+        self.conversations.unlink()                     # the store is gone: unavailable, and not re-created
+        projection = self.trace(f'outcome:{OUTCOME}')
+        for reference in (M1, M2):
+            with self.subTest(reference=reference):
+                node = by_reference(projection)[reference]
+                self.assertEqual((node['authority_mode'], node['resolution']['code']),
+                                 (T.UNAVAILABLE, 'CONVERSATION_STORE_UNAVAILABLE'))
+                self.assertUncertain(projection, reference, 'unresolved', 'CONVERSATION_STORE_UNAVAILABLE')
+        self.assertFalse(self.conversations.exists())
+
+    def test_the_traversal_only_reads_the_store(self):
+        E.cite_store(self.repo)
+        self.commit('the intent record cites the Owner conversation store')
+        self.reserve_tasks('TASK-1', 'TASK-2')
+        cs = E.conversation_module()
+
+        def state():
+            conn = cs.storecore.open_read_only(self.conversations)
+            try:
+                return self.conversations.read_bytes(), cs._canonical_dump(conn)
+            finally:
+                conn.close()
+        before = state()
+        projection = self.trace(f'outcome:{OUTCOME}')
+        self.assertEqual(by_reference(projection)[M1]['resolution']['outcome'], L.RESOLVED)
+        self.assertEqual(state(), before)
 
 
 class Tasks(Case):
@@ -762,33 +872,45 @@ class Contract(Case):
                 result, mode = super().ask(reference, method)
                 return result, (T.AUTHORITATIVE if mode == T.SAMPLE else mode)
 
+        # The statements resolve in the real Owner conversation store only where the intent record cites store
+        # identities, so the case cites them at a commit and declares the tasks' design pointers at it, as the
+        # recorded P-02.1 tasks are at the design commit (TASK-1: design and proposal; TASK-2: design and spec);
+        # the outcome is traced at a later commit that changes nothing of the change, so all 13 nodes are current.
+        E.cite_store(self.repo)
+        cited = self.commit('the intent record cites the Owner conversation store')
+        (self.repo / 'NOTES.md').write_bytes(b'An unrelated change.\n')
+        later = self.commit('an unrelated change')
+        self.fake_backlog(('TASK-1', [self.pointer('design.md', cited), self.pointer('proposal.md', cited)]),
+                          ('TASK-2', [self.pointer('design.md', cited), self.pointer(SPEC, cited)]))
         self.reserve_tasks('TASK-1', 'TASK-2')
         auth = Trusted(E.registry(self.repo), S.sample_authorities())
-        projection = E.run_trace(f'outcome:{OUTCOME}@{self.declared}', auth, self.repo, self.store)
+        projection = E.run_trace(f'outcome:{OUTCOME}@{later}', auth, self.repo, self.store, snapshot=None)
         self.assertEqual((projection['verdict'], projection['uncertainties']), ('complete', []))
         self.assertEqual(projection['authority_modes'], {'authoritative': 13, 'sample': 0, 'unavailable': 0})
 
     def test_samples_stand_in_only_where_no_authority_exists(self):
         registry = E.registry(self.repo)
-        statements = S.SampleStatementStore()
-        for kind in ('design', 'objective', 'work', 'commit', 'effect-receipt', 'release', 'no-such-kind'):
+        attempts = S.SampleAttemptRecords()
+        # message and conversation are implemented since U-02.2: no sample stands in for them any more (R5).
+        for kind in ('message', 'conversation', 'design', 'objective', 'work', 'commit', 'effect-receipt', 'release',
+                     'no-such-kind'):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
-                T.Authorities(registry, {kind: statements})
+                T.Authorities(registry, {kind: attempts})
 
-        class Unlabelled(S.SampleStatementStore):
-            authority = 'Owner conversation store'
+        class Unlabelled(S.SampleAttemptRecords):
+            authority = 'OpenHands Agent Server'
         with self.assertRaises(ValueError):
-            T.Authorities(registry, {'message': Unlabelled()})
+            T.Authorities(registry, {'attempt': Unlabelled()})
         self.assertEqual(R.build_registry(project=self.repo).resolve('conversation:qual-02/message-1').outcome,
                          L.AUTHORITY_UNAVAILABLE)  # the default registry never answers from a sample
 
     def test_a_sample_answering_outside_its_contract_is_refused(self):
-        class Wrong(S.SampleStatementStore):
+        class Wrong(S.SampleAttemptRecords):
             def resolve(self, reference):
-                return L.answer(L.parse('conversation:other/m'), L.RESOLVED, self.authority)
-        auth = T.Authorities(E.registry(self.repo), {'message': Wrong()})
+                return L.answer(L.parse(f'openhands:conversation/{OTHER_OUTCOME}'), L.RESOLVED, self.authority)
+        auth = T.Authorities(E.registry(self.repo), {'attempt': Wrong()})
         with self.assertRaises(RuntimeError):
-            auth.ask(L.parse('conversation:qual-02/message-1'), 'resolve')
+            auth.ask(L.parse(f'openhands:conversation/{OUTCOME}'), 'resolve')
 
     def test_the_root_is_an_outcome(self):
         auth = E.authorities(self.repo)
@@ -797,34 +919,46 @@ class Contract(Case):
                 T.trace(text, auth, project=self.repo)
 
     def test_the_sample_statement_store(self):
-        store = S.SampleStatementStore()
+        # The statement sample is retired at U-02.2 (I1 work design, R5): lineage_samples has no statement
+        # authority, and the cases it answered from the P-01.2 corpus are answered by the Owner conversation
+        # store's own resolvers, read-only, for the same statements stored under store identities.
+        self.assertFalse(hasattr(S, 'SampleStatementStore'))
+        self.assertEqual(set(S.sample_authorities()), {'attempt'})
+        registry = E.registry(self.repo)
         content = QUAL02_MESSAGE1.read_bytes()
         cases = {
-            'conversation:qual-02/message-1': (L.RESOLVED, None),
-            f'conversation:qual-02/message-1#sha256:{hashlib.sha256(content).hexdigest()}': (L.RESOLVED, None),
-            f'conversation:qual-02/message-1#sha256:{"0" * 64}': (L.DIGEST_MISMATCH, 'MESSAGE_DIGEST_MISMATCH'),
-            'conversation:qual-02/message-9': (L.MISSING, 'MESSAGE_MISSING'),
+            M1: (L.RESOLVED, None),
+            f'{M1}#sha256:{hashlib.sha256(content).hexdigest()}': (L.RESOLVED, None),
+            f'{M1}#sha256:{"0" * 64}': (L.DIGEST_MISMATCH, 'MESSAGE_DIGEST_MISMATCH'),
+            f'conversation:{THREAD02}/Q02msg9': (L.MISSING, 'MESSAGE_MISSING'),
             'conversation:qual-99/message-1': (L.MISSING, 'CONVERSATION_MISSING'),
             'conversation:..%2Fqual-02/message-1': (L.MISSING, 'CONVERSATION_MISSING'),
             'conversation:..%2Fcorpus%2Fqual-02/message-1': (L.MISSING, 'CONVERSATION_MISSING'),  # no path escape
-            'conversation:qual-02': (L.RESOLVED, None),
-            'conversation:qual-02@message-2': (L.RESOLVED, None),
-            'conversation:qual-02@message-7': (L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING'),
+            f'conversation:{THREAD02}': (L.RESOLVED, None),
+            f'conversation:{THREAD02}@Q02msg2': (L.RESOLVED, None),
+            f'conversation:{THREAD02}@Q02msg7': (L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING'),
             'conversation:qual-99': (L.MISSING, 'CONVERSATION_MISSING'),
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
-                for method in (store.resolve, store.current):
+                pinned_thread = isinstance(L.parse(text), L.ConversationRef) and L.parse(text).pinned
+                for method in (registry.resolve, registry.current):
                     result = method(L.parse(text))
+                    if method == registry.current and pinned_thread:
+                        expected = (L.RESOLVED, None)   # current answers at the thread's last message
                     self.assertEqual((result.outcome, result.code), expected)
-                    self.assertEqual(result.reference, text)
-        self.assertEqual(store.content(L.parse('conversation:qual-02/message-1')), content)
-        self.assertIsNone(store.content(L.parse('conversation:qual-02/message-9')))
-        broken = self.tmp / 'corpus'
-        (broken / 'qual-02').mkdir(parents=True)
-        shutil.copy(S.CORPUS / 'qual-02' / 'item.json', broken / 'qual-02')
-        result = S.SampleStatementStore(broken).resolve(L.parse('conversation:qual-02/message-1'))
-        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'SAMPLE_CORPUS_INVALID'))
+                    self.assertEqual((result.reference, result.authority), (text, 'Owner conversation store'))
+        auth = T.Authorities(registry)
+        self.assertEqual(auth.content(L.parse(M1)), content)
+        self.assertIsNone(auth.content(L.parse(f'conversation:{THREAD02}/Q02msg9')))
+        broken = self.tmp / 'broken' / 'conversation.sqlite'
+        broken.parent.mkdir()
+        shutil.copy(self.conversations, broken)
+        conn = sqlite3.connect(broken)
+        conn.executescript('DROP TRIGGER message_no_delete;')
+        conn.close()
+        result = E.registry(self.repo, conversations=broken).resolve(L.parse(M1))
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'CONVERSATION_STORE_UNAVAILABLE'))
 
     def test_the_sample_attempt_records(self):
         records = S.SampleAttemptRecords()
@@ -875,6 +1009,25 @@ class CommandLine(Case):
         self.assertIn((projection['root'], 'enumeration-unavailable', 'BACKLOG_NOT_CONFIGURED'), reasons(projection))
         self.assertIn(f'UNCERTAIN {projection["root"]}: enumeration-unavailable BACKLOG_NOT_CONFIGURED', result.stderr)
         self.assertEqual((tree_state(self.repo), store_state(self.store)), before)
+
+    def test_trace_command_reads_the_owner_conversation_store(self):
+        E.cite_store(self.repo)
+        cited = self.commit('the intent record cites the Owner conversation store')
+        self.reserve_tasks('TASK-1', 'TASK-2')
+        result = self.cli('trace', f'outcome:{OUTCOME}@{cited}', '--project', str(self.repo), '--store', str(self.store),
+                          '--conversations', str(self.conversations))
+        self.assertEqual(result.returncode, 1, result.stderr)           # incomplete: no Backlog.md, no attempts
+        projection = json.loads(result.stdout)
+        nodes = by_reference(projection)
+        self.assertEqual([(nodes[r]['authority_mode'], nodes[r]['resolution']['outcome']) for r in (M1, M2)],
+                         [(T.AUTHORITATIVE, L.RESOLVED)] * 2)
+        self.assertEqual(nodes[M1]['quotes'][0]['outcome'], L.RESOLVED)
+        self.assertEqual(projection['authority_modes']['sample'], 0)
+        # Without the store the statements are explicitly unavailable, never resolved.
+        result = self.cli('trace', f'outcome:{OUTCOME}@{cited}', '--project', str(self.repo))
+        projection = json.loads(result.stdout)
+        self.assertEqual(by_reference(projection)[M1]['resolution']['code'], 'RESOLVER_NOT_CONFIGURED')
+        self.assertIn(f'UNCERTAIN {M1}: unresolved RESOLVER_NOT_CONFIGURED', result.stderr)
 
     def test_could_not_run(self):
         self.assertEqual(self.cli('trace', 'outcome:O-101', '--project', str(self.repo)).returncode, 2)

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-list",
+  "tasks": [
+    {
+      "id": "TASK-2",
+      "title": "Second task",
+      "status": "To Do",
+      "archived": false,
+      "type": null,
+      "priority": null,
+      "project": null,
+      "assignees": [],
+      "reporter": null,
+      "labels": [],
+      "milestone": null,
+      "parentTaskId": null,
+      "acceptanceCriteriaCompleted": 0,
+      "acceptanceCriteriaCount": 0,
+      "references": [],
+      "modifiedFiles": [],
+      "ordinal": 2000,
+      "createdAt": "2026-11-16T23:53:00Z",
+      "updatedAt": null,
+      "dueDate": null,
+      "isReady": true
+    }
+  ]
+}
