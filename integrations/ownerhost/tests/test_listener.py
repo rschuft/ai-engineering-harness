@@ -363,6 +363,10 @@ class Listener(unittest.TestCase):
 
     def test_the_live_import_census_is_the_server_s_four_modules(self):
         expected = ['integrations/conversation/conversation_store.py', 'integrations/lineage/lineage.py',
+                    'integrations/lineage/lineage_resolve.py',                            # since P-04.4
+                    'integrations/owner/acceptance_recorder.py', 'integrations/owner/delegated_decision.py',
+                    'integrations/owner/owner_decision.py',                              # since P-04.4
+                    'integrations/ownerhost/acceptance.py',                              # since P-04.4
                     'integrations/ownerhost/app.py', 'integrations/ownerhost/capture.py',
                     'integrations/ownerhost/session.py', 'integrations/planning/planning_adapter.py',
                     'integrations/repository/repository_access.py', 'integrations/store/integration_store.py',
@@ -372,13 +376,16 @@ class Listener(unittest.TestCase):
 
     def test_the_supervisor_s_live_import_census_has_no_credential_module(self):
         forbidden = ('integrations/credentials/', 'integrations/gitea/', 'integrations/dispatch/',
-                     'integrations/inference/', 'integrations/owner/')
+                     'integrations/inference/')
+        owner_allowed = {'integrations/owner/acceptance_recorder.py', 'integrations/owner/owner_decision.py',
+                         'integrations/owner/delegated_decision.py'}   # P-04.4: exact names, never the prefix
         for when, record in (('running', self.obs['run']), ('stopped', json.loads(self.obs['records']['run.json']))):
             with self.subTest(when=when):
                 modules = record['supervisor_modules']
                 self.assertIn('integrations/ownerhost/service.py', modules)
                 self.assertIn('integrations/platform/platform_windows.py', modules)
-                self.assertEqual([m for m in modules if m.startswith(forbidden)], [])
+                self.assertEqual([m for m in modules if m.startswith(forbidden)
+                                  or (m.startswith('integrations/owner/') and m not in owner_allowed)], [])
 
     def test_no_client_path_reaches_the_service_log(self):
         self.assertEqual(self.obs['injected'][0], 401)

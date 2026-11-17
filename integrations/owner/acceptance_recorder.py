@@ -79,7 +79,6 @@ import json
 import re
 import secrets
 import sys
-import urllib.parse
 import uuid
 from pathlib import Path
 from typing import NamedTuple
@@ -609,6 +608,7 @@ def origin_url(repo):
 def without_userinfo(url):
     """URL without its userinfo: ``scheme://user:secret@host/path`` -> ``scheme://host/path``, and the scp-like
     ``user@host:path`` -> ``host:path``; any other text is returned as it is."""
+    import urllib.parse  # a URL parser, not a client: imported here only (the Integration process's census pins it)
     parts = urllib.parse.urlsplit(url)
     if parts.scheme and parts.netloc:
         return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rpartition('@')[2]))
@@ -622,6 +622,7 @@ def recordable_origin(url):
     userinfo. A local filesystem path or a ``file://`` URL is never recorded: it would name a machine path."""
     if not url:
         return None
+    import urllib.parse  # a URL parser, not a client: imported here only (the Integration process's census pins it)
     parts = urllib.parse.urlsplit(url)
     if parts.scheme.lower() in ORIGIN_SCHEMES and parts.netloc.rpartition('@')[2]:
         return without_userinfo(url)

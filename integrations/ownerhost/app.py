@@ -40,6 +40,14 @@ repository, idempotent by message id, behind a write-ahead receipt in the integr
 not the stored message's is ``CAPTURE_MESSAGE_MISMATCH`` and changes nothing. The project configuration and the
 integration store's path are given to ``serve`` by service.py.
 
+The acceptance routes (P-04.4; decision 0025 points 8 and 9; acceptance.py): ``POST
+/threads/{thread_id}/messages/{message_id}/acceptance-challenge`` ``{sha256, card}`` shows the acceptance recorder's
+challenge for the Owner's ``Review acceptance: <item> of <change>`` message in the card (the assistant message the
+shell writes), and ``POST /threads/{thread_id}/messages/{message_id}/acceptance`` ``{nonce, sha256}`` records the
+Owner's acceptance, his own ``Accept <item> of <change>`` message after that card, through the acceptance recorder in
+process with channel ``owner-ui`` and the session-binding verifier; one commit in the project repository, idempotent
+by message id, behind a write-ahead receipt in the integration store. Every refusal of a request has a stable code.
+
 Every write is attributed to the authenticated session. A body is JSON (``Content-Type: application/json``), at most
 ``MAX_BODY_BYTES``, with no duplicate key and no NaN or Infinity (``REQUEST_INVALID``); the store's refusals keep their
 stable codes. Nothing the client wrote is logged: a request is logged by its route's path template.
@@ -94,6 +102,7 @@ def _load(name: str, path: Path):
 session = _load('aieh_ownerhost_session', HERE / 'session.py')
 conversation = _load('aieh_conversation_store', REPO / 'integrations' / 'conversation' / 'conversation_store.py')
 capture = _load('aieh_ownerhost_capture', HERE / 'capture.py')
+acceptance = _load('aieh_ownerhost_acceptance', HERE / 'acceptance.py')
 
 from starlette.applications import Starlette          # noqa: E402  (the tools set; decision 0025 point 1)
 from starlette.middleware import Middleware            # noqa: E402
@@ -247,6 +256,29 @@ async def capture_message(request):
     return JSONResponse(answer, headers=SECURITY_HEADERS)
 
 
+async def acceptance_challenge(request):
+    """P-04.4: the acceptance recorder's challenge for a review request (acceptance.py)."""
+    return await _acceptance_call(request, request.app.state.acceptance.prepare)
+
+
+async def accept_objective(request):
+    """P-04.4: record the Owner's acceptance on a challenge (acceptance.py)."""
+    return await _acceptance_call(request, request.app.state.acceptance.record)
+
+
+async def _acceptance_call(request, call):
+    try:
+        answer = call(request.app.state.store(), request.path_params['thread_id'], request.path_params['message_id'],
+                      await _body(request), request.scope['state']['owner_session'])
+    except RequestRefused as exc:
+        return refusal(exc.code, exc.detail, exc.status)
+    except acceptance.AcceptanceRefused as exc:
+        return refusal(exc.code, exc.detail, exc.status, exc.remedy)
+    except conversation.ConversationRefused as exc:
+        return refusal(exc.code, exc.detail, STORE_REFUSAL_STATUS[exc.code])
+    return JSONResponse(answer, headers=SECURITY_HEADERS)
+
+
 def _no_constant(name):
     raise ValueError(f'{name} is not JSON')
 
@@ -386,6 +418,8 @@ ROUTES = (
     Route('/threads/{thread_id}/messages', messages, methods=['GET', 'POST']),
     Route('/threads/{thread_id}/messages/{message_id}', message, methods=['POST']),
     Route('/threads/{thread_id}/messages/{message_id}/capture', capture_message, methods=['POST']),
+    Route('/threads/{thread_id}/messages/{message_id}/acceptance-challenge', acceptance_challenge, methods=['POST']),
+    Route('/threads/{thread_id}/messages/{message_id}/acceptance', accept_objective, methods=['POST']),
 )
 LOGGED_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')
 
@@ -406,11 +440,12 @@ def described(scope) -> str:
 
 def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Callable[[], str] = now,
                log: Callable[[str], None] = lambda line: None, lifespan=None,
-               store: Callable[[], object] | None = None, capturer=None) -> Starlette:
+               store: Callable[[], object] | None = None, capturer=None, accepter=None) -> Starlette:
     """The ASGI application. SESSIONS returns the object that answers ``session_by_verifier`` (the conversation
     store); STORE the conversation store the thread and history routes use (SESSIONS' object when not given); CLOCK
     the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request; CAPTURER the capture
-    (capture.Capture; without one every capture is CAPTURE_PROJECT_UNCONFIGURED)."""
+    (capture.Capture; without one every capture is CAPTURE_PROJECT_UNCONFIGURED); ACCEPTER the objective acceptance
+    (acceptance.Acceptance; without one every acceptance request is CAPTURE_PROJECT_UNCONFIGURED)."""
     app = Starlette(
         routes=list(ROUTES),
         middleware=[
@@ -424,6 +459,7 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
     app.state.store = store or sessions
     app.state.clock = clock
     app.state.capture = capturer or capture.Capture(None, None)
+    app.state.acceptance = accepter or acceptance.Acceptance(None, None)
     return app
 
 
@@ -567,7 +603,7 @@ def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT, owner_host: str 
           integration_store: Path | None = None) -> int:
     """The server process: open the conversation store, bind the listener, write the server record, serve until
     service.py asks it to stop (the stop-request file), then record the stop. OWNER_HOST (``components.owner_host``
-    as JSON) and INTEGRATION_STORE (the managed integration store's path) are the capture's."""
+    as JSON) and INTEGRATION_STORE (the managed integration store's path) are the capture's and the acceptance's."""
     import uvicorn
     state_dir, logs_dir = Path(state_dir), Path(logs_dir)
     log = _logger(logs_dir)
@@ -592,7 +628,9 @@ def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT, owner_host: str 
             task.cancel()
 
     capturer = capture.Capture(owner_host_config(owner_host), integration_store)
-    app = create_app(lambda: store, port=port, log=log.info, lifespan=lifespan, capturer=capturer)
+    accepter = acceptance.Acceptance(owner_host_config(owner_host), integration_store)
+    app = create_app(lambda: store, port=port, log=log.info, lifespan=lifespan, capturer=capturer,
+                     accepter=accepter)
     config = uvicorn.Config(app, log_config=None, access_log=False, proxy_headers=False, server_header=False,
                             date_header=True, ws='none', http='h11', loop='asyncio', lifespan='on',
                             timeout_graceful_shutdown=5)

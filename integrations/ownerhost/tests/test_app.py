@@ -67,15 +67,17 @@ class EveryRequestNeedsTheCredential(Base):
         return [(route.path, sorted(route.methods)) for route in self.app.routes]
 
     def test_the_route_table_is_one_session_route_and_no_dispatch_endpoint(self):
-        """One session route, POST /session; since U-02.1 the thread and history routes beside it, and since P-01.3
-        the capture route; no dispatch."""
+        """One session route, POST /session; since U-02.1 the thread and history routes beside it, since P-01.3
+        the capture route, and since P-04.4 the two acceptance routes; no dispatch."""
         self.assertEqual(self.routes(), [
             ('/session', ['POST']), ('/threads', ['GET', 'HEAD', 'POST']), ('/threads/{thread_id}', ['GET', 'HEAD']),
             ('/threads/{thread_id}/title', ['POST']), ('/threads/{thread_id}/archive', ['POST']),
             ('/threads/{thread_id}/unarchive', ['POST']), ('/threads/{thread_id}/delete', ['POST']),
             ('/threads/{thread_id}/messages', ['GET', 'HEAD', 'POST']),
             ('/threads/{thread_id}/messages/{message_id}', ['POST']),
-            ('/threads/{thread_id}/messages/{message_id}/capture', ['POST'])])
+            ('/threads/{thread_id}/messages/{message_id}/capture', ['POST']),
+            ('/threads/{thread_id}/messages/{message_id}/acceptance-challenge', ['POST']),
+            ('/threads/{thread_id}/messages/{message_id}/acceptance', ['POST'])])
         self.assertEqual([r.path for r in A.ROUTES if r.path.startswith('/session')], ['/session'])
         self.assertFalse([r.path for r in A.ROUTES if 'dispatch' in r.path or 'conversations' in r.path])
 
@@ -97,7 +99,10 @@ class EveryRequestNeedsTheCredential(Base):
                                               'content': [{'type': 'text', 'text': 'Recorded.'}]}}
         bodies = {'/threads': {'localId': '__LOCALID_route'}, '/threads/{thread_id}/title': {'title': 'Route walk'},
                   '/threads/{thread_id}/messages': item, '/threads/{thread_id}/messages/{message_id}': item,
-                  '/threads/{thread_id}/messages/{message_id}/capture': {'sha256': '0' * 64}}
+                  '/threads/{thread_id}/messages/{message_id}/capture': {'sha256': '0' * 64},
+                  '/threads/{thread_id}/messages/{message_id}/acceptance-challenge': {'sha256': '0' * 64,
+                                                                                    'card': 'A000002'},
+                  '/threads/{thread_id}/messages/{message_id}/acceptance': {'nonce': '0' * 32, 'sha256': '0' * 64}}
         for path, methods in self.routes():
             for method in methods:
                 with self.subTest(method=method, path=path):
@@ -109,6 +114,8 @@ class EveryRequestNeedsTheCredential(Base):
                     if path == '/threads/{thread_id}/delete':        # answers, with its stable refusal
                         self.assertEqual((status, T.code_of(answer)), (409, 'THREAD_DELETE_REFUSED'))
                     elif path.endswith('/capture'):                    # P-01.3: answers; no project is configured
+                        self.assertEqual((status, T.code_of(answer)), (503, 'CAPTURE_PROJECT_UNCONFIGURED'))
+                    elif '/acceptance' in path:                         # P-04.4: answers; no project is configured
                         self.assertEqual((status, T.code_of(answer)), (503, 'CAPTURE_PROJECT_UNCONFIGURED'))
                     else:
                         self.assertEqual(status, 200, answer)

@@ -8,11 +8,17 @@ imports no credential, Gitea, authorization-recorder or dispatch-transport modul
   loads the capture (capture.py) and, through it, the shared repository-access module, whose remote operations
   (push, fetch) import a network client: those imports are pinned to the two functions that build a remote
   transport, and the capture calls only local repository reads and the commit (tests/test_capture.py, which also
-  audits a whole capture: no socket, no process).
+  audits a whole capture: no socket, no process). Since P-04.4 the server loads the objective acceptance
+  (acceptance.py) and, through it, the acceptance recorder (integrations/owner/acceptance_recorder.py with its two
+  owner modules, owner_decision.py and delegated_decision.py, and the lineage resolvers, lineage_resolve.py, which
+  name the effects store's two modules for the effect-receipt resolver; the attempt resolver, which names the
+  dispatcher, is lineage_attempt.py, outside the census). The recorder's one network-module import, urllib.parse
+  (a URL parser), is pinned to its two functions, without_userinfo and recordable_origin.
 - **The import census** (the pattern of the input recorder's): a fresh interpreter loads app.py and builds the
   application; the repository files it has then loaded are exactly the server's modules (the four of U-01.3 and,
   since P-01.3, the capture's), none under integrations/credentials, integrations/gitea, integrations/dispatch or
-  integrations/inference, and no authorization recorder; no network client module is loaded. The supervisor's too: a fresh interpreter loads service.py and selects the platform
+  integrations/inference, and no authorization recorder; no network client module is loaded. Of
+  integrations/owner only the acceptance recorder and its two modules may be loaded (OWNER_ALLOWED, exact names). The supervisor's too: a fresh interpreter loads service.py and selects the platform
   adapter, and loads nothing under those packages (the Windows adapter loads its credential provider only when one
   is asked for). The live processes' own censuses (their records, at start and at stop) are test_listener.py's.
 - **One declared port**: app.PORT is the host census's port (tools/guest.py HOST_CENSUS_PORTS) and the network
@@ -45,8 +51,17 @@ LIVE_SERVER_MODULES = {'integrations/ownerhost/app.py', 'integrations/ownerhost/
                        'integrations/conversation/conversation_store.py', 'integrations/storecore/storecore.py',
                        'integrations/ownerhost/capture.py', 'integrations/store/integration_store.py',
                        'integrations/planning/planning_adapter.py', 'integrations/repository/repository_access.py',
-                       'integrations/lineage/lineage.py', 'tools/check_intent_record.py'}
-SERVER_MODULES = LIVE_SERVER_MODULES | {'integrations/platform/no_window.py'}
+                       'integrations/lineage/lineage.py', 'tools/check_intent_record.py',
+                       # since P-04.4: the objective acceptance and the acceptance recorder
+                       'integrations/ownerhost/acceptance.py', 'integrations/owner/acceptance_recorder.py',
+                       'integrations/owner/owner_decision.py', 'integrations/owner/delegated_decision.py',
+                       'integrations/lineage/lineage_resolve.py'}
+# The effects store's two modules, named (never loaded on this path) by lineage_resolve.py for the effect-receipt
+# resolver: admitted as exact entries (the engineering manager's ruling A on P-04.4; R2 forbids credential, Gitea,
+# authorization-recorder and dispatch-transport modules), each checked to import no network client, call no connector
+# and name no credential module.
+EFFECTS_MODULES = {'integrations/effects/effects_store.py', 'integrations/effects/effects_custody.py'}
+SERVER_MODULES = LIVE_SERVER_MODULES | {'integrations/platform/no_window.py'} | EFFECTS_MODULES
 # The one server module with network-client imports, each pinned to the function that holds it: Dulwich's local
 # modules (dulwich_modules), the remote transport (_transport_modules, _transport_class) and URL parsing (_origin,
 # _remote). Any other import of a network module there fails this census.
@@ -54,12 +69,26 @@ REPOSITORY_ACCESS = 'integrations/repository/repository_access.py'
 REPOSITORY_NETWORK_IMPORTS = {('dulwich', 'dulwich_modules'), ('dulwich.file', 'dulwich_modules'),
                               ('dulwich', '_transport_modules'), ('urllib.parse', '_origin'),
                               ('urllib.parse', '_remote'), ('urllib3', '_transport_class/Transport/__init__')}
+# The acceptance recorder's one network-module import (P-04.4): the URL parser, in its two functions only.
+ACCEPTANCE_RECORDER = 'integrations/owner/acceptance_recorder.py'
+ACCEPTANCE_RECORDER_NETWORK_IMPORTS = {('urllib.parse', 'without_userinfo'), ('urllib.parse', 'recordable_origin')}
 NETWORK_CLIENT_MODULES = ('dulwich.client', 'dulwich.protocol', 'urllib3', 'http.client', 'requests', 'httpx')
-SUPERVISOR_MODULES = SERVER_MODULES | {'integrations/ownerhost/service.py', 'integrations/platform/platform_contract.py',
-                                       'integrations/platform/platform_windows.py', 'integrations/platform/no_window.py',
-                                       'integrations/paths/aieh_paths.py'}
+SUPERVISOR_MODULES = (SERVER_MODULES - EFFECTS_MODULES) | {
+    'integrations/ownerhost/service.py', 'integrations/platform/platform_contract.py',
+    'integrations/platform/platform_windows.py', 'integrations/platform/no_window.py', 'integrations/paths/aieh_paths.py'}
 FORBIDDEN_PREFIXES = ('integrations/credentials/', 'integrations/gitea/', 'integrations/dispatch/',
-                      'integrations/inference/', 'integrations/owner/')
+                      'integrations/inference/')
+# integrations/owner stays forbidden but for these exact files (P-04.4; the engineering manager's ruling 1): the
+# authorization recorder, the dispatch-input commands and every other owner module are never loaded.
+OWNER_PREFIX = 'integrations/owner/'
+OWNER_ALLOWED = {'integrations/owner/acceptance_recorder.py', 'integrations/owner/owner_decision.py',
+                 'integrations/owner/delegated_decision.py'}
+
+
+def forbidden(names) -> list:
+    """The names of NAMES under a forbidden prefix, or under integrations/owner/ and not in OWNER_ALLOWED."""
+    return sorted(n for n in names if n.startswith(FORBIDDEN_PREFIXES)
+                  or (n.startswith(OWNER_PREFIX) and n not in OWNER_ALLOWED))
 
 
 def tree(path: Path):
@@ -153,9 +182,32 @@ class NoClientSocket(unittest.TestCase):
             with self.subTest(module=relative(path)):
                 if relative(path) == REPOSITORY_ACCESS:   # its remote transport only (P-01.3; see the docstring)
                     self.assertEqual(network_imports(path), REPOSITORY_NETWORK_IMPORTS)
+                elif relative(path) == ACCEPTANCE_RECORDER:   # the URL parser in two functions only (P-04.4)
+                    self.assertEqual(network_imports(path), ACCEPTANCE_RECORDER_NETWORK_IMPORTS)
                 else:
                     self.assertEqual(imported(path) & set(NETWORK_MODULES), set())
                 self.assertEqual(connector_calls(path) - DATABASE_CONNECTS, set())
+
+    def test_the_effects_modules_are_exact_entries_with_no_client_connector_or_credential(self):
+        """P-04.4 ruling A: the two effects modules are in the census by name, never by prefix, and neither
+        imports a network client, calls a connector or names a credential, dispatch or inference module."""
+        census = {relative(p): p for p in server_census()}
+        self.assertEqual(sorted(n for n in census if n.startswith('integrations/effects/')), sorted(EFFECTS_MODULES))
+        for name in sorted(EFFECTS_MODULES):
+            with self.subTest(module=name):
+                path = census[name]
+                self.assertEqual(imported(path) & set(NETWORK_MODULES), set())
+                self.assertEqual(connector_calls(path) - DATABASE_CONNECTS, set())
+                self.assertEqual(forbidden(relative(p) for p in loaded_sources(path)), [])
+
+    def test_no_server_module_is_forbidden_and_the_attempt_resolver_is_outside_the_census(self):
+        """P-04.4: the census holds no credential, Gitea, dispatch or inference module, of integrations/owner only
+        OWNER_ALLOWED, and not the lineage attempt resolver (which names the dispatcher)."""
+        names = {relative(p) for p in server_census()}
+        self.assertEqual(forbidden(names), [])
+        self.assertEqual(sorted(n for n in names if n.startswith(OWNER_PREFIX)), sorted(OWNER_ALLOWED))
+        self.assertNotIn('integrations/lineage/lineage_attempt.py', names)
+        self.assertNotIn('integrations/owner/authorization_recorder.py', names)
 
     def test_the_one_socket_is_the_listener_which_binds_and_never_connects(self):
         app = T.PACKAGE / 'app.py'
@@ -251,7 +303,7 @@ class ImportCensus(unittest.TestCase):
         files = [Path(f) for f in json.loads(result.stdout) if f]
         loaded = {relative(f) for f in files if f.resolve().is_relative_to(T.REPO)}
         self.assertEqual(loaded, LIVE_SERVER_MODULES)
-        self.assertEqual([f for f in loaded if f.startswith(FORBIDDEN_PREFIXES)], [])
+        self.assertEqual(forbidden(loaded), [])
         packages = {part for f in files for part in f.parts[:-1]}     # a network client's package directory
         self.assertTrue(packages.isdisjoint({'urllib3', 'httpx', 'requests', 'aiohttp'}), 'a network client was loaded')
         self.assertFalse([f for f in files if f.parent.name == 'dulwich' and f.stem in ('client', 'protocol')],
@@ -274,7 +326,7 @@ class ImportCensus(unittest.TestCase):
         before, after = ({relative(Path(f)) for f in found if f and Path(f).resolve().is_relative_to(T.REPO)}
                          for found in json.loads(result.stdout))
         self.assertEqual(before, SUPERVISOR_MODULES)
-        self.assertEqual([f for f in before if f.startswith(FORBIDDEN_PREFIXES)], [])
+        self.assertEqual(forbidden(before), [])
         # the adapter still supplies the provider when asked: the module is loaded then, and only then
         self.assertEqual(after - before, {'integrations/credentials/credential_provider.py'})
 
