@@ -318,6 +318,63 @@ on a free loopback port, never `127.0.0.1:13310`, so a running Owner instance is
 stops only the processes it started. It stops the process gracefully, by its stop request: a killed process is not
 exercised.
 
+## Outcome projection (U-04.1): the state table
+
+**Not built yet.** This is the state table the engineering manager's ruling 1 for U-04.1 puts first: how the
+read-only outcome projection maps the dispatcher's own records to an attempt's typed status. The projection and its
+endpoint are not built; nothing here is verified.
+
+The status of one attempt comes only from the dispatcher's records in the integration store, opened read-only: never
+from an agent's exit claim, and never from an Agent Server, real or fixture (decision 0013 point 1; the I1 design,
+R6). Anything those records do not determine is `unknown`, never a guess. Each status names the record that shows
+it. The records are the typed attempt `attempt/v1/<...>` (its state and its transitions' details) and, under
+`dispatch/attempt/<attempt id>/`: the turn journal `turn`, the launch receipt `launch`, the result step's receipts
+`delivery`, `pull` and `intake`, the result journal `result` (its confirmed detail is the result receipt,
+`result-receipt/v1`), the end journal `end` (its confirmed detail is the end record, `attempt-end/v1`) and the stop
+receipts `stop/<kind>/<code>`.
+
+The rows are read in order, and the first that matches decides:
+
+| # | Records | Status | Code |
+|---|---|---|---|
+| 0 | The bound authority (R11): the reservation's pinned route allowlist's declaration cannot be read | `unknown` | `ATTEMPT_AUTHORITY_UNBOUND` |
+| 0 | Fixture-bound, and a record of the attempt lacks the label `authority: fixture` | `unknown` | `ATTEMPT_LABEL_MISSING` |
+| 0 | Fixture-bound, and a record carries another label | `unknown` | `ATTEMPT_LABEL_MISMATCH` |
+| 0 | Live-bound, and a record carries a label | `unknown` | `ATTEMPT_LABEL_ON_LIVE` |
+| 1 | Typed attempt `reserved`: no create sent | `pending` | `ATTEMPT_RESERVED` |
+| 2 | Typed attempt `dispatched`: the create sent, its answer not recorded | `running` | `CREATE_SENT` |
+| 3 | Typed attempt `unknown`: the create's answer lost (E-01.4.1 settles it) | `unknown` | `CREATE_OUTCOME_UNKNOWN` |
+| 4 | Typed attempt `failed`: a refused create, an admission or seam refusal, a reconciled 404 (the failed move's code) | `failed` | `ATTEMPT_FAILED` |
+| 5 | Confirmed, and a stop receipt is confirmed (decision 0024 point 7) | `failed` | `ATTEMPT_STOPPED` |
+| 6 | Confirmed, and the end record is written (its classification, causes and the dispatcher's surfaced execution status: an `error`, `stuck` or `paused` turn ends here, decision 0024 point 7.5) | `failed` | `ATTEMPT_ENDED` |
+| 7 | Confirmed, and the launch receipt's verdict is `not-launched` (the gate; the end follows) | `failed` | `LAUNCH_NOT_LAUNCHED` |
+| 8 | Confirmed, and the end journal is `unknown` | `unknown` | `ATTEMPT_END_UNSETTLED` |
+| 9 | Confirmed, and the end journal is `reserved` or `dispatched` | `running` | `ATTEMPT_ENDING` |
+| 10 | Confirmed, and the result journal is `confirmed` with its result receipt | `succeeded` | `RESULT_PUBLISHED` |
+| 11 | Confirmed, and the result journal is `failed` (its code, for example `RESULT_EMPTY_CHANGE`) | `failed` | `RESULT_FAILED` |
+| 12 | Confirmed, and the result journal is `unknown`: a write refused or its answer lost | `unknown` | `RESULT_WRITE_UNSETTLED` |
+| 13 | Confirmed, and the result journal is `dispatched` | `running` | `RESULT_PUBLISHING` |
+| 14 | Confirmed, and the result journal is `reserved`, or the intake receipt is confirmed: the host verified the result, nothing is published | `running` | `RESULT_VERIFIED` |
+| 15 | Confirmed, and a delivery or pull receipt exists: the result is reported, not yet verified | `running` | `RESULT_DELIVERED` |
+| 16 | Confirmed, and the turn journal is `unknown`: the message's answer lost | `unknown` | `TURN_OUTCOME_UNKNOWN` |
+| 17 | Confirmed, and the turn journal is `failed` (refused, or the run did not start) | `failed` | `TURN_FAILED` |
+| 18 | Confirmed, and the turn journal is `confirmed` (the message delivered) or `dispatched` (being sent) | `running` | `TURN_SENT`, `MESSAGE_SENDING` |
+| 19 | Confirmed, and the turn journal is `reserved`, or the launch receipt says `launched`, or nothing follows the create | `pending` | `MESSAGE_RESERVED`, `LAUNCHED`, `CREATED` |
+| 20 | Any record in a state or format these rows do not name | `unknown` | `RECORD_UNREADABLE` |
+
+**Reported and verified are kept apart.** `succeeded` comes only from the result receipt: the host computed the
+commit itself over the pulled bundle (the intake) and read the branch and the draft pull request back (the result
+path). Beside every status, the result's claims are shown with their basis: **reported** for what the attempt itself
+said (the commit and bundle digest RESULT printed, in the delivery receipt; the test status, outcome and output digest
+of the attempt's own tests, which are not independent CI) and **verified** for what the host established (the intake's
+commit, tree and bundle; the result receipt's branch head and pull request). A report never sets a status. The
+result receipt's commit, diff and test output are references with digests (`git:<repository>@<commit>`, the base and
+result commits of the diff with the Owner report's digests, the test output's sha256 and size), never copies.
+
+A fixture-bound attempt that passes row 0 is shown with its authority, `fixture`; one that fails row 0 is shown as
+neither. A task's status is its latest attempt's (`pending`, `NO_ATTEMPT`, when the integration store was read and
+holds none; `unknown`, `STORE_UNAVAILABLE`, when it could not be read).
+
 ## What it never does
 
 Decision 0025 point 2, each with its test: it opens no outbound connection, and the server process holds itself to
