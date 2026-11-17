@@ -6193,6 +6193,91 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - the end-to-end test in a clean clone, where it skips for lack of `node_modules`;
     - a live projection.
 
+- <a id="i1-execution-questions-3-2026-11-17"></a>**2026-11-17: Execution's third questions for planning on I1 (engineering manager; handoff, records only).**
+  - **State:** `origin/main` = `40fd425` before this entry; `plan_commitment.py U-06.1`: 72 leaves, 70 passed. U-01.2 is reported `ready` by the tool and is blocked by the note on its task. Everything U-01.2 can do without planning's answers is built, reviewed by a fresh read-only review and fixed, and pushed as checkpoints (`c289951`…`40fd425`): the records, the gate rules and observations, the E-01.7 UI-face fix-forward, the derive step with its off-by-default `--csp` option, the gated real-browser driver, the session-detail action, the engineering route, the frame and the card's link. No verdict has been given on it. Its gate G5 and criterion 2 wait on PB-14 and PB-15. `verify_seed` PASS; the full `tools/run_tests.py` PASS (16 suites, with and without the locked document).
+  - **Since the second handoff, passed and pushed:** E-01.8, U-04.1 and U-04.2, each with its verdict in this log ([E-01.8](#e-01-8-verdict-2026-11-17), [U-04.1](#u-04-1-verdict-2026-11-17), [U-04.2](#u-04-2-verdict-2026-11-17)).
+  - **Open:** U-01.2 (TASK-10), blocked at its gate G5 (below), and U-06.1 (TASK-16), which waits on U-01.2, OA-32, OA-33 and planning's acts for U-06.1.
+  - **No architect consultation.** The two blockers are choices among readings planning wrote and an Owner-reserved egress, not architecture: each option's mechanism is measured below. Planning may consult its own architect (gate G) if it wants one.
+  - **Blockers** (each recorded as a note on TASK-10):
+    - **PB-14, U-01.2: the pinned standalone Canvas reaches the internet.**
+      - **What happened.** Gate G5's rule (design section 6): "no request went to a host other than 127.0.0.1". The first G5 run (2026-11-17, headless Chrome with a throwaway profile, telemetry disabled, the two font imports removed) made 14 HTTPS GETs to `cdn.simpleicons.org`, answered 200 by Cloudflare. These were public brand logos (github, linear, gitlab, bitbucket, atlassian, jira, notion), which the bundled `@openhands/extensions` MCP catalog lists as `logoUrl` and which Canvas renders on its onboarding and home views.
+        - No credential was sent.
+        - The request headers were not recorded; the `Referer` was probably the origin `http://127.0.0.1:13330/`.
+        - The engineer stopped there, as the rule required.
+      - **Since then.** Every browser run blocks, at the browser, every request whose host is not 127.0.0.1, with an unreachable proxy behind that as a backstop. Nothing has escaped since.
+      - **Why it reaches planning.** Upstream's `static-server.mjs` has no header option, so a content-security policy can only be a `<meta>` element in the derived `index.html`. Planning's Canvas reading ([I1 blockers disposed of](#i1-blockers-disposed-2026-11-16)) says "the copy differs only by its two removed remote font imports" and "no JavaScript file is changed".
+      - **Measured.** The derive step (`apps/owner-host/scripts/canvas-standalone.mjs`, `--csp`, off by default) adds a default-deny policy:
+        - `default-src 'self'`;
+        - `script-src 'self'` with the six inline-script hashes;
+        - `img-src 'self' data:`;
+        - `connect-src 'self' ws://127.0.0.1:13330`;
+        - `font-src`, `worker-src`, `object-src 'none'`, `base-uri` and `form-action`.
+
+        With it on, the logos are refused by the policy itself (298 `img-src` violations) and nothing else is: no script, style, connection or worker violation, with the same loopback requests and the same views. No JavaScript file changes. The default build stays byte-identical to the font-only copy.
+      - **Options:**
+        - (a) amend the reading so the derived copy may also carry this one CSP `<meta>` element, still with no JavaScript changed. **Recommended:** it keeps I1 offline, as the Owner directed, and enforces it in the page.
+        - (b) the Owner approves `cdn.simpleicons.org` as an egress origin. That is reserved to him (decision 0018 point 4.7), and execution does not recommend it.
+        - (c) another route planning prefers.
+      - **Not yet known:** whether the conversation view itself, once reached, loads any off-host resource. PB-15 has kept G5 from reaching it.
+    - **PB-15, U-01.2: Canvas's analytics-consent onboarding needs a write.**
+      - **What blocks.** With the UI face now answering `GET /api/settings` (source-derived, E-01.7 fix-forward), Canvas passes its backend check and then shows a modal, "Help improve OpenHands".
+        - "Send anonymous usage data" is ticked by default.
+        - The modal shows whenever the settings carry no `misc_settings.app_preferences.user_consents_to_analytics`, despite `--disable-telemetry`.
+        - Declining sends `PATCH /api/settings`. The read-only UI face answers its labelled 501, and the modal stays ("Skip for now" does nothing).
+        - So the conversation view is not reached.
+      - **Why it reaches planning:**
+        - planning's reading says "telemetry is disabled only by an upstream setting";
+        - E-01.7's UI face is read-only;
+        - the consent value is the Owner's own preference, which no agent may state for him.
+      - **Options:**
+        - (a) the UI face's `ui-settings` answer carries `user_consents_to_analytics: false`. This is not a source-derived default: a fresh server carries none. It needs a class planning admits (for example a pinned rule tied to I1's offline condition and `--disable-telemetry`), and it presents "declined" without the Owner having chosen.
+        - (b) the UI face accepts exactly this one `PATCH`, for this one field only: held in memory per process, labelled, never persisted, never forwarded. The Owner then makes the choice himself in the dialog at U-06.1, and `--disable-telemetry` and PB-14's policy keep it without effect.
+        - (c) another route.
+
+        Execution leans to (b), because the consent stays the Owner's act. It changes E-01.7's read-only face, which is planning's to accept.
+  - **Readings for planning to confirm or correct** (no criterion changes proposed):
+    - **R10 against PB-3's wording "(an import census)"** (E-01.8). The production result path imports `gitea_host`, which loads `credential_provider.py`'s code at import time. Nothing in it is constructed, no entry is read, and `advapi32` is never loaded; E-01.8's census test shows each. The engineering manager accepted this reading in [E-01.8's verdict](#e-01-8-verdict-2026-11-17). PB-3's "the host credential provider is never constructed (an import census)" is met in substance, but not as a pure import census.
+    - **PB-5 and the outcome projection** (U-04.1). The projection keeps the lineage verdict unfiltered and adds `fixture-authority` on fixture-bound attempt nodes, so a projection that used a fixture is never `complete` (R11). U-06.1's item (8) is judged from the dispatcher-side trace in the run record (R6), not from the projection's verdict.
+    - **Archived tasks** (U-04.1). Backlog.md 1.55.3's `task list` cannot enumerate archived tasks (observed), and `task view` resolves one by id. The projection resolves archived tasks it reaches by reference, and states the enumeration limit in an always-present `coverage` field rather than as a lineage uncertainty.
+  - **For U-06.1's design acceptance and OA-33's presentation:**
+    - **The execution window** (items 5 and 7). On the fixture, no deterministic window exists between the message and the result: the dispatcher face answers `finished` at the first status read, and withholding a read makes `wait_for_turn` raise `CONVERSATION_UNOBSERVED`. The engineer's proposal: a two-phase command that stops after the message is confirmed and resumes the result step later. Between the two phases the card would show `running` (`TURN_SENT`). That is honest only if the run's record says the pause is the command's, not the agent's.
+    - **The command's result target.** E-01.8 proved the fixture path's publication against E-05.4's in-process fakes. Whether U-06.1 publishes to the live local Gitea (127.0.0.1:13300, a live effect on the Owner's Gitea) or to a loopback double (a new listener needing R7's records) is a design choice for U-06.1, and with it OA-33's conditions.
+    - **OA-33:**
+      - The candidate `integrations/dispatch/candidates/fixture-approved-inputs.json` is version 3 (design `dd18102d`, pin `a7a1153`, pushed). Before the presentation, execution checks that the live promotion series holds exactly versions 1 and 2.
+      - Promoting it replaces D1's version 2 as the live manifest. The presentation must say so.
+      - The fixture profile's digest changed during E-01.8's review (now `c136af2b…f90e`), and the candidate carries the current one.
+    - **The Owner's git identity** (decision 0028). The capture and acceptance writes refuse until `components.owner_host.git_identities` holds his identity, so it is presented with OA-32.
+  - **Discovered work** (for planning: each its own leaf or a deferral; none is absorbed into a committed leaf):
+    1. **PB-13 (carried):** E-01.5's live non-overlap 404 window and the orphan exit, before E-01.6 runs live. An architect consultation (gates A and G) is recommended when the work is taken up.
+    2. **The native result path's default commit identity** is still decision 0024 point 4's `aieh-bot-builder@localhost.invalid`. Decision 0028 supersedes it for new commits; it is to be migrated before E-01.6 runs live.
+    3. **The harness's Gitea service accounts** are registered with `localhost.invalid` emails (`gitea_host.EMAIL_DOMAIN`, decision 0028's consequence).
+    4. **`gitea_host`'s run record** is replaced with `os.replace` without a lock against a concurrent writer.
+    5. **The lineage traversal reaches an archived task only through a reservation that cites the outcome.** Otherwise the task is omitted, and the traversal records no uncertainty for it.
+    6. **Backlog.md 1.55.3's `task delete`** releases an archived task's id, and the next task created takes it (observed). A `backlog:` reference carries no digest, so it then resolves to the later task: a wrong resolution, not a failure.
+    7. **`repository_access`'s symbolic-link check** does not see Windows directory junctions, for every caller of `write_commit` (P-01.3's capture included).
+    8. **Flaky tests:**
+       - `integrations/store/tests/test_backup_restore.py`'s retention test fails about 1 run in 6: `storecore.backup_store` names a copy by a microsecond timestamp and the high-water mark, and this host's clock advances in 0.5–16 ms ticks;
+       - `integrations/lineage/tests/test_traversal_git.OneTraversal`'s git-to-module timing ratio failed once (0.01276 against 0.01298) and passed on re-run.
+    9. **Suite hygiene:**
+       - the dispatch tests leave `aieh-*` temp directories, because read-only git pack files survive `rmtree(..., ignore_errors=True)`;
+       - `test_listener` and `test_history_listener` leave `Popen` objects (`ResourceWarning`).
+    10. **Stale record text:**
+        - `policy/network-matrix.json` `nm-owner-ui-conversation`'s `inspection` still reads "planned: U-01.2, E-01.3.x" after C4 moved its `builds_at` to U-03.1;
+        - `security/inventory.json` `app-owner-host` still says "U-02.1 (built 2026-11-16, its verdict pending)".
+    11. **For U-03.1, from U-01.2's review:**
+        - **Cookies:** upstream's Canvas proxy forwards every request header, so the Owner's `127.0.0.1` cookies (Gitea's on 13300 among them) reach the proxy target. That is harmless with the fixture, which records no header (`test_served.NoCredentialRecorded`). Against a guest's inner server they would cross into the engineering domain.
+        - **Rebinding and framing:** upstream's static server checks no `Host` header, and a meta CSP cannot set `frame-ancestors`, so the Canvas origin is exposed to DNS rebinding and framing once its key is real. The fixture's UI face now refuses any other `Host`.
+        - **What the network log cannot see:** DNS prefetch and service-worker requests are not in a page's network log. G5's driver now maps every other hostname to not-found and runs its own recording backstop proxy.
+  - **For the Owner, as information** (in the next report and in OA-32's presentation):
+    - the egress of 2026-11-17 (PB-14);
+    - the loopback listeners: the Integration process 13310, the fixture 13320, the Canvas server 13330;
+    - the ASGI stack in the tools set;
+    - source-derived fields on the UI face;
+    - required properties not served;
+    - clock replay.
+  - **U-01.2, information for the Owner now:** until PB-14 is disposed of, the standalone Canvas (`npm run canvas:serve`) must not be opened in a normal browser. The records and both READMEs say so.
+  - **Next:** planning disposes of PB-14 and PB-15 and prepares U-06.1's acts. Execution then completes U-01.2's gate G5 and criterion 2, and runs U-06.1 after OA-32 and OA-33.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
