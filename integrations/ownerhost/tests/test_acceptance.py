@@ -399,9 +399,11 @@ class ConfigurationRefusals(Rig):
 
 
 class RaceWindow(Rig):
-    """Only a race reaches the recorder's backstop after the reservation (the engineering manager's ruling B on P-04.4):
-    every refusal the project repository's own state would cause is checked before the reservation
-    (RepositoryStateRefusals), so here another process changes the repository between those checks and the commit.
+    """A race reaching the recorder's backstop after the reservation (the engineering manager's ruling B on P-04.4):
+    every refusal the project repository's own state or the change's content would cause is checked before the
+    reservation (RepositoryStateRefusals), so here another process changes the repository between those checks and
+    the commit. The only other paths to the backstop are the lineage resolver's check of the new commit and a failure
+    inside the commit (OutcomeUnknown), as acceptance.py's docstring names them.
     The backstop's refusal leaves the receipt reserved and nothing in the project repository; once repaired, the same
     message records exactly one acceptance; a process that ended after the commit is settled by reading the
     repository first."""
@@ -561,6 +563,15 @@ class CardChecks(Rig):
         self.append('Acc0001', ACCEPT, 'Rev0001')
         self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
 
+    def test_a_card_stored_before_the_challenge_as_the_newest_message_is_refused(self):
+        """The boundary (review N02): the card is the thread's newest message when prepare runs, so its seq equals the
+        recorded one; it was not written after the challenge was issued."""
+        self.append('Crd0001', 'A card written just before the challenge.', 'Rev0001', role='assistant')
+        card = self.challenge(store_card=False)
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        answer = self.refused('ACCEPTANCE_NOT_AFTER_CARD', self.accept, 'Acc0001', card['nonce'], status=409)
+        self.assertIn('before the challenge was issued', answer['detail'])
+
     def test_a_card_and_an_accept_stored_before_the_challenge_are_refused(self):
         """The reviewer's P3 (N1): the card and the Accept exist before prepare is asked, and prepare names that card."""
         self.append('Crd0001', 'A card written before any challenge.', 'Rev0001', role='assistant')
@@ -595,7 +606,8 @@ class CardChecks(Rig):
 class RepositoryStateRefusals(Rig):
     """Review fix S2: what the recorder or the repository-access module would refuse for the project repository's own
     state is refused before the receipt is reserved (acceptance.preflight, the module's own write_commit asked to
-    commit nothing), so that only a race reaches the backstop. Each refusal leaves the project repository (HEAD, every
+    commit nothing, then the decision-record directory and the content through the recorder's own functions), so
+    that only what acceptance.py names reaches the backstop. Each refusal leaves the project repository (HEAD, every
     ref, the index file, the work tree, the object store's count), the conversation store and the integration store
     as they were; once repaired, the same message records exactly one acceptance."""
 
@@ -659,12 +671,157 @@ class RepositoryStateRefusals(Rig):
         fx.git(self.project, 'merge', '--abort')
         self.repaired_records_once()
 
+    def link_cases(self):
+        """(name, make, remove) for a symbolic link and, on Windows, a directory junction, each pointing outside."""
+        import os
+        cases = [('a symbolic link', lambda target, link: os.symlink(target, link, target_is_directory=True))]
+        if os.name == 'nt':
+            import _winapi
+            cases.append(('a junction', lambda target, link: _winapi.CreateJunction(str(target), str(link))))
+        return cases
+
+    def test_a_link_or_junction_at_the_decision_records_is_refused_before_the_reservation(self):
+        """The reviewer's Q1: owner-decisions/ a symbolic link (or a junction) to a directory outside the project."""
+        import os
+        link = self.project / CHANGE_DIR / 'owner-decisions'
+        for name, make in self.link_cases():
+            with self.subTest(case=name):
+                target = self.work / f'elsewhere-{len(name)}'
+                target.mkdir()
+                make(target, link)
+                try:
+                    self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+                    self.assertEqual(list(target.iterdir()), [])
+                finally:
+                    os.rmdir(link)
+        self.repaired_records_once()
+
+    def test_an_untracked_file_at_the_decision_records_is_refused_before_the_reservation(self):
+        """The reviewer's Q2: an untracked file where the commit puts the decision-record directory."""
+        in_the_way = self.project / CHANGE_DIR / 'owner-decisions'
+        in_the_way.write_bytes(b'an untracked file in the way\n')
+        answer = self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        self.assertIn('in the way', answer['detail'])
+        in_the_way.unlink()
+        self.repaired_records_once()
+
+    def test_a_tracked_file_at_the_decision_records_is_refused_before_the_reservation(self):
+        """The reviewer's Q3: a tracked file where the commit puts the decision-record directory (committed after the
+        card was shown, outside the change's proposal, so the challenge is not stale)."""
+        in_the_way = self.project / CHANGE_DIR / 'owner-decisions'
+        in_the_way.write_bytes(b'a tracked file in the way\n')
+        fx.commit_all(self.project, 'a file in the way')
+        self.refused('COMMIT_REFUSED', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        in_the_way.unlink()
+        fx.commit_all(self.project, 'the file out of the way')
+        self.repaired_records_once()
+
+    def test_the_content_checks_run_before_the_reservation(self):
+        """INTENT_RECORD_INVALID and the x-outcomes readback's RESOLUTION_FAILED, through the recorder's own functions,
+        refused before anything is reserved (each forced by a stand-in for the recorder's function)."""
+        with mock.patch.object(REC, '_record_problems', lambda proposal: ['injected: the record would be invalid']):
+            self.refused('INTENT_RECORD_INVALID', self.accept, 'Acc0001', self.card['nonce'], status=409)
+        with mock.patch.object(REC, 'declare_outcome', lambda meta, outcome, item, reference: meta):
+            self.refused('RESOLUTION_FAILED', self.accept, 'Acc0001', self.card['nonce'], status=500)
+        self.repaired_records_once()
+
+    def test_a_passing_preflight_writes_nothing_in_the_repository(self):
+        import os
+        git_dir = self.project / '.git'
+
+        def snapshot():
+            files = {}
+            for directory, _dirs, names in os.walk(git_dir):
+                for name in names:
+                    path = Path(directory, name)
+                    files[path.relative_to(git_dir).as_posix()] = path.read_bytes()
+            return (files, (git_dir / 'index').stat().st_mtime_ns, fx.git(self.project, 'for-each-ref'),
+                    fx.git(self.project, 'count-objects', '-v'))
+        before = snapshot()
+        repo = AC.capture.open_project(AC.capture.project_config(self.config))
+        try:
+            reference = f'conversation:{self.thread_id}/Acc0001#sha256:{sha(ACCEPT)}'
+            self.assertIsNone(AC.preflight(repo, 'add-slugify', 'O1', reference, IDENTITY))
+        finally:
+            repo.close()
+        self.assertEqual(snapshot(), before)
+
     def test_a_refused_read_of_the_repository_is_git_failed(self):
         def broken(*_args):
             raise AC.ra.RepositoryError('GIT_FAILED', 'a read the repository refused')
         with mock.patch.object(AC.Acceptance, '_amend', staticmethod(broken)):
             answer = self.refused('GIT_FAILED', self.accept, 'Acc0001', self.card['nonce'], status=500)
         self.assertEqual(answer['remedy'], REC.REMEDIES['GIT_FAILED'])
+
+
+class OutcomeUnknown(Rig):
+    """Review fix R1: once a commit may exist (an earlier receipt not confirmed, or a failure inside the commit), a
+    failure is ACCEPTANCE_OUTCOME_UNKNOWN with its remedy, never GIT_FAILED or CAPTURE_GIT_FAILED; the same message
+    then settles to exactly one acceptance."""
+
+    def setUp(self):
+        super().setUp()
+        self.card = self.challenge()
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+
+    def dispatched(self):
+        """A receipt left dispatched: the commit is made, the process ended before the confirmation."""
+        real = C.integration_store.IntegrationStore.transition
+
+        def crash(store, key, state, *args, **kwargs):
+            if state == 'confirmed':
+                raise Crash()
+            return real(store, key, state, *args, **kwargs)
+        with mock.patch.object(C.integration_store.IntegrationStore, 'transition', crash), self.assertRaises(Crash):
+            self.accept('Acc0001', self.card['nonce'])
+        self.assertEqual(self.receipt('Acc0001')[0].state, 'dispatched')
+        self.assertEqual(len(self.acceptance_commits()), 1)
+
+    def assert_unknown(self, answer, status):
+        self.assertEqual((status, answer['code']), (500, 'ACCEPTANCE_OUTCOME_UNKNOWN'), answer)
+        self.assertEqual(answer['remedy'], AC.REMEDIES['ACCEPTANCE_OUTCOME_UNKNOWN'])
+
+    def test_a_refused_repository_read_while_settling_is_outcome_unknown(self):
+        self.dispatched()
+
+        def broken(*_args, **_kwargs):
+            raise AC.ra.RepositoryError('GIT_FAILED', 'a read the repository refused')
+        with mock.patch.object(AC, 'find_acceptance', broken):
+            status, answer = self.accept('Acc0001', self.card['nonce'])
+        self.assert_unknown(answer, status)
+        settled = self.accepted('Acc0001', self.card['nonce'])
+        self.assertEqual(self.acceptance_commits(), [settled['commit']])
+
+    def test_a_refused_branch_read_while_settling_is_outcome_unknown(self):
+        self.dispatched()
+
+        def broken(_repo):
+            raise C.CaptureRefused('CAPTURE_GIT_FAILED', 'the local branches cannot be read')
+        with mock.patch.object(C, 'branch_tips', broken):
+            status, answer = self.accept('Acc0001', self.card['nonce'])
+        self.assert_unknown(answer, status)
+        settled = self.accepted('Acc0001', self.card['nonce'])
+        self.assertEqual(self.acceptance_commits(), [settled['commit']])
+
+    def test_a_failure_inside_the_commit_is_outcome_unknown_and_records_once_after_repair(self):
+        """An object store that cannot be written: the recorder's GIT_FAILED from inside write_commit (never the
+        preflight's, which writes nothing). The receipt stays reserved; once repaired, the same message settles by
+        reading first and records exactly once."""
+        real = AC.ra.Repository.write_commit
+
+        def unwritable(repo, files, message, **kwargs):
+            if message == AC.PREFLIGHT_MESSAGE:
+                return real(repo, files, message, **kwargs)
+            raise AC.ra.RepositoryError('GIT_FAILED', 'cannot write the commit objects: OSError: the disk is full')
+        with mock.patch.object(AC.ra.Repository, 'write_commit', unwritable):
+            status, answer = self.accept('Acc0001', self.card['nonce'])
+        self.assert_unknown(answer, status)
+        self.assertEqual(self.acceptance_commits(), [])
+        self.assertEqual(self.receipt('Acc0001')[0].state, 'reserved')
+        with mock.patch.object(AC, 'find_acceptance', wraps=AC.find_acceptance) as found:
+            answer = self.accepted('Acc0001', self.card['nonce'])
+        self.assertEqual(found.call_count, 1)
+        self.assertEqual(self.acceptance_commits(), [answer['commit']])
 
 
 class CodeParity(unittest.TestCase):

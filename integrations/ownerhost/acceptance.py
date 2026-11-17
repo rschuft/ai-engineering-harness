@@ -53,25 +53,44 @@ project repository, the conversation store, the integration store):
    changed at HEAD since it was prepared (``CHALLENGE_STALE``);
 8. the change's x-outcomes must read (``OUTCOME_METADATA_INVALID``): whether this is a re-acceptance (the recorder's
    amend, which keeps the outcome id) is read from them at HEAD;
-9. the project repository's own state, as the commit would find it (``preflight``): the repository-access module's
+9. the project repository's own state, as the commit would find it (``preflight``; a detached HEAD never gets here:
+   opening the project refuses it, ``CAPTURE_PROJECT_UNAVAILABLE``, in step 5): the repository-access module's
    ``write_commit`` is asked to commit the change's two existing files with their HEAD bytes, which it refuses after
    every check of its own and before it writes anything (``nothing-to-commit`` means every check passed). Any other
-   refusal is the recorder's code: ``HOOKS_UNSUPPORTED`` (a client hook), ``COMMIT_REFUSED`` (HEAD not a branch,
-   ``commit.gpgSign``, an unmerged or unsupported index, local changes to the change's files, a path in the way),
-   ``GIT_FAILED``. A read the repository refuses on this path is ``GIT_FAILED`` too.
+   refusal is the recorder's code: ``HOOKS_UNSUPPORTED`` (a client hook), ``COMMIT_REFUSED`` (``commit.gpgSign``, an
+   unmerged or unsupported index, local changes to the change's files, a path in the way), ``GIT_FAILED``. Then the
+   decision-record directory, ``owner-decisions/`` of the change, which the commit adds a file to and which those
+   checks do not see until the commit: a symbolic link or junction anywhere along its path (``COMMIT_REFUSED``,
+   the module's own leading-path check, and a junction check it lacks), or anything but a directory at it, tracked at
+   HEAD or not (``COMMIT_REFUSED``). Then the content, through the recorder's own functions: the proposal with the
+   acceptance set must still be a valid intent record (``INTENT_RECORD_INVALID``), and the x-outcomes block with the
+   outcome declared must read back as declared (``RESOLUTION_FAILED``). A read the repository refuses on this path is
+   ``GIT_FAILED`` too.
 
 Then the write-ahead receipt ``owner-ui/objective-acceptance/v1/<thread>/<message>`` is reserved in the integration
 store, and the recorder makes its one commit (the decision record, the item's acceptance and, the first time, the
 minted outcome id; resolved through the lineage objective resolver before the branch moves). The receipt goes to
-``dispatched`` and ``confirmed`` with the commit, the outcome and the decision. **The race window**: only another
-process changing the project repository between these checks and the recorder's commit reaches the recorder's own
-checks, the backstop. If it refuses then, the receipt stays ``reserved`` (the integration store's receipts are never
-deleted) and nothing is written to the project repository. The same message may be sent again once the cause is
-repaired: a receipt left ``reserved`` or ``dispatched`` is settled **by reading the repository first** (every local
-branch and every parent: a commit whose message carries the recorder's line ``Statement: <reference> (owner-ui).``),
-and only when none is found is the recorder asked again. If the race also outlives the challenge (it expires, or the
-process restarts), that message cannot be recorded any more: the Owner reviews again and sends a new Accept message,
-which is a new receipt key; the old receipt stays ``reserved``, by the store's invariant.
+``dispatched`` and ``confirmed`` with the commit, the outcome and the decision. **What can still reach the recorder's
+own checks, the backstop, after the reservation**, and nothing else:
+
+- a race: another process changing the project repository between these checks and the recorder's commit (the
+  backstop's refusal keeps its code);
+- the lineage objective resolver's check of the new commit before the branch moves (``RESOLUTION_FAILED``), which
+  needs the commit's objects and so cannot run earlier, and the recorder's own invariant on the decision record it
+  builds (``RESOLUTION_FAILED``);
+- an object store that cannot be written, or any other failure inside the commit (``ACCEPTANCE_OUTCOME_UNKNOWN``:
+  once ``write_commit`` runs, a commit may exist, so the answer says so; read the repository, then send the same
+  acceptance again).
+
+In each case the receipt stays ``reserved`` (the integration store's receipts are never deleted) and nothing is
+written to the project repository unless the answer says a commit may be there. The same message, sent again once
+the cause is repaired, records exactly once: a receipt left ``reserved`` or ``dispatched`` is settled **by reading
+the repository first** (every local branch and every parent: a commit whose message carries the recorder's line
+``Statement: <reference> (owner-ui).``), and only when none is found is the recorder asked again. Once a commit may
+exist (an earlier receipt not confirmed, or a failure inside the commit), a failure of that reading or of the
+commit is ``ACCEPTANCE_OUTCOME_UNKNOWN``, never ``GIT_FAILED``. If the cause outlives the challenge (it expires, or
+the process restarts), that message cannot be recorded any more: the Owner reviews again and sends a new Accept
+message, which is a new receipt key; the old receipt stays ``reserved``, by the store's invariant.
 
 Idempotent by message id: a confirmed receipt answers its commit and writes nothing, only for the request it was made
 for (its project, change, item, message digest and nonce: ``ACCEPTANCE_RECEIPT_CONFLICT`` otherwise). A refusal of
@@ -178,6 +197,7 @@ PASSED_ON = ('CHALLENGE_INVALID', 'PROJECT_UNAVAILABLE', 'GIT_FAILED', 'CHANGE_M
              'OUTCOME_NOT_MINTED', 'ACCEPTANCE_ALREADY_RECORDED', 'ACCEPTANCE_REFERENCE_INVALID', 'RESOLUTION_FAILED',
              'HOOKS_UNSUPPORTED', 'COMMIT_REFUSED', 'SESSION_BINDING_REQUIRED', 'SESSION_BINDING_REFUSED')
 PREFLIGHT_MESSAGE = 'preflight of an objective acceptance (never committed)'
+STAND_IN_OUTCOME = '00000000-0000-4000-8000-000000000000'   # content_check's outcome id, never written
 RECORDER_STATUS = {'PROJECT_UNAVAILABLE': 503, 'GIT_FAILED': 500, 'RESOLUTION_FAILED': 500, 'CHANGE_MISSING': 404,
                    'ITEM_NOT_OBJECTIVE': 422, 'OBJECT_NAME_INVALID': 422}
 
@@ -198,6 +218,21 @@ def _refused(exc) -> AcceptanceRefused:
         return AcceptanceRefused(exc.code, exc.detail, exc.status, exc.remedy)
     return AcceptanceRefused(exc.code, exc.detail, STATUS.get(exc.code, RECORDER_STATUS.get(exc.code, 409)),
                              exc.remedy)
+
+
+class _Progress:
+    """What one acceptance has established: the commit on the branch once there is one, and whether a commit may exist
+    (an earlier receipt not confirmed, or a failure inside the commit). Once either holds, a failure is
+    ACCEPTANCE_OUTCOME_UNKNOWN (``unknown``), never GIT_FAILED."""
+
+    def __init__(self):
+        self.commit, self.maybe = None, False
+
+    def unknown(self, detail: str) -> AcceptanceRefused | None:
+        if self.commit is None and not self.maybe:
+            return None
+        where = f'the commit {self.commit} is on the branch' if self.commit else 'a commit may have been made'
+        return AcceptanceRefused('ACCEPTANCE_OUTCOME_UNKNOWN', f'{detail}; {where}')
 
 
 def _git_failed(exc) -> AcceptanceRefused:
@@ -393,7 +428,7 @@ class Acceptance:
                   'nonce': body['nonce'], 'change': change, 'item': item,
                   'project': {'id': config.project_repository_id, 'path': str(config.project_repository)}}
         repo = self._open(config)
-        progress = capture._Progress()
+        progress = _Progress()
         try:
             path = Path(self.integration_store_path) if self.integration_store_path is not None else None
             if path is not None and path.exists():
@@ -404,7 +439,7 @@ class Acceptance:
             held = self._checked(store, repo, thread_id, message_id, stored, change, item, body['nonce'],
                                  session['sessionId'])
             amend = self._amend(repo, change, item)
-            preflight(repo, change, identity)
+            preflight(repo, change, item, reference, identity)
             if path is None:
                 raise AcceptanceRefused('ACCEPTANCE_STORE_UNAVAILABLE', 'no integration store is named; nothing was '
                                                                         'changed')
@@ -414,14 +449,13 @@ class Acceptance:
                                     SessionBinding(store, thread_id, message_id, session['sessionId'], held),
                                     session['sessionId'], progress)
         except (integration_store.StoreError, sqlite3.Error) as exc:
-            code = 'ACCEPTANCE_OUTCOME_UNKNOWN' if progress.commit else 'ACCEPTANCE_STORE_UNAVAILABLE'
-            written = f'the commit {progress.commit} is on the branch' if progress.commit else 'nothing was committed'
-            raise AcceptanceRefused(code, f'the integration store refused: {type(exc).__name__}: {exc}; '
-                                          f'{written}') from None
+            refused = f'the integration store refused: {type(exc).__name__}: {exc}'
+            raise progress.unknown(refused) or AcceptanceRefused(
+                'ACCEPTANCE_STORE_UNAVAILABLE', f'{refused}; nothing was committed') from None
         except capture.CaptureRefused as exc:      # capture.py's branch reader, settling a receipt
-            raise _refused(exc) from None
+            raise progress.unknown(exc.detail) or _refused(exc) from None
         except (ra.RepositoryError, ra.CannotRun) as exc:
-            raise _git_failed(exc) from None
+            raise progress.unknown(str(exc)) or _git_failed(exc) from None
         finally:
             repo.close()
 
@@ -487,6 +521,7 @@ class Acceptance:
         same_intent(existing, intent, key)
         if existing.state == 'confirmed':
             return self._answer(receipts, key, created=False)
+        progress.maybe = True        # an earlier request reserved it: a commit may exist (its receipt was not confirmed)
         found = find_acceptance(repo, reference)
         if found is not None:
             progress.commit = found['commit']
@@ -514,6 +549,9 @@ class Acceptance:
                 progress.commit = committed
                 self._confirm(receipts, key, found, 'committed; the work tree was not brought to it', session_id)
                 return self._answer(receipts, key, created=True, work_tree='not brought to the commit')
+            if exc.code == 'GIT_FAILED':     # a failure inside the commit: a commit may exist
+                progress.maybe = True
+                raise progress.unknown(f'{exc.detail}; the receipt {key} stays reserved') from None
             refused = _refused(exc)
             refused.detail += (f'; the receipt {key} stays reserved and nothing was written to the project '
                                'repository: send the same acceptance again once the cause is repaired')
@@ -546,13 +584,18 @@ class Acceptance:
         return answer
 
 
-def preflight(repo, change: str, identity: str) -> None:
-    """The project repository's own state as the recorder's commit would find it, checked by the repository-access
-    module's own ``write_commit``: asked to commit the change's two existing files with their HEAD bytes, it runs every
-    refusal of its own (client hooks, the object format, ``commit.gpgSign``, HEAD a branch, the index, local changes
-    and paths in the way of those files) and then ``nothing-to-commit``, before it writes anything. That answer means
-    every check passed; any other is the refusal, under the recorder's code (``HOOKS_UNSUPPORTED``,
-    ``COMMIT_REFUSED``, ``OBJECT_NAME_INVALID``, else ``GIT_FAILED``). Nothing is ever written."""
+def preflight(repo, change: str, item: str, reference: str, identity: str) -> None:
+    """Everything the recorder's commit would refuse for the project repository's own state or for the change's
+    content, checked before the reservation. Nothing is ever written.
+
+    1. The repository-access module's own ``write_commit``, asked to commit the change's two existing files with their
+       HEAD bytes: it runs every refusal of its own (client hooks, the object format, ``commit.gpgSign``, HEAD a
+       branch (a detached HEAD is refused earlier, when the project is opened: ``CAPTURE_PROJECT_UNAVAILABLE``), the
+       index, local changes and paths in the way of those files) and then ``nothing-to-commit``, before
+       it writes anything. That answer means every check passed; any other is the refusal, under the recorder's code
+       (``HOOKS_UNSUPPORTED``, ``COMMIT_REFUSED``, ``OBJECT_NAME_INVALID``, else ``GIT_FAILED``).
+    2. The decision-record directory the commit adds a file to (``decisions_directory``).
+    3. The content, through the recorder's own functions (``content_check``)."""
     head = repo.head().commit
     files = {}
     for name in ('proposal.md', '.openspec.yaml'):
@@ -565,12 +608,62 @@ def preflight(repo, change: str, identity: str) -> None:
     try:
         repo.write_commit(files, PREFLIGHT_MESSAGE, identity=identity, expected_head=head)
     except ra.RepositoryError as exc:
-        if exc.code == 'COMMIT_REFUSED' and exc.details.get('reason') == 'nothing-to-commit':
-            return
-        code = exc.code if exc.code in ('HOOKS_UNSUPPORTED', 'COMMIT_REFUSED', 'OBJECT_NAME_INVALID') else 'GIT_FAILED'
-        raise AcceptanceRefused(code, f'{exc.message} (checked before anything was reserved)', 409 if code != 'GIT_FAILED'
-                                else 500, recorder.REMEDIES[code]) from None
-    raise AssertionError('the preflight committed')   # unreachable: its tree is HEAD's
+        if not (exc.code == 'COMMIT_REFUSED' and exc.details.get('reason') == 'nothing-to-commit'):
+            code = exc.code if exc.code in ('HOOKS_UNSUPPORTED', 'COMMIT_REFUSED', 'OBJECT_NAME_INVALID') else 'GIT_FAILED'
+            raise AcceptanceRefused(code, f'{exc.message} (checked before anything was reserved)',
+                                    409 if code != 'GIT_FAILED' else 500, recorder.REMEDIES[code]) from None
+    else:
+        raise AssertionError('the preflight committed')   # unreachable: its tree is HEAD's
+    decisions_directory(repo, head, change)
+    content_check(files[f'{capture.CHANGES_DIR}/{change}/proposal.md'],
+                  files[f'{capture.CHANGES_DIR}/{change}/.openspec.yaml'], item, reference)
+
+
+def _path_refused(text: str) -> AcceptanceRefused:
+    return AcceptanceRefused('COMMIT_REFUSED', f'{text}; nothing was written (checked before anything was reserved)',
+                             409, recorder.REMEDIES['COMMIT_REFUSED'])
+
+
+def decisions_directory(repo, head: str, change: str) -> None:
+    """The change's ``owner-decisions/``, where the recorder's commit adds the decision record: refused
+    (``COMMIT_REFUSED``) when a symbolic link leads to it or it is one (the repository-access module's own
+    leading-path check, as ``write_commit`` applies it to every path it writes), when a junction is on its path (a
+    Windows directory junction, which that check does not see), and when anything but a directory is at it: in the
+    work tree (an untracked or a tracked file) or in HEAD's tree (a tracked non-directory)."""
+    relative = f'{capture.CHANGES_DIR}/{change}/{recorder.DECISIONS_DIR}'
+    root = repo.root
+    if ra._has_symlink_leading_path(root, f'{relative}/record.json'):
+        raise _path_refused(f'a symbolic link leads to {relative}')
+    current = root
+    for part in relative.split('/'):
+        current = os.path.join(current, part)
+        if os.path.isjunction(current):
+            raise _path_refused(f'a junction leads to {relative}')
+    full = os.path.join(root, *relative.split('/'))
+    if os.path.lexists(full) and not os.path.isdir(full):
+        raise _path_refused(f'{relative} is in the way: a file, not a directory')
+    entry = repo._tree_entry(head, relative)
+    if entry is not None and entry[1] & ra._S_IFMT != ra._S_IFDIR:
+        raise _path_refused(f'{relative} is not a directory in HEAD')
+
+
+def content_check(proposal: bytes, meta: bytes, item: str, reference: str) -> None:
+    """The recorder's content checks of the commit it would make, through its own functions, before the reservation:
+    the proposal with the item's acceptance set (``set_acceptance``) must be a valid intent record
+    (``_record_problems``: ``INTENT_RECORD_INVALID``), and the x-outcomes block with the outcome declared
+    (``declare_outcome``; the item's existing id, else a stand-in, as the id is minted only by the recorder) must read
+    back as declared (``read_x_outcomes``: ``RESOLUTION_FAILED``)."""
+    problems = recorder._record_problems(recorder.set_acceptance(proposal, item, reference))
+    if problems:
+        raise AcceptanceRefused('INTENT_RECORD_INVALID', 'accepting the item would leave the proposal invalid: '
+                                + '; '.join(problems[:3]), 409, recorder.REMEDIES['INTENT_RECORD_INVALID'])
+    outcomes = recorder.R.read_x_outcomes(meta)
+    existing = sorted(oid for oid, entry in outcomes.items() if entry['item'] == item)
+    outcome = existing[0] if existing else STAND_IN_OUTCOME
+    declared = recorder.declare_outcome(meta, outcome, item, reference)
+    if recorder.R.read_x_outcomes(declared) != {**outcomes, outcome: {'item': item, 'acceptance': reference}}:
+        raise AcceptanceRefused('RESOLUTION_FAILED', 'the x-outcomes block the commit would write does not read back '
+                                'as declared', 500, recorder.REMEDIES['RESOLUTION_FAILED'])
 
 
 def same_intent(reservation, intent: dict, key: str) -> None:

@@ -212,7 +212,9 @@ class NoClientSocket(unittest.TestCase):
     def test_only_the_acceptance_passes_a_session_binding_to_the_recorder(self):
         """P-04.4 (review note N2): the recorder admits the owner-ui channel only with a session-binding verifier, and
         the one production caller that passes one is the Integration process's acceptance: no other module under
-        integrations/ or tools/ (tests aside) calls anything with session_binding=."""
+        integrations/ or tools/ (tests aside) calls anything with session_binding=. The census sees the literal
+        keyword only (a binding passed through **kwargs or positionally is not seen; accepted by the engineering
+        manager)."""
         callers = set()
         sources = [p for p in T.REPO.glob('integrations/**/*.py') if 'tests' not in p.relative_to(T.REPO).parts]
         for path in sorted(sources + list(T.REPO.glob('tools/*.py'))):
