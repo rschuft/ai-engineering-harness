@@ -240,6 +240,25 @@
       "kind": "MessageEvent",
       "source": "user"
     },
+    "container-inspect": {
+      "Image": "sha256:e8959dfc8e184f629b63dcd709f39b1cb0c804c8d19f34ba7a9e2cc8854042cb",
+      "HostConfig": {
+        "Memory": 4294967296,
+        "NanoCpus": 2000000000,
+        "PidsLimit": 512,
+        "NetworkMode": "bridge",
+        "ExtraHosts": [
+          "host.docker.internal:host-gateway"
+        ]
+      },
+      "mounts": {
+        "rule": "integrations/dispatch/dispatch_inputs.py _binds_for",
+        "profile": {
+          "path": "profiles/strong-windows-qemu-whpx/profile.json",
+          "sha256": "b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7"
+        }
+      }
+    },
     "refusal": {
       "status": 501
     }
@@ -1113,6 +1132,106 @@
       "read": false,
       "readBy": [],
       "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.Image`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3 (`.Image`, the locked image ID); D1 §5 (3) (one container, of the conversation, no container problem)",
+      "determinedBy": "the image the guest's Agent Server was provisioned with: the profile's provision lock `f02e430a…` at F-04.2's run (`fec83d9`) and at D1's (`9684d9c`; D1 §4, the provision: image `sha256:e8959dfc…`)",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.HostConfig.Memory`, `body.HostConfig.NanoCpus`, `body.HostConfig.PidsLimit`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3 (`Memory` 4294967296, `NanoCpus` 2000000000, `PidsLimit` 512, \"= config\"); D1 §5 (5b) (`cpu.max` 200000 100000, `memory.max` 4294967296, `pids.max` 512; \"the same caps in `HostConfig`\")",
+      "determinedBy": "the profile's server configuration (`conversation_container_memory` `4g`, `conversation_container_cpus` 2.0, `conversation_container_pids_limit` 512, the same at `fec83d9` and `9684d9c`) and a create that sends no `container.memory` or `container.cpus` (F-04.2 §7, the request caps override; both pinned templates send `container` `{\"browser\": false}` only)",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.HostConfig.NetworkMode`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3 (network `bridge`), §7 (`HostConfig.NetworkMode` `bridge`)",
+      "determinedBy": "the server's build: the pinned server passes no `--network` (F-04.2 §1, §7: `registry.py`), the same server and image at D1",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.HostConfig.ExtraHosts`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3 (`ExtraHosts` `host.docker.internal:host-gateway`), §7 (`[\"host.docker.internal:host-gateway\"]`)",
+      "determinedBy": "the server's build: `--add-host host.docker.internal:host-gateway`, unconditional (F-04.2 §1, §7: `registry.py` line 704), the same server and image at D1",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.Mounts[].Type`, `body.Mounts[].RW`",
+      "class": "observation",
+      "citation": "F-04.2 §4.3 (`Mounts` exactly the three declared binds, `RW` true); D1 §5 (3) (workspace scope exactly the three declared binds)",
+      "determinedBy": "the profile's declared mounts (`provisioning.agent_server.conversations.mounts`: three, each `bind` and `rw` true, the same at `fec83d9` and `9684d9c`)",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.Mounts[].Source`, `body.Mounts[].Destination`",
+      "class": "pinned-rule",
+      "citation": "the declared mounts of the profile D1 ran (`profiles/strong-windows-qemu-whpx/profile.json`, sha256 `b7c5d2fe…`, `provisioning.agent_server.conversations.mounts`) expanded with the conversation's hex by `integrations/dispatch/dispatch_inputs.py` `_binds_for`, the admission's own rule; F-04.2 §4.3 and D1 §5 (3) observed exactly the declared binds",
+      "determinedBy": "the request's conversation id (its hex)",
+      "read": true,
+      "readBy": [
+        "launch_gate._plain"
+      ],
+      "served": true,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`body.<every other field of the container's inspect>`",
+      "class": "none",
+      "citation": "not served: not read by the gate, which compares the fields above only (F-04.2 §4.3 records others, the container's name, labels, user, options and ports among them, and the mounts' `Mode` and `Propagation`; the guest's own inspection compares them: `tools/guest.py` `container_problems`)",
+      "determinedBy": "",
+      "read": false,
+      "readBy": [],
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "container-inspect",
+      "field": "`fixture`",
+      "class": "label",
+      "citation": "the fixture's label",
+      "determinedBy": "",
+      "read": false,
+      "readBy": [],
+      "served": true,
       "marks": ""
     },
     {

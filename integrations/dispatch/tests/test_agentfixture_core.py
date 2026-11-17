@@ -583,5 +583,100 @@ class Recording(unittest.TestCase):
         self.assertEqual(AC._kind(json.__file__)[0], 'skip')
 
 
+class ContainerInspect(unittest.TestCase):
+    """The container inspect E-01.5's launch gate reads (the ``container-inspect`` entry): each value found in the
+    section it cites, its determining inputs the same at F-04.2's run and at D1's, and the core's answer by state."""
+    category = 'unit'
+    PROFILE = REPO / 'profiles' / 'strong-windows-qemu-whpx'
+
+    def setUp(self):
+        self.core = AC.AgentServerCore()
+        self.addCleanup(self.core.close)
+
+    def test_each_value_is_in_its_cited_section(self):
+        entry = CATALOG['answers']['container-inspect']
+        f042 = 'evidence/F-04.2-conversation-lifecycle.md'
+        d1 = 'evidence/D1-run-2026-11-16.md'
+        cases = [
+            (f042, '### 4.3', [f'| `.Image` | `{entry["Image"]}` = the locked image ID |',
+                               '`Memory` 4294967296, `NanoCpus` 2000000000, `PidsLimit` 512 (= config)',
+                               '| `Mounts` | exactly the three declared binds (section 5), `RW` true',
+                               '| Network | `bridge`', '`ExtraHosts` `host.docker.internal:host-gateway`']),
+            (f042, '## 7. Containment deviations', ['`HostConfig.ExtraHosts` `["host.docker.internal:host-gateway"]`',
+                                                    '`HostConfig.NetworkMode` `bridge`']),
+            (d1, '## 5. The steps', ['| (3) | PASS | count 1; one container, of the conversation, no container problem',
+                                     'workspace scope exactly the three declared binds',
+                                     'limits `cpu.max` 200000 100000, `memory.max` 4294967296, `pids.max` 512',
+                                     'the same caps in `HostConfig`']),
+            (d1, '## 4. Before the dispatch', [f'Image `{entry["Image"]}`', '`b7c5d2fedb6495679d6d24eca7df652b4f55e88'
+                                               '32f2c17987c26569861eed9c7`', 'lock `f02e430a3f3de69976e5eb632d757126c9d'
+                                               '1a879ab68cf2c3681f9977a8168e0`']),
+        ]
+        for record, heading, texts in cases:
+            found = ' '.join(section(record, heading).split())
+            for text in texts:
+                with self.subTest(record=record, text=text):
+                    self.assertIn(' '.join(text.split()), found)
+        self.assertEqual(entry['HostConfig'], {'Memory': 4294967296, 'NanoCpus': 2000000000, 'PidsLimit': 512,
+                                               'NetworkMode': 'bridge',
+                                               'ExtraHosts': ['host.docker.internal:host-gateway']})
+
+    def test_the_determining_inputs_are_the_profile_d1_ran(self):
+        """The image by the provision lock the profile pins, the caps by its configuration and a create with no
+        container caps, the mounts by its declared binds: the checked-in profile is D1's (D1 section 4)."""
+        raw = (self.PROFILE / 'profile.json').read_bytes()
+        pin = CATALOG['answers']['container-inspect']['mounts']['profile']
+        self.assertEqual(pin, {'path': 'profiles/strong-windows-qemu-whpx/profile.json',
+                               'sha256': hashlib.sha256(raw).hexdigest()})
+        declared = json.loads(raw)
+        lock_pin = declared['provider']['provision_lock']
+        lock_raw = (REPO / lock_pin['path']).read_bytes()
+        self.assertEqual(hashlib.sha256(lock_raw).hexdigest(), lock_pin['sha256'])
+        self.assertEqual(json.loads(lock_raw)['image']['image_id'], CATALOG['answers']['container-inspect']['Image'])
+        config = declared['provisioning']['agent_server']['config']['content']
+        self.assertEqual((config['conversation_container_memory'], config['conversation_container_cpus'],
+                          config['conversation_container_pids_limit']), ('4g', 2.0, 512))
+        for name in ('d1-create.json', 'conversation-create.json'):
+            with self.subTest(template=name):
+                template = json.loads((self.PROFILE / 'agent-server' / name).read_text(encoding='utf-8'))
+                self.assertEqual(template['container'], {'browser': False})
+        mounts = declared['provisioning']['agent_server']['conversations']['mounts']
+        self.assertEqual([(m['type'], m['rw']) for m in mounts], [('bind', True)] * 3)
+
+    def test_the_core_answers_the_inspect_of_a_held_conversation_with_a_container(self):
+        cid = CID
+        self.assertEqual(self.core.container_inspect(cid)['fixture']['answer'], 'refusal', 'no conversation held')
+        self.core('POST', '/api/conversations', {'conversation_id': cid})
+        answer = self.core.container_inspect(cid)
+        self.assertEqual(set(answer), {'body', 'fixture'}, 'no HTTP status: it is not an Agent Server answer')
+        self.assertEqual(answer['fixture'], {**CATALOG['label'], 'answer': 'container-inspect'})
+        body = answer['body']
+        entry = CATALOG['answers']['container-inspect']
+        self.assertEqual((body['Image'], body['HostConfig']), (entry['Image'], entry['HostConfig']))
+        declared = json.loads((self.PROFILE / 'profile.json').read_bytes())
+        binds = AC._attempt_run().di._binds_for(declared['provisioning']['agent_server']['conversations']['mounts'],
+                                                cid.replace('-', ''))
+        self.assertEqual(body['Mounts'], [{'Type': b['type'], 'Source': b['source'], 'Destination': b['destination'],
+                                           'RW': b['rw']} for b in binds])
+        self.assertIn(f'/srv/scratch/openhands/conversations/{cid.replace("-", "")}',
+                      [m['Source'] for m in body['Mounts']])
+        self.assertEqual(self.core.calls[-1][:2], ('POST', '/api/conversations'), 'an inspect is no Agent Server call')
+        self.assertEqual([c for _, c in self.core.inspected], [cid, cid])
+        self.core('DELETE', f'/api/conversations/{cid}/runtime')
+        self.assertEqual(self.core.container_inspect(cid)['fixture']['answer'], 'refusal',
+                         'no container once the runtime is stopped (F-04.2 4.6)')
+
+    def test_the_inspect_is_refused_when_the_profile_is_not_the_one_d1_ran(self):
+        self.core('POST', '/api/conversations', {'conversation_id': CID})
+        catalog = copy.deepcopy(CATALOG)
+        catalog['answers']['container-inspect']['mounts']['profile']['sha256'] = '0' * 64
+        other = AC.AgentServerCore(catalog)
+        self.addCleanup(other.close)
+        other('POST', '/api/conversations', {'conversation_id': CID})
+        answer = other.container_inspect(CID)
+        self.assertEqual(answer['fixture']['answer'], 'refusal')
+        self.assertIn('not the profile D1 ran', answer['fixture']['refused'])
+
+
 if __name__ == '__main__':
     unittest.main()

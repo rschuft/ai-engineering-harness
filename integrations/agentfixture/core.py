@@ -40,6 +40,14 @@ production module of ``integrations/dispatch/``, else ``outside:<module>.<functi
 reads the core's answer before returning it). The read-binding test uses the record to bind the provenance table's
 Read column, and its "where", to what the dispatch path reads. With no recorder installed the answers are plain dicts.
 
+**The container inspect** (E-01.5, ``container_inspect``): not an Agent Server route. It is the recorded inspect
+source E-01.5's launch gate reads, the docker inspect of a conversation's container as the guest's root facts report
+it, answered from the catalog's ``container-inspect`` entry while the conversation is held with its runtime
+``available`` (a container exists exactly then: F-04.2 §4.3 and §4.6, D1 §5 (3)); otherwise refused with the label.
+Its mounts are the profile D1 ran's declared binds (checked by that profile's sha256) expanded with the conversation's
+hex by the admission's own rule (``dispatch_inputs._binds_for``). Each inspect is noted in ``inspected`` (with the
+length of the call log at that moment), not in ``calls``: it is not a request to the Agent Server.
+
 SEED's answer is derived by running the harness's own ``integrations/dispatch/attempt_run.py`` ``SEED_SCRIPT`` (the
 script the production path sends, compared with it exactly) over the request's payload in a scratch directory, with no
 visible window (the shared no-window helper); its output's line ends are the guest's (``\\n``). Its 200 is served only
@@ -50,6 +58,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -396,6 +405,7 @@ class AgentServerCore:
         self.served = {(row['answer'], path) for row in self.catalog['provenance'] if row['served']
                        for path in field_paths(row['field'])}
         self.calls: list[tuple[str, str, Any]] = []
+        self.inspected: list[tuple[int, Any]] = []
         self.conversations: dict[str, dict] = {}
         self._scratch, self._own_scratch = (Path(scratch) if scratch is not None else None), False
 
@@ -424,12 +434,21 @@ class AgentServerCore:
     def label(self, answer: str, **extra) -> dict:
         return {**self.catalog['label'], 'answer': answer, **extra}
 
-    def made(self, answer: str, status: int, body=None, *, has_body: bool = True, **label) -> dict:
-        """An answer of the catalog: its status, its served body, the label; recording when a recorder is installed."""
+    def _served_key(self, answer: str, key) -> bool:
+        """Whether the catalog serves body field KEY of ANSWER, or a field inside it."""
+        path = f'body.{key}'
+        return any(a == answer and (p == path or p.startswith(path + '.') or p.startswith(path + '[]'))
+                   for a, p in self.served)
+
+    def made(self, answer: str, status: int | None, body=None, *, has_body: bool = True, has_status: bool = True,
+             **label) -> dict:
+        """An answer of the catalog: its status (none for the container inspect, which has no HTTP status), its
+        served body, the label; recording when a recorder is installed."""
         if has_body and isinstance(body, dict):
-            unlisted = sorted(k for k in body if (answer, f'body.{k}') not in self.served)
+            unlisted = sorted(k for k in body if not self._served_key(answer, k))
             assert not unlisted, f'{answer}: body fields not served by the catalog: {unlisted}'
-        made = {'status': status, **({'body': body} if has_body else {}), 'fixture': self.label(answer, **label)}
+        made = {**({'status': status} if has_status else {}), **({'body': body} if has_body else {}),
+                'fixture': self.label(answer, **label)}
         recorder = RECORDER
         return _wrap(made, recorder, answer, '') if recorder is not None else made
 
@@ -553,6 +572,27 @@ class AgentServerCore:
                            'llm_message': {'content': [{'text': part['text']} for part in content]}}]
         held['execution_status'] = 'finished'
         return self.made('message', self.answers['message']['status'], has_body=False)
+
+    # -- the container inspect E-01.5's launch gate reads (not an Agent Server route) --------------------------
+    def container_inspect(self, conversation_id):
+        """The docker inspect of CONVERSATION_ID's container (the module docstring): the ``container-inspect`` entry
+        while the conversation is held with its runtime ``available``, else refused with the label."""
+        self.inspected.append((len(self.calls), conversation_id))
+        held = self._held(conversation_id) if isinstance(conversation_id, str) else None
+        if held is None or held.get('runtime') != 'available':
+            return self.refuse('a container inspect with no observation (no conversation held, or its runtime not '
+                               'available: no container)')
+        entry = self.answers['container-inspect']
+        pin = entry['mounts']['profile']
+        raw = (REPO / pin['path']).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != pin['sha256']:
+            return self.refuse('a container inspect whose declared mounts are not the profile D1 ran\'s')
+        binds = json.loads(raw)['provisioning']['agent_server']['conversations']['mounts']
+        expanded = _attempt_run().di._binds_for(binds, conversation_id.replace('-', ''))
+        mounts = [{'Type': b['type'], 'Source': b['source'], 'Destination': b['destination'], 'RW': b['rw']}
+                  for b in expanded]
+        body = {'Image': entry['Image'], 'HostConfig': copy.deepcopy(entry['HostConfig']), 'Mounts': mounts}
+        return self.made('container-inspect', None, body, has_status=False)
 
     # -- SEED: the harness's own script, run over the request's payload ---------------------------------------
     def scratch(self) -> Path:

@@ -1,4 +1,4 @@
-# The Agent Server fixture's cited core (E-01.4.2, slice 5c)
+# The Agent Server fixture's cited core (E-01.4.2, slice 5c; the container inspect, E-01.5)
 
 The one fixture catalog that E-01.7's served fixture will serve (slice 9), and the core that answers from it. In this
 slice the core answers **in process only**, on the dispatcher's face, and only tests import it: no listener, no served
@@ -41,9 +41,11 @@ event that records the dispatcher's own initial message): derived from the pinne
 
 | Key | Record |
 |---|---|
-| F-04.2 §4.1 to §4.9 | [evidence/F-04.2-conversation-lifecycle.md](../../evidence/F-04.2-conversation-lifecycle.md), section 4 (run A, `f042-a`): 4.1 the fixture and the routes, 4.2 create, 4.3 inspect, 4.4 the persisted events, 4.6 stop, 4.9 delete |
+| F-04.2 §4.1 to §4.9 | [evidence/F-04.2-conversation-lifecycle.md](../../evidence/F-04.2-conversation-lifecycle.md), section 4 (run A, `f042-a`): 4.1 the fixture and the routes, 4.2 create, 4.3 inspect (the server's view and the root facts: the container's docker inspect), 4.4 the persisted events, 4.6 stop, 4.9 delete |
+| F-04.2 §1, §7 | the same record: section 1, the pinned server's container build (`registry.py`: `--add-host host.docker.internal:host-gateway`, no `--network`); section 7, the containment deviations as observed on every container of run A |
 | F-04.1c §3 | [evidence/F-04.1c-agent-server.md](../../evidence/F-04.1c-agent-server.md), section 3 (run 1, `f041c-a`): `/server_info` as returned (complete), and `/api/conversations/count` (body `0`) |
-| D1 §5 | [evidence/D1-run-2026-11-16.md](../../evidence/D1-run-2026-11-16.md), section 5: the steps (2), (3), (4), (6), (7b), (9), (10) and "The dispatcher's calls" (method, path, status of every call) |
+| D1 §5 | [evidence/D1-run-2026-11-16.md](../../evidence/D1-run-2026-11-16.md), section 5: the steps (2), (3), (4), (5b), (6), (7b), (9), (10) and "The dispatcher's calls" (method, path, status of every call) |
+| D1 §4 | the same record, section 4 ("Before the dispatch"): the profile's sha256, the provision lock and the image the guest was provisioned with |
 
 Every observation in this catalog is cited to one of these. None needed the E-01.3.x or S-01.3.1 evidence: S-01.3.1's
 refused create is E-01.7's failed scenario (slice 9), not an answer E-01.4.2 uses.
@@ -208,6 +210,14 @@ element of a list; `fixture` is the label. The configuration range `90816fa..968
 | `message-event` | `llm_message.content` | source-derived | `sdk:openhands/sdk/llm/message.py:226`; `as:openhands/agent_server/event_router.py:226` | the request's `content` | yes: `attempt_run._message_texts` | yes | source-derived |
 | `message-event` | `llm_message.content[].text` | echo | the request's `content[].text` (`sdk:openhands/sdk/llm/message.py:179`) | the request | yes: `attempt_run._message_texts` | yes | source-derived |
 | `message-event` | `id`, `timestamp`, `llm_message.role`, `llm_message.content[].type`, `llm_response_id`, `activated_skills`, `extended_content`, `sender`, `critic_result` | none | not served: no committed observation, and not read | | no | no | |
+| `container-inspect` | `body.Image` | observation | F-04.2 §4.3 (`.Image`, the locked image ID); D1 §5 (3) (one container, of the conversation, no container problem) | the image the guest's Agent Server was provisioned with: the profile's provision lock `f02e430a…` at F-04.2's run (`fec83d9`) and at D1's (`9684d9c`; D1 §4, the provision: image `sha256:e8959dfc…`) | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.HostConfig.Memory`, `body.HostConfig.NanoCpus`, `body.HostConfig.PidsLimit` | observation | F-04.2 §4.3 (`Memory` 4294967296, `NanoCpus` 2000000000, `PidsLimit` 512, "= config"); D1 §5 (5b) (`cpu.max` 200000 100000, `memory.max` 4294967296, `pids.max` 512; "the same caps in `HostConfig`") | the profile's server configuration (`conversation_container_memory` `4g`, `conversation_container_cpus` 2.0, `conversation_container_pids_limit` 512, the same at `fec83d9` and `9684d9c`) and a create that sends no `container.memory` or `container.cpus` (F-04.2 §7, the request caps override; both pinned templates send `container` `{"browser": false}` only) | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.HostConfig.NetworkMode` | observation | F-04.2 §4.3 (network `bridge`), §7 (`HostConfig.NetworkMode` `bridge`) | the server's build: the pinned server passes no `--network` (F-04.2 §1, §7: `registry.py`), the same server and image at D1 | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.HostConfig.ExtraHosts` | observation | F-04.2 §4.3 (`ExtraHosts` `host.docker.internal:host-gateway`), §7 (`["host.docker.internal:host-gateway"]`) | the server's build: `--add-host host.docker.internal:host-gateway`, unconditional (F-04.2 §1, §7: `registry.py` line 704), the same server and image at D1 | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.Mounts[].Type`, `body.Mounts[].RW` | observation | F-04.2 §4.3 (`Mounts` exactly the three declared binds, `RW` true); D1 §5 (3) (workspace scope exactly the three declared binds) | the profile's declared mounts (`provisioning.agent_server.conversations.mounts`: three, each `bind` and `rw` true, the same at `fec83d9` and `9684d9c`) | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.Mounts[].Source`, `body.Mounts[].Destination` | pinned-rule | the declared mounts of the profile D1 ran (`profiles/strong-windows-qemu-whpx/profile.json`, sha256 `b7c5d2fe…`, `provisioning.agent_server.conversations.mounts`) expanded with the conversation's hex by `integrations/dispatch/dispatch_inputs.py` `_binds_for`, the admission's own rule; F-04.2 §4.3 and D1 §5 (3) observed exactly the declared binds | the request's conversation id (its hex) | yes: `launch_gate._plain` | yes | |
+| `container-inspect` | `body.<every other field of the container's inspect>` | none | not served: not read by the gate, which compares the fields above only (F-04.2 §4.3 records others, the container's name, labels, user, options and ports among them, and the mounts' `Mode` and `Propagation`; the guest's own inspection compares them: `tools/guest.py` `container_problems`) | | no | no | |
+| `container-inspect` | `fixture` | label | the fixture's label | | no | yes | |
 | `refusal` | `status` | label | the fixture's refusal: `501` | | no | yes | |
 | `refusal` | `fixture` | label | the fixture's label, with the reason it refused | | no | yes | |
 
@@ -285,6 +295,7 @@ turn between the two, and record its events too (E-01.6 observes it).
 | `POST .../bash/execute_bash_command` | the harness's SEED command, the conversation held and not yet seeded, the script's exit `0` | `seed` (another exit: `refusal`) |
 | `POST .../events` | the message tail, the conversation held, no message yet | `message` (the `message-event` recorded; status `finished`; no turn runs) |
 | `GET .../events/search` | held, no query | `events` |
+| (not a route) `container_inspect(id)` | held, runtime `available` | `container-inspect` (else `refusal`) |
 | anything else | | `refusal` |
 
 ## The call log, transport events and test knobs
@@ -305,6 +316,34 @@ turn between the two, and record its events too (E-01.6 observes it).
   - `test_attempt_run.RunServer` (D1 slice A2): `count`, the message's answers (`message_status`, `after_message`),
     SEED and RESULT run for real by bash over a temporary workspace (`real`) or SEED's canned success line, and the
     lost or failed answers (`lose_results`, `fail_stops`).
+
+## The container inspect (E-01.5)
+
+E-01.5's launch gate (`integrations/dispatch/launch_gate.py`) compares an independent docker inspect of the attempt's
+container with the admitted values. Offline, that inspect is the catalog's `container-inspect` entry, answered by
+`AgentServerCore.container_inspect(conversation id)`, the recorded inspect source of the I1 design's R13. It is **not
+an Agent Server route**: the live source is the guest's root facts (`tools/guest.py`, F-04.2 section 2, "The on-demand
+facts"), and no request path reaches it here. The answer has no HTTP status (`body` and the label only); each inspect is
+noted in `inspected` with the length of the call log at that moment, and not in `calls`.
+
+- **When it answers.** A container exists exactly while the conversation is held with its runtime `available`: after
+  the create (F-04.2 §4.3; D1 §5 (3)), and no longer after the runtime stop (F-04.2 §4.6: "no owned container"). A
+  conversation not held, or whose runtime is `missing`, is refused with the label.
+- **What it serves** (the provenance table, answer `container-inspect`): exactly the five fields the gate compares, as
+  docker inspect names them. `Image`, the caps (`HostConfig.Memory`, `NanoCpus`, `PidsLimit`), `HostConfig.NetworkMode`
+  and `HostConfig.ExtraHosts` are F-04.2 §4.3's and §7's values, corroborated by D1 §5 (3) and (5b). The mounts are the
+  declared binds of the profile D1 ran, checked by its sha256 (`b7c5d2fe…`, D1 §4), expanded with the conversation's
+  hex by the admission's own rule (`dispatch_inputs._binds_for`), under the field names the guest's own check reads
+  (`tools/guest.py` `effective_container_mounts`: `Type`, `Source`, `Destination`, `RW`). F-04.2 §4.3 and D1 §5 (3)
+  observed exactly those binds. Every other field of a container's inspect is not served.
+- **The equivalent-request rule.** Each served value is determined by inputs that are the same at F-04.2's run
+  (`fec83d9`) and at D1's (`9684d9c`): the provision lock `f02e430a…` (the image), the server's configured caps with a
+  create that sends no container caps (both pinned templates send `container` `{"browser": false}` only), the server's
+  build (1.60.1, the same image: `NetworkMode` and `ExtraHosts`), and the declared mounts. `test_agentfixture_core`'s
+  `ContainerInspect` checks each value in its cited section and each determining input in the checked-in records.
+- **Altered copies** (one per compared field) and an inspect that cannot be obtained are test knobs in
+  `integrations/dispatch/tests/test_launch_gate.py` (`Altered`, and sources that raise or answer no inspect object):
+  answers no cited run gave, made outside the core.
 
 ## Not here
 
