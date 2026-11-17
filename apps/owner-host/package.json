@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --strictPort"
+    "preview": "vite preview --host 127.0.0.1 --strictPort",
+    "canvas:derive": "node scripts/canvas-standalone.mjs derive",
+    "canvas:serve": "node scripts/canvas-standalone.mjs serve"
   },
   "dependencies": {
     "@assistant-ui/react": "0.15.32",

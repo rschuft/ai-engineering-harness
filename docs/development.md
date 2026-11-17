@@ -1837,6 +1837,21 @@ the component lock's versions for every package they share. Install it with
 `npm run dev` and `npm run preview` serve the app on 127.0.0.1 only. Neither has a
 Task target.
 
+**The standalone Agent Canvas server (U-01.2, built; its gate G5 not passed).** `npm run canvas:serve`
+(`node scripts/canvas-standalone.mjs serve [--build-dir DIR] [--port 13330] [--fixture-port 13320]`, in
+`apps/owner-host`) derives a copy of the pinned Canvas package's standalone `build/` with its two remote Google
+Fonts `@import` rules removed (checked byte for byte: nothing else differs), then runs upstream's own
+`scripts/static-server.mjs`, unpatched, on `127.0.0.1:13330` (a busy port is a refusal), its `/api`, `/sockets`
+and `/server_info` routed to the served fixture's read-only UI face (`http://127.0.0.1:13320/ui`), with the
+fixture's public UI-face value injected and telemetry disabled; it stops on Ctrl+C or when its standard input, a
+pipe, closes. `npm run canvas:derive` only derives and prints the comparison. `--csp` (off by default; evidence for
+planning, not adopted) also puts a default-deny content-security policy first in the copy's `index.html`. The
+derived copy defaults to `node_modules/.cache/aieh-canvas-standalone` (ignored). The records name the listener
+(`nm-owner-ui-canvas`, `nm-canvas-agentfixture-ui`, `app-agent-canvas`; census port 13330). Gates G6 and G5 and
+what was observed: [the app's README](../apps/owner-host/README.md#the-standalone-agent-canvas-u-012-gates-g6-and-g5).
+**Not yet verified:** the conversation view rendered (G5 stopped at Canvas's telemetry-consent dialog, which needs a
+write to the backend); the engineering route, the frame and the session-detail action are not built.
+
 **The Integration process (U-01.3).** The Owner host's backend is the Integration process
 ([`integrations/ownerhost/`](../integrations/ownerhost/README.md); [decision
 0025](../decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md),

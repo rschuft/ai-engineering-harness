@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { stripRemoteImports } from "../scripts/remote-imports.mjs";
 
 // Agent Canvas 1.36.0's stylesheet (@openhands/agent-canvas/styles.css) starts
 // with two remote @import rules for Google Fonts (Outfit, IBM Plex Mono). Left
@@ -9,27 +10,13 @@ import type { Plugin } from "vite";
 // or override its CSS Google Fonts imports when offline operation is
 // required"). Canvas then renders with the fallback fonts of its own font
 // stacks. The installed package is not modified.
+//
+// The rule itself is scripts/remote-imports.mjs, shared with the standalone
+// Canvas build's derived copy (U-01.2: scripts/canvas-standalone.mjs).
+export { stripRemoteImports, type StripResult } from "../scripts/remote-imports.mjs";
 
 /** Matches the Canvas stylesheet module id (no query), on any OS. */
 export const CANVAS_STYLESHEET_ID = /[\\/]@openhands[\\/]agent-canvas[\\/]dist[\\/]styles\.css$/;
-
-// A quoted URL may itself contain ';' (the IBM Plex Mono weights list), so the
-// URL is matched as a quoted string, optionally inside url(...).
-const REMOTE_IMPORT = /@import\s+(?:url\(\s*)?(["'])(https?:\/\/[^"']*)\1\s*\)?[^;]*;/gi;
-
-export interface StripResult {
-  css: string;
-  removed: string[];
-}
-
-export function stripRemoteImports(css: string): StripResult {
-  const removed: string[] = [];
-  const out = css.replace(REMOTE_IMPORT, (_match, _quote: string, url: string) => {
-    removed.push(url);
-    return "";
-  });
-  return { css: out, removed };
-}
 
 export function canvasOfflineFonts(): Plugin {
   return {
