@@ -369,6 +369,15 @@ def check_schema(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR
         raise SchemaAltered(f'schema objects missing {missing} or not as migrated {changed}')
 
 
+def verify(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> None:
+    """The store's own integrity checks, which only read: its schema objects are exactly what its migrations
+    create (SchemaAltered otherwise), the session chain is unbroken, and every stored content matches its recorded
+    sha256 (StoreError otherwise). ``open_store`` runs them; a read-only reader (the lineage message and conversation
+    resolvers, U-02.2) runs them on its own read-only connection."""
+    check_schema(conn, migrations_dir)
+    _verify_kind_invariants(conn)
+
+
 def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR,
                busy_timeout_ms: int = storecore.DEFAULT_BUSY_TIMEOUT_MS,
                apply_migrations: bool = True) -> 'ConversationStore':
@@ -387,8 +396,7 @@ def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR
             storecore.migrate(conn, KIND, migrations_dir)
         else:
             storecore.check_current(conn, KIND, migrations_dir)
-        check_schema(conn, migrations_dir)
-        _verify_kind_invariants(conn)
+        verify(conn, migrations_dir)
     except BaseException:
         conn.close()
         raise

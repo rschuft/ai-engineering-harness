@@ -17,6 +17,12 @@ id); the message id is assistant-ui's native id, unique per thread; SQLite's tri
 whatever writes the row; an assistant message's update appends a revision; a store migrated from 0001 keeps its
 sessions; an altered schema is refused at open. Every database lives in a fresh temporary directory outside the
 checkout.
+
+U-02.2 (``PendingDecision``): the requests the Owner host shell sends for a run paused on a decision
+(apps/owner-host/src/areas/fixtures/pending-decision.wire.json, checked against the shell on every run of its
+tests) replayed into the store: the paused assistant message comes back once after a reopen, still pending; the
+completion is an upsert of the same id that appends a revision (the paused one is kept); a user message stays
+immutable under ``update``.
 """
 from __future__ import annotations
 
@@ -379,6 +385,85 @@ class AssistantRevisions(Base):
         self.append(thread, user_item('U000001', 'Start.'))
         written = self.update(thread, assistant_item('A000001', 'U000001'))
         self.assertEqual((written.changed, written.message.seq, written.message.revision), (True, 2, 1))
+
+
+WIRE = REPO / 'apps' / 'owner-host' / 'src' / 'areas' / 'fixtures' / 'pending-decision.wire.json'
+
+
+def wire_items():
+    """The history items of the shell's recorded pending-decision requests, in order: (path tail, item)."""
+    data = json.loads(WIRE.read_text(encoding='utf-8'))
+    if data.get('format') != 'aieh-owner-host-wire/v1':
+        raise AssertionError('not the shell\'s wire fixture')
+    return [(request['path'].split('{thread}', 1)[1], request['body']) for request in data['requests']
+            if request['path'].startswith('/threads/{thread}/')]
+
+
+class PendingDecision(Base):
+    """A run paused on the owner_decision human tool, as the shell writes it (plan leaf U-02.2)."""
+
+    def replay(self, thread, items):
+        written = []
+        for tail, item in items:
+            call = self.update if tail.startswith('/messages/') else self.append
+            written.append(call(thread, item))
+        return written
+
+    def test_the_pending_call_comes_back_once_after_a_reopen_and_its_completion_is_a_revision(self):
+        items = wire_items()
+        self.assertEqual([tail for tail, _ in items], ['/messages', '/messages', '/messages/A000001'])
+        (_, statement), (_, paused), (_, done) = items
+        thread = self.thread()
+        self.replay(thread, items[:2])
+        self.reopen()                                       # the Integration process restarts: the store is reopened
+        loaded = self.store.load(thread)['messages']
+        self.assertEqual([(m['seq'], m['message']['id'], m['parentId']) for m in loaded],
+                         [(1, 'U000001', None), (2, 'A000001', 'U000001')])
+        self.assertEqual(loaded[1]['message'], paused['message'])
+        self.assertEqual(loaded[1]['message']['status'], {'type': 'requires-action', 'reason': 'tool-calls'})
+        (call,) = loaded[1]['message']['content']
+        self.assertEqual((call['type'], call['toolName'], call['toolCallId']), ('tool-call', 'owner_decision', 'call-1'))
+        self.assertNotIn('result', call)
+        # A reconnect that sends the same requests again adds nothing: each id once, one revision each.
+        dump = self.store.canonical_dump()
+        self.assertEqual([w.changed for w in self.replay(thread, items[:2])], [False, False])
+        self.assertEqual(self.store.canonical_dump(), dump)
+        # The Owner answers: the completion is an upsert of the same id, a second revision; nothing else changes.
+        (written,) = self.replay(thread, items[2:])
+        self.assertEqual((written.changed, written.message.seq, written.message.revision), (True, 2, 2))
+        self.reopen()
+        loaded = self.store.load(thread)['messages']
+        self.assertEqual([m['message']['id'] for m in loaded], ['U000001', 'A000001'])
+        self.assertEqual(loaded[1]['message'], done['message'])
+        self.assertEqual(loaded[0]['message']['content'], statement['message']['content'])
+        revisions = self.store.conn.execute(
+            "SELECT revision, content FROM message_revision WHERE message_id = 'A000001' ORDER BY revision").fetchall()
+        self.assertEqual([(r, json.loads(c)) for r, c in revisions], [(1, paused['message']), (2, done['message'])])
+        self.assertFalse(self.replay(thread, items[2:])[0].changed)  # the same completion again: nothing
+
+    def test_an_update_never_changes_an_owner_statement(self):
+        items = wire_items()
+        thread = self.thread()
+        self.replay(thread, items[:2])
+        (_, statement) = items[0]
+        content = self.store.message_content(thread, 'U000001')
+        changed = json.loads(json.dumps(statement))
+        changed['message']['content'][0]['text'] = 'Start the change, but differently.'
+        self.assert_refused('MESSAGE_IMMUTABLE', self.update, thread, changed)
+        as_reply = json.loads(json.dumps(items[2][1]))
+        as_reply['message']['id'] = 'U000001'
+        as_reply['parentId'] = None
+        self.assert_refused('MESSAGE_IMMUTABLE', self.update, thread, as_reply)
+        self.assertFalse(self.update(thread, statement).changed)       # the same bytes: no change
+        unknown = json.loads(json.dumps(statement))
+        unknown['message']['id'] = 'U000009'
+        self.assert_refused('MESSAGE_NOT_FOUND', self.update, thread, unknown)
+        reparented = json.loads(json.dumps(items[2][1]))
+        reparented['parentId'] = None
+        self.assert_refused('MESSAGE_ID_CONFLICT', self.update, thread, reparented)
+        self.assertEqual(self.store.message_content(thread, 'U000001'), content)
+        self.assertEqual(self.store.conn.execute(
+            "SELECT count(*) FROM message_revision WHERE message_id = 'U000001'").fetchone()[0], 1)
 
 
 class Quotes(Base):
