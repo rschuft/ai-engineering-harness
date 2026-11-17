@@ -195,6 +195,31 @@ class NativeOrdinals(Ordinals):
                      lambda: self.dispatch(Dropping(self.core, ('GET', f'/api/conversations/{cid}/runtime'))))
         self.assertNothingNew(1, 1)
 
+    def test_a_create_answered_with_an_error_after_it_was_forwarded_is_asked(self):
+        """Ruling (a), a failed attempt that sent its create (``create_sent`` true): at the pinned handler a create
+        whose conversation already existed is forwarded and, answered with an error, not stopped
+        (as:openhands/agent_server/docker_runtime/routers.py:163, :213-216). ``KeptOnError`` is that test knob: the
+        core receives the create, the dispatcher gets a 409. The attempt is ``failed`` and still asked."""
+        class KeptOnError:
+            def __init__(self, core):
+                self.core, self.done = core, False
+
+            def __call__(self, method, path, body=None, **kwargs):
+                answer = self.core(method, path, body, **kwargs)
+                if (method, path) == CREATE and not self.done:
+                    self.done = True
+                    return {'status': 409, 'body': {'detail': 'Conversation runtime rejected the request'}}
+                return answer
+        wire = KeptOnError(self.core)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.dispatch(wire)
+        self.assertEqual(caught.exception.code, 'CREATE_REFUSED')
+        (first,) = self.typed_of(self.fixture.store)
+        failed = [e for e in self.fixture.store.events(first.operation_key) if e.to_state == 'failed']
+        self.assertIs(json.loads(failed[0].detail_json)['create_sent'], True)
+        self.refused('PRIOR_CONVERSATION_RUNNING', lambda: self.dispatch(wire))
+        self.assertNothingNew(1, 1)
+
     def test_an_attempt_that_sent_no_create_is_never_asked(self):
         """Its history holds no dispatched event (refused at admission): nothing to ask, and no call is made."""
         manifest = self.fixture.manifest
