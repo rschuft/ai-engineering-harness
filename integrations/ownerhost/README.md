@@ -283,19 +283,28 @@ authenticated session rather than declared by a transcriber. No model is called.
   (`ACCEPTANCE_MODEL_AUTHORED`), the digest (`ACCEPTANCE_MESSAGE_MISMATCH`), another session's message or challenge
   (`ACCEPTANCE_SESSION_MISMATCH`), the layout (`ACCEPTANCE_LAYOUT_INVALID`), the challenge (`ACCEPTANCE_CHALLENGE_UNKNOWN`,
   `ACCEPTANCE_CHALLENGE_MISMATCH`, `ACCEPTANCE_NOT_AFTER_CARD`, `CHALLENGE_CONSUMED`, `CHALLENGE_EXPIRED`,
-  `CHALLENGE_STALE`), the capture's configuration, identity and project refusals, and the project repository's own
-  state (`preflight`: the repository-access module's `write_commit` asked to commit the change's files with their HEAD
-  bytes, which it refuses before writing anything: `HOOKS_UNSUPPORTED`, `COMMIT_REFUSED` for a detached HEAD,
-  `commit.gpgSign`, unmerged index entries or local changes to those files, `GIT_FAILED`).
+  `CHALLENGE_STALE`), the capture's configuration, identity and project refusals (a detached HEAD is
+  `CAPTURE_PROJECT_UNAVAILABLE`, refused when the project is opened), and the `preflight`: the repository-access
+  module's `write_commit` asked to commit the change's files with their HEAD bytes, which it refuses before writing
+  anything (`HOOKS_UNSUPPORTED`; `COMMIT_REFUSED` for `commit.gpgSign`, unmerged index entries or local changes to
+  those files; `GIT_FAILED`); the decision-record directory `owner-decisions/` (`COMMIT_REFUSED` when a symbolic link
+  or a junction leads to it, or a file, tracked or not, is in its way); and the content, through the recorder's own
+  functions (`INTENT_RECORD_INVALID` for the proposal with the acceptance set, `RESOLUTION_FAILED` when the x-outcomes
+  block would not read back as declared).
 - **One commit per message**, the recorder's, behind the write-ahead receipt `owner-ui/objective-acceptance/v1/<thread>/
   <message>`; its author and committer are the session principal's configured identity (decision 0028). The outcome id
   is minted once and kept on a re-acceptance. A confirmed receipt answers the same commit, only for the same project,
   change, item, digest and nonce (`ACCEPTANCE_RECEIPT_CONFLICT`).
-- **The race window.** Only another process changing the project repository between those checks and the recorder's
-  commit reaches the recorder's own checks. Its refusal leaves the receipt `reserved` and the project repository
-  unchanged; the same message, sent again once repaired, is settled by reading every local branch and parent first.
-  If the race also outlives the challenge, the Owner reviews again and sends a new Accept message (a new receipt key);
-  the old receipt stays `reserved`, as the store never deletes one.
+- **What can still reach the recorder's own checks after the reservation**, and nothing else: a race (another process
+  changing the project repository between those checks and the commit; the refusal keeps its code); the lineage
+  objective resolver's check of the new commit before the branch moves, which needs the commit's objects, and the
+  recorder's own invariant on the decision record it builds (`RESOLUTION_FAILED`); an object store that cannot be
+  written, or any other failure inside the commit (`ACCEPTANCE_OUTCOME_UNKNOWN`: a commit may exist). In each case the
+  receipt stays `reserved`, and the same message, sent again once repaired, records exactly once: it is settled by
+  reading every local branch and parent first. Once a commit may exist (an earlier receipt not confirmed, or a
+  failure inside the commit), a failure of that reading is `ACCEPTANCE_OUTCOME_UNKNOWN`, never `GIT_FAILED`. If the
+  cause outlives the challenge, the Owner reviews again and sends a new Accept message (a new receipt key); the old
+  receipt stays `reserved`, as the store never deletes one.
 
 ## Pending decisions across a restart (U-02.2)
 
