@@ -47,6 +47,7 @@ under the managed data root and write the live manifest there.
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
+| `tests/test_owner_ui_channel.py` | The `owner-ui` channel (P-04.4): `SESSION_BINDING_REQUIRED` without a verifier, from `record` and `record-from-log` and from their command lines (exit 2, its remedy, nothing changed); a refusing verifier; a verifier with another channel; the Owner's checks first; the challenge's checks still applied; a bound statement recorded and resolved (integration) |
 | `tests/test_recorded_statement.py` | `record_from_log` on throwaway project repositories and a throwaway harness log: the resolver round trip, the record naming the entry and the revision with no challenge shown, the id minted once (and kept by `--amend`), P-04.1's path beside it unchanged, a rehearsal of E-05.1 on a copy of the D1 demo design, every refusal changing neither repository (with the review rulings of 2026-11-15: an Owner entry, his first block outside code fences, a statement about the change, the request by its text, the harness on main with its origin; the reviewer probes as tests), the text-matching rule, the command line; and, read only, that the fixture's copy is the real entry of this checkout's log at `HEAD` and admits E-05.1's statement (integration) |
 | `tests/fixtures/recorded-statement-log.md` | The throwaway harness log: a byte-for-byte copy of the real entry `owner-direction-d1-planning-2026-11-15` among synthetic entries (undated, without a verbatim block, outside the Decisions section, the D1 demo change's request) |
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
@@ -105,7 +106,16 @@ sha256 there, as read when the decision was recorded.
 The record is **clerical**. It says what was shown, what was said, who recorded it and when. It
 does not authenticate the Owner: `attributedTo` and `channel` are declared by whoever transcribed
 the statement, and the acceptance reference, not the record, is the proof that the Owner accepted
-(decision 0008, point 2).
+(decision 0008, point 2). **The one exception is the `owner-ui` channel** (plan leaf P-04.4; decision
+0025 point 9): the acceptance recorder admits it only with a session-binding verifier passed to
+`record` in process (`session_binding`), which the Integration process passes
+([`integrations/ownerhost/acceptance.py`](../ownerhost/README.md#objective-acceptance-p-044)) after
+building the statement from the Owner conversation store: a user message, authored by `owner` under
+the authenticated session making the request, with that digest, on a challenge issued to that
+session. Without a verifier `owner-ui` is `SESSION_BINDING_REQUIRED`, so the command line (`record`
+and `record-from-log`) cannot declare it; a verifier that answers a reason is
+`SESSION_BINDING_REFUSED`; a verifier is for that channel only. Only that module passes one (a census
+test of the Integration process).
 
 **How a statement is judged** (`statement_verdict`, from the statement alone, in this order):
 

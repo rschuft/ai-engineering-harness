@@ -11,15 +11,17 @@ Behind the credential: `POST /session` answers the authenticated session's publi
 sign-in), and since U-02.1 the thread and history routes keep the Owner chat in the conversation store (below);
 since U-02.2 a pending decision kept there survives a restart of the process and a reopened browser, once; since
 P-01.3 an Owner message sent through the shell's request form is captured as an OpenSpec intent change in the project
-repository ([below](#capture-p-013)). Acceptance (P-04.4) and the projection (U-04.1) attach later. It has no dispatch
-endpoint.
+repository ([below](#capture-p-013)); since P-04.4 the Owner accepts an objective of such a change on the acceptance
+recorder's challenge, bound to his session ([below](#objective-acceptance-p-044)). The projection (U-04.1) attaches
+later. It has no dispatch endpoint.
 
 ## Files
 
 | Path | What |
 |---|---|
-| `app.py` | The ASGI application (`create_app`), its three request checks, the session route, the thread and history routes and the capture route; `bind_listener` and `serve`, the server process |
+| `app.py` | The ASGI application (`create_app`), its three request checks, the session route, the thread and history routes, the capture route and the two acceptance routes (`acceptance-challenge`, `acceptance`); `bind_listener` and `serve`, the server process |
 | `capture.py` | P-01.3: the request layout's parser, the intent record it writes, the project configuration (`components.owner_host`), the commit identity, the write-ahead receipt and the commit |
+| `acceptance.py` | P-04.4: the review and acceptance layouts, the challenges held in memory, the session-binding verifier, the checks before the reservation (the preflight included), the write-ahead receipt, the recorder's commit and the settlement by reading |
 | `session.py` | The credential's shape and verifier, and `check`, which decides one request against the session table |
 | `enroll.py` | The Owner's enroll command: the console guard, minting, the session row, the one showing |
 | `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `recover`, `status`, `inspect`, `verify`, and the supervisor |
@@ -34,6 +36,7 @@ endpoint.
 | `tests/test_pending_decision.py` | U-02.2's proof against a real Integration process the test starts (`app.serve` through `serve_on_port.py`) on a free loopback port and a throwaway state directory, stopped by its stop request and started again twice: the shell's recorded pending-decision requests replayed, the thread and its pending call back once, a reconnect adding nothing, the answer an update of the same id; the lineage resolvers reading the store it wrote (integration) |
 | `tests/test_outbound_guard.py` | The outbound guard in a real server process on a free port (`serve_outbound_probe.py`): connect, connect_ex and getaddrinfo refused before the call, the process still serving, the guard armed by the lifespan; never armed in the test process (integration) |
 | `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals (bidirectional controls included); the crash windows, the commit id recorded before the branch moves, and settlement through every branch and parent (a branch switch, a merge without fast-forward, packed references, a rewritten history); a confirmed receipt under another configuration; the work-tree flag; the store's refusals; the commit identity, its placeholder classes and the session's principal; the harness checkout refused as the project; no socket, no process, no model (integration) |
+| `tests/test_acceptance.py` | P-04.4's proof in throwaway stores and a throwaway project repository whose change the capture made: the outcome minted once and resolved, the statement resolved to the Owner's message, a re-acceptance keeping the id, author and committer; every refusal (challenge, session, statement, card, layout, repository state, configuration) changing neither the project repository nor either store; the verifier clause by clause; the race window and settlement; the shell's code list; no socket, no process (integration) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
@@ -254,6 +257,45 @@ starts either way. A change of the configuration takes effect at the next start.
 The configured identity is not a secret and is not kept as one: `components.owner_host`, `git_identities` included,
 is passed on the server process's command line (`--owner-host-config`), which any process of the same user can read,
 and written to the run record (`<state>/owner-host/run.json`, its configuration snapshot).
+
+## Objective acceptance (P-04.4)
+
+Plan leaf **P-04.4**; decision 0025 points 8 and 9; the I1 work design, R6 and slice 10. `acceptance.py` holds the
+rules; this is their summary. The Owner accepts an Objective item of an intent change on the acceptance recorder's own
+challenge (P-04.1, `integrations/owner/acceptance_recorder.py`, run in process), and the statement is bound to his
+authenticated session rather than declared by a transcriber. No model is called.
+
+| Route | Answer |
+|---|---|
+| `POST /threads/{thread_id}/messages/{message_id}/acceptance-challenge` `{sha256, card}` | `{nonce, change, item, revision, proposal, summary, expiresAt, card, request}`: the recorder's challenge for the Owner's message `Review acceptance: O<n> of <change>` (exactly that line), shown in the card the shell is writing |
+| `POST /threads/{thread_id}/messages/{message_id}/acceptance` `{nonce, sha256}` | `{change, item, outcome, minted, commit, decision, reference, statement, receipt, created, state, project}`, and `workTree` as the capture's: the Owner's message `Accept O<n> of <change>` (optionally followed by a line break and his own words) recorded on that challenge |
+
+- **The challenge** is held in the process's memory by its nonce, with the thread, the review message, the card's id
+  and the session it was issued to, and the thread's highest `seq` at that moment. A restart loses it: an acceptance on
+  it is `ACCEPTANCE_CHALLENGE_UNKNOWN` (fail-closed), and the Owner reviews again. The card's id is the one id a request
+  proposes (decision 0025 point 8 asks for server-held ids): at `prepare` the card is still being written, so it is
+  checked against the store at `record`: stored after the challenge was issued, an assistant message, the reply to the
+  review, in the same session, and an ancestor of the acceptance.
+- **The statement** is built from the store, never from the request: `text` the stored bytes, `attributedTo: owner`,
+  `channel: owner-ui`, `reference: conversation:<thread>/<message>#sha256:<digest>`, `recordedBy: owner`; the recorder
+  admits `owner-ui` only with the session-binding verifier (`SessionBinding`) this module passes.
+- **Before anything is written**, each refusal with a stable code and nothing changed: an assistant message
+  (`ACCEPTANCE_MODEL_AUTHORED`), the digest (`ACCEPTANCE_MESSAGE_MISMATCH`), another session's message or challenge
+  (`ACCEPTANCE_SESSION_MISMATCH`), the layout (`ACCEPTANCE_LAYOUT_INVALID`), the challenge (`ACCEPTANCE_CHALLENGE_UNKNOWN`,
+  `ACCEPTANCE_CHALLENGE_MISMATCH`, `ACCEPTANCE_NOT_AFTER_CARD`, `CHALLENGE_CONSUMED`, `CHALLENGE_EXPIRED`,
+  `CHALLENGE_STALE`), the capture's configuration, identity and project refusals, and the project repository's own
+  state (`preflight`: the repository-access module's `write_commit` asked to commit the change's files with their HEAD
+  bytes, which it refuses before writing anything: `HOOKS_UNSUPPORTED`, `COMMIT_REFUSED` for a detached HEAD,
+  `commit.gpgSign`, unmerged index entries or local changes to those files, `GIT_FAILED`).
+- **One commit per message**, the recorder's, behind the write-ahead receipt `owner-ui/objective-acceptance/v1/<thread>/
+  <message>`; its author and committer are the session principal's configured identity (decision 0028). The outcome id
+  is minted once and kept on a re-acceptance. A confirmed receipt answers the same commit, only for the same project,
+  change, item, digest and nonce (`ACCEPTANCE_RECEIPT_CONFLICT`).
+- **The race window.** Only another process changing the project repository between those checks and the recorder's
+  commit reaches the recorder's own checks. Its refusal leaves the receipt `reserved` and the project repository
+  unchanged; the same message, sent again once repaired, is settled by reading every local branch and parent first.
+  If the race also outlives the challenge, the Owner reviews again and sends a new Accept message (a new receipt key);
+  the old receipt stays `reserved`, as the store never deletes one.
 
 ## Pending decisions across a restart (U-02.2)
 

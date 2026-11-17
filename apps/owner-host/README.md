@@ -45,8 +45,9 @@ mounted while the area changes.
 | `SignIn`, `SessionControl` | `src/identity/SignIn.tsx`, `src/identity/SessionControl.tsx` | The login view, and the header's "Sign in" link or "Sign out" button. |
 | `ChatArea`, `StoredChat` | `src/areas/ChatArea.tsx` | assistant-ui `AssistantRuntimeProvider`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`; signed in, `useRemoteThreadListRuntime` over `useLocalRuntime` with `ThreadListPrimitive`, `ActionBarPrimitive.Edit` and `BranchPickerPrimitive`. |
 | `createThreadListAdapter`, `createHistoryAdapter` | `src/areas/conversation-adapters.ts` | The `RemoteThreadListAdapter` and the per-thread `ThreadHistoryAdapter` (through `unstable_useAdapters`) over the Integration process's thread and history routes (U-02.1). |
-| `acknowledgingChatAdapter`, `modelFreeChatAdapter`, `createCapturingChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run; since P-01.3 the signed-in chat's adapter, which asks the Integration process to capture a message in the request layout and replies with its card, and answers any other message with the acknowledgement. |
+| `acknowledgingChatAdapter`, `modelFreeChatAdapter`, `createCapturingChatAdapter` | `src/areas/chat-adapter.ts` | The signed-in chat's fixed acknowledgement (never a model's text), and the signed-out adapter that refuses to run; since P-01.3 the signed-in chat's adapter, which asks the Integration process to capture a message in the request layout and replies with its card; since P-04.4 it also answers a `Review acceptance: O<n> of <change>` message with the acceptance card (the challenge, asked for the card the run writes) and an `Accept O<n> of <change>` message with the recorded card (on the nonce of the card it follows); any other message gets the acknowledgement. |
 | `RequestForm`, `CaptureCard` | `src/areas/RequestForm.tsx`, `src/areas/capture-card.tsx` | The request form (P-01.3): the change's name, its objective, its acceptance criteria and suggestions as labelled one-line fields, sent as one message in the fixed layout shown in its preview; and the card that shows the capture's answer (the change and its commit) or its refusal with the stable code. |
+| `AcceptanceCard`, `AcceptanceRecordCard` | `src/areas/acceptance-card.tsx` | The acceptance cards (P-04.4), assistant-ui tool UIs: the recorder's summary as the Integration process answered it, its expiry and an Accept form whose preview is exactly the message it sends, appended under its own card; and the recorded acceptance (the outcome id, minted or kept, the commit, the statement's reference) or the refusal with its stable code. The capture card offers the review of its change's objective. |
 | `DecisionToolUI`, `UnknownToolUI`, `HUMAN_TOOL_NAMES` | `src/areas/decision-tool.tsx` | The tool UI for a pending Owner decision (U-02.2): the `owner_decision` human tool's question and one button per option while it is pending, the answer once given; any other tool call is named, never run. |
 | `WorkArea` | `src/areas/WorkArea.tsx` | Objectives and Work items empty states. |
 | `EngineeringArea` | `src/areas/EngineeringArea.tsx` | Not-connected notice, `CanvasBoundary`, lazy `CanvasMount`. |
@@ -259,6 +260,22 @@ and no capture. A suggestion is recorded as a hypothesis, never as the objective
 Integration process: the layout and its digest (equal to Python's), the order (the capture after
 the statement is stored), the card, a refusal's code and detail, and no capture for an ordinary
 message. A real browser is **not yet verified**.
+
+**Objective acceptance (P-04.4).** The capture card's review button, or the Owner typing it, sends
+`Review acceptance: O<n> of <change>`; the run's adapter, once that message is stored, asks
+`POST /threads/{thread}/messages/{message}/acceptance-challenge` with its sha256 and the id of the
+assistant message the run is writing (`unstable_getMessage().id`), and replies with the acceptance
+card (`objective_acceptance`): the acceptance recorder's summary as answered, its expiry and an
+Accept form. The form sends, as the Owner's own message and exactly as its preview shows,
+`Accept O<n> of <change>` and, when he writes any, a line break and his own words; it is appended
+directly under its own card, so that an older card's form accepts on that card's challenge, never a
+later card's. The run's adapter then asks `POST .../messages/{message}/acceptance` with the nonce of
+the card the message follows and the message's sha256, and replies with the recorded card
+(`objective_acceptance_recorded`). An acceptance with no card of its item before it asks nothing
+(`ACCEPTANCE_NO_CARD`). Nothing on either card is a model's text; the service decides and records
+([the Integration process's acceptance](../../integrations/ownerhost/README.md#objective-acceptance-p-044)).
+[`src/areas/acceptance-flow.test.tsx`](src/areas/acceptance-flow.test.tsx) shows it against a fake
+Integration process. A real browser is **not yet verified**.
 
 ## Agent Canvas and assistant-ui in one React app
 

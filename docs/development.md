@@ -1975,17 +1975,27 @@ or a challenge issued to another session, `ACCEPTANCE_SESSION_MISMATCH`; the lay
 or thread `ACCEPTANCE_CHALLENGE_MISMATCH`, an acceptance that does not follow its card
 `ACCEPTANCE_NOT_AFTER_CARD`, a used, expired or stale challenge `CHALLENGE_CONSUMED`,
 `CHALLENGE_EXPIRED`, `CHALLENGE_STALE`; the configuration, identity and project refusals are the
-capture's (a missing or foreign session is the Integration process's 401). Then the write-ahead
+capture's (a missing or foreign session is the Integration process's 401); and the project
+repository's own state as the recorder's commit would find it (`preflight`: the repository-access
+module's `write_commit` asked to commit the change's two files with their HEAD bytes, which it
+refuses before writing anything: a client hook is `HOOKS_UNSUPPORTED`; a detached HEAD,
+`commit.gpgSign`, unmerged index entries or local changes to those files `COMMIT_REFUSED`). The
+card's id is the one id a request proposes rather than names (decision 0025 point 8): the card is
+still being written at the challenge, so the id is checked against the store at the acceptance:
+stored after the challenge was issued, an assistant message, the reply to the review, in the same
+session, and an ancestor of the acceptance (`ACCEPTANCE_NOT_AFTER_CARD`). Then the write-ahead
 receipt `owner-ui/objective-acceptance/v1/<thread>/<message>` is reserved in the integration store
 and the recorder makes its one commit (the `owner-decision/v1` record, the item's acceptance, the
 outcome id minted the first time and kept on a re-acceptance; resolved through the lineage
 objective resolver before the branch moves). Its author and committer are the session principal's
 configured identity (decision 0028; the recorder's `write_commit` with no separate author).
-**The race window:** the recorder's own checks are the backstop for a change between those checks
-and its commit (another process moving the project repository). If the backstop refuses, the
+**The race window:** only another process changing the project repository between those checks
+and the recorder's commit reaches the recorder's own checks, the backstop. If it refuses, the
 receipt stays `reserved` (the integration store never deletes a receipt) and nothing is written to
 the project repository; the same message may be sent again once the cause is repaired, and a
-receipt left reserved is settled by reading every local branch, through every parent, first. A
+receipt left reserved is settled by reading every local branch, through every parent, first. If
+the race also outlives the challenge (it expires, or the process restarts), the Owner reviews again
+and sends a new Accept message, which is a new receipt key; the old receipt stays `reserved`. A
 confirmed receipt answers the same commit and changes nothing. The routes run on the server's
 event loop, as the capture's do.
 Built 2026-11-17 (P-04.4, its verdict pending): `ownerhost:test` (`test_acceptance.py`),
