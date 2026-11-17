@@ -87,7 +87,7 @@ class Faces(Listener):
         before = (len(self.core.calls), json.dumps(self.core.conversations, sort_keys=True, default=str))
         for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
             for path in (CONVERSATION + '/events', '/api/conversations', CONVERSATION,
-                         CONVERSATION + '/bash/execute_bash_command'):
+                         CONVERSATION + '/bash/execute_bash_command', '/api/settings'):
                 with self.subTest(method=method, path=path):
                     answer = self.ui(method, path, body=S.MESSAGE)
                     self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
@@ -106,7 +106,8 @@ class Faces(Listener):
     def test_outside_the_catalog_is_501_with_the_label_on_both_faces(self):
         self.held()
         for face, path in (('d', '/alive'), ('d', '/api/conversations/search'), ('d', CONVERSATION + '/events?x=1'),
-                           ('d', f'{CONVERSATION}/agent_final_response'), ('u', '/api/settings'),
+                           ('d', f'{CONVERSATION}/agent_final_response'), ('u', '/api/profiles'),
+                           ('u', '/api/settings?x=1'), ('d', '/api/settings'),
                            ('u', CONVERSATION + '/events/search?limit=5'), ('u', '/api/conversations/search'),
                            ('u', '/api/conversations/11111111-2222-4333-8444-555555555555')):
             with self.subTest(face=face, path=path):
@@ -114,6 +115,29 @@ class Faces(Listener):
                     else self.ui('GET', path)
                 self.assertEqual((answer['status'], answer['label']['answer'], answer['body']), (501, 'refusal', None))
                 self.assertTrue(answer['label']['refused'])
+
+
+class Settings(Listener):
+    """U-01.2's G5 (a fix-forward of E-01.7's catalog): Agent Canvas's local-backend check reads GET /api/settings
+    before /server_info; the UI face answers it as a server that persists no settings, source-derived and labelled."""
+
+    def test_the_ui_face_answers_settings_with_its_key_only_and_names_the_source_derived_fields(self):
+        answer = self.ui('GET', '/api/settings')
+        self.assertEqual((answer['status'], answer['body']),
+                         (200, {'agent_settings': {'mcp_config': {}}, 'conversation_settings': {},
+                                'llm_api_key_is_set': False}))
+        self.assertEqual((answer['label']['answer'], answer['label']['face']), ('ui-settings', 'ui'))
+        self.assertEqual(answer['label']['sourceDerived'], ['status', 'body.agent_settings.mcp_config',
+                                                            'body.conversation_settings', 'body.llm_api_key_is_set'])
+        for key in (None, S.DISPATCHER_ACCESS):
+            with self.subTest(key=key):
+                refused = self.ui('GET', '/api/settings', key=key)
+                self.assertEqual((refused['status'], refused['label']['answer']), (401, 'ui-unauthorized'))
+
+    def test_the_server_info_the_ui_face_serves_carries_the_observed_version(self):
+        answer = self.ui('GET', '/server_info')
+        self.assertEqual(answer['body']['version'], '1.60.1')
+        self.assertEqual(answer['label']['sourceDerived'], ['status'])
 
 
 class Cors(Listener):
@@ -168,7 +192,7 @@ class Cors(Listener):
                                                      'access-control-allow-headers': 'x-session-api-key'})
         refused = [self.preflight('/ui' + CONVERSATION, origin='http://localhost:4173'),
                    self.preflight('/ui' + CONVERSATION, method='POST'),
-                   self.preflight('/ui/api/settings'),
+                   self.preflight('/ui/api/profiles'),
                    self.preflight('/ui' + CONVERSATION, asked='x-session-api-key,authorization')]
         for answer in refused:
             with self.subTest(refused=answer['label'].get('refused')):

@@ -94,6 +94,9 @@ PYTHON = getattr(sys, '_base_executable', None) or sys.executable
 
 CONVERSATIONS = '/api/conversations'
 CONVERSATION_ID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+# The UI face's answers to Agent Canvas's bootstrap reads, by route (U-01.2's G5, a fix-forward of E-01.7's catalog):
+# each a server holding no persisted state, its fields source-derived (observations.json served, README table).
+UI_BOOTSTRAP = {'/api/settings': 'ui-settings'}
 SEED_RE = re.compile(r"printf %s '([0-9a-f]+)' \| python -c '(.*)' '/workspace/([A-Za-z0-9][A-Za-z0-9._-]*)' "
                      r"'([0-9a-f]{64})'", re.S)
 SEED_TIMEOUT_MAX_S = 300
@@ -676,6 +679,12 @@ class AgentServerCore:
                                                                       'exit_code': self.answers['result']['exit_code']})
 
     # -- the UI face (E-01.7): read only, its unobserved fields source-derived and named in the label -------------
+    def derived(self, answer: str) -> list[str]:
+        """The field paths of ANSWER whose provenance class is source-derived (named in its label)."""
+        rows = (self.catalog.get('served') or {}).get('provenance') or []
+        return [path for row in rows if row['answer'] == answer and row['class'] == 'source-derived'
+                for path in field_paths(row['field'])]
+
     def ui_label(self, answer: str, derived: list[str], **extra) -> dict:
         return {**self.catalog['label'], 'answer': answer, 'face': 'ui', 'sourceDerived': derived, **extra}
 
@@ -695,6 +704,11 @@ class AgentServerCore:
         if route == '/server_info' and not query:
             entry = self.answers['ui-server-info']
             return self.ui_made('ui-server-info', entry['status'], copy.deepcopy(entry['body']), ['status'])
+        if route in UI_BOOTSTRAP and not query:
+            # Agent Canvas's bootstrap reads (U-01.2's G5): a server holding no persisted state, source-derived
+            name = UI_BOOTSTRAP[route]
+            entry = self.answers[name]
+            return self.ui_made(name, entry['status'], copy.deepcopy(entry['body']), self.derived(name))
         found = re.fullmatch(r'/api/conversations/([^/]+)(/events/search)?', route)
         if found is None or CONVERSATION_ID_RE.fullmatch(found.group(1)) is None or query:
             return self.refuse(f'{method} {path}: not in the UI face\'s catalog')

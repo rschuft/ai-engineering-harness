@@ -122,8 +122,9 @@ class Rules(unittest.TestCase):
             self.assertEqual((row['class'], row['determinedBy'], row['read']), ('observation', 'the clock', False))
         body = SERVED['answers']['ui-server-info']['body']
         recorded = S.CATALOG['answers']['server-info']['recorded']
-        self.assertEqual(body, {'uptime': recorded['uptime'], 'idle_time': recorded['idle_time']},
-                         'replayed unchanged')
+        # U-01.2's G5: the UI face also serves the observed version, which Agent Canvas requires
+        self.assertEqual(body, {'uptime': recorded['uptime'], 'idle_time': recorded['idle_time'],
+                                'version': recorded['version']}, 'replayed unchanged')
 
     def test_a_row_read_is_served_on_the_dispatchers_face_and_never_clock_valued(self):
         for row in ROWS:
@@ -146,7 +147,8 @@ class Rules(unittest.TestCase):
         core = AC.AgentServerCore(ui_running_reads=1)
         self.addCleanup(core.close)
         core('POST', '/api/conversations', S.d1_create())
-        answers = [core.ui_answer('GET', '/server_info'), core.ui_answer('GET', CONVERSATION),
+        answers = [core.ui_answer('GET', '/server_info'), core.ui_answer('GET', '/api/settings'),
+                   core.ui_answer('GET', CONVERSATION),
                    core.ui_answer('GET', CONVERSATION + '/events/search'), core.ui_preflight()]
         core('POST', CONVERSATION + '/events', S.MESSAGE)
         frames, _ = core.ui_session(S.CID, -1)
@@ -179,9 +181,10 @@ class Routes(unittest.TestCase):
     def test_every_route_the_listener_answers_is_a_catalog_route(self):
         routes = SERVED['routes']
         for face, method, path in (('dispatcher', 'GET', '/server_info'), ('dispatcher', 'POST', CONVERSATION + '/events'),
-                                   ('ui', 'GET', CONVERSATION + '/events/search')):
+                                   ('ui', 'GET', CONVERSATION + '/events/search'), ('ui', 'GET', '/api/settings')):
             self.assertTrue(SERVER.in_catalog(routes, face, method, path))
         for face, method, path in (('dispatcher', 'GET', '/alive'), ('ui', 'POST', CONVERSATION),
+                                   ('ui', 'PATCH', '/api/settings'), ('dispatcher', 'GET', '/api/settings'),
                                    ('dispatcher', 'POST', CONVERSATION + '/runtime/credentials'),
                                    ('dispatcher', 'GET', CONVERSATION + '/events/search/x')):
             self.assertFalse(SERVER.in_catalog(routes, face, method, path))
@@ -212,6 +215,7 @@ class Answers(unittest.TestCase):
             return answer
         keep(core('GET', '/server_info'))
         keep(core.ui_answer('GET', '/server_info'))
+        keep(core.ui_answer('GET', '/api/settings'))
         keep(core('POST', '/api/conversations', S.d1_create()))
         keep(core('GET', '/api/conversations/count'))
         keep(core('GET', CONVERSATION))
@@ -283,7 +287,7 @@ class Answers(unittest.TestCase):
                     p[len('body.'):] for p in AC.field_paths(row['field']) if p.startswith('body.'))
         cases = [('create-new', 'ConversationInfo'), ('conversation', 'ConversationInfo'),
                  ('runtime', 'ConversationRuntimeInfo'), ('seed', 'BashOutput'), ('result', 'BashOutput'),
-                 ('ui-conversation', 'ConversationInfo')]
+                 ('ui-conversation', 'ConversationInfo'), ('ui-settings', 'SettingsResponse')]
         for name, model in cases:
             for answer in self.made[name]:
                 with self.subTest(answer=name):
