@@ -110,15 +110,25 @@ Who can read the copy:
 - A process of the Owner's account that reads the browser profile can read the
   copy: inside the same limit.
 
-### Precondition: nothing agent-authored in the shell's origin
+### Precondition: agent-authored content only as inert text in the shell's origin
 
-The shell's origin holds the session's authority, so until U-01.2 moves Agent
-Canvas to its own origin (decision 0026 point 8), **no agent-authored or
-fixture-served content may be rendered in the shell's origin**. Today the
-embedded Canvas has no backend: nothing configures one (no `openhands-backends`
-entry, no session key), so it renders no conversation
-(`src/engineering/canvas-no-backend.test.tsx`). Connecting a backend to the
-embedded Canvas would break this precondition.
+The shell's origin holds the session's authority: a script running in it would
+hold that authority (design R4). So **agent-authored or fixture-served content
+may appear in the shell's origin only as inert text**: no markup, no link or URL
+the browser follows, no HTML or markdown interpretation, and no
+`dangerouslySetInnerHTML`, `href` or `src` built from it. Agent Canvas, which
+interprets agent-authored content richly, and any other rich rendering stay on
+their own origin (U-01.2; decision 0026 point 8), and the shell's
+content-security policy (below) still applies. Today the embedded Canvas has no
+backend: nothing configures one (no `openhands-backends` entry, no session
+key), so it renders no conversation
+(`src/engineering/canvas-no-backend.test.tsx`); connecting a backend to the
+embedded Canvas would break this precondition. The outcome card (U-04.2) shows
+projection values in the shell only as React text nodes, and its tests enforce
+it: a hostile string in every string field and key of a projection makes no
+`a`, `img`, `script`, `iframe`, `object`, `embed`, `[href]` or `[src]`
+element, and its sources contain no `dangerouslySetInnerHTML`, `innerHTML`,
+`href` or `src` (`src/areas/outcome-card.test.tsx`, "inert rendering").
 
 ### Content-security policy
 
@@ -300,7 +310,9 @@ item's status, and calls no Agent Server, Gitea or Backlog.md. For the outcome i
   words, the projection's detail and the record that shows it. `succeeded` reads "Result published,
   verified at publication", never done or complete; `unknown` is shown as unknown, and so is any
   status value the card does not know; an `_UNPROVEN` code says why (the records crossed a restore,
-  the row it would have been and the epochs); the records `disclosed` beside a published result are
+  the row it would have been and the epochs); a status and code the projection's state table does
+  not pair (for example `succeeded` with `RESULT_PUBLISHING`) is shown as given with a visible
+  "Status and code disagree" warning; the records `disclosed` beside a published result are
   listed;
 - **the authority** of each attempt: live, `FIXTURE` (on the card and on each fixture-bound
   attempt, whenever the projection says the authority is `fixture`, R11), or unknown with its code;
@@ -312,10 +324,15 @@ item's status, and calls no Agent Server, Gitea or Backlog.md. For the outcome i
   to U-01.2;
 - **blockers and missing sources**, none hidden: each unresolved reference (a `failed` lineage),
   an integration store that was not read, a task whose latest status is failed or unknown, an
-  attempt whose authority is not shown, an open restore epoch, a missing objective, design or
-  coverage note; then every lineage uncertainty and the `coverage` note (archived tasks not
-  enumerable);
-- a refused projection with its stable code, its text and the service's detail.
+  attempt whose authority is not shown, an open restore epoch, the count and codes of the lineage
+  uncertainties (missing links, unavailable or unresolved sources), a missing objective, design or
+  coverage note; "none" only when there is none of these; then every lineage uncertainty and the
+  `coverage` note (archived tasks not enumerable);
+- a refused projection with its stable code, its text and the service's detail; a request the
+  shell's own client would not send, as not sent (never as unreachable).
+
+The outcome id is checked by the card itself, whoever renders it: anything but a lower-case UUID
+is read from nowhere, and the path is encoded besides.
 
 Every value is rendered as text (R14): no markup, link or HTML is made from the projection's
 strings, and the projection already withholds the pull request's title and message text. The card
@@ -336,7 +353,9 @@ and the same card is shown from a fresh read with nothing written again; a proje
 in between (running, then published) is shown as its new state.
 [`src/areas/outcome-card.http.test.mjs`](src/areas/outcome-card.http.test.mjs) is the card end to
 end over HTTP, run only by `integrations/ownerhost/tests/test_outcome_card_http.py` (skipped in
-this suite). A real browser is **not yet verified**.
+this suite), with Node.js 24 or later; like every Vitest run, its start writes a transient bundle of
+`vite.config.ts` under `node_modules/.vite-temp/` (Vite's configuration loader). A real browser is
+**not yet verified**.
 
 ## The standalone Agent Canvas (U-01.2): gates G6 and G5
 

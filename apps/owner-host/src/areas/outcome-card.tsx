@@ -16,6 +16,7 @@ import {
   observed,
   readProjection,
   shownStatus,
+  statusCodeDisagree,
   str,
   usesFixture,
   type Json,
@@ -35,6 +36,11 @@ import {
 // Its tool name is chat-adapter.ts's OUTCOME_TOOL; its args name the outcome, `{outcome: <uuid>}`.
 const OUTCOME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** VALUE when it is an outcome id (a lower-case UUID, as the acceptance mints it), else null: nothing else is read. */
+export function outcomeId(value: unknown): string | null {
+  return typeof value === "string" && OUTCOME_ID.test(value) ? value : null;
+}
+
 export type OutcomeArgs = { outcome: string };
 export type OutcomeToolResult = { outcome: string };
 
@@ -45,7 +51,8 @@ type Read =
   | { state: "loading" }
   | { state: "shown"; projection: Projection; readAt: string }
   | { state: "refused"; code: RefusalCode; text: string; detail: string | null }
-  | { state: "unreadable"; why: string };
+  | { state: "unreadable"; why: string }
+  | { state: "not-sent"; why: string };
 
 /** The projection's path for OUTCOME. */
 export function outcomePath(outcome: string): string {
@@ -66,9 +73,11 @@ function useOutcomeProjection(client: IntegrationClient | null, outcome: string 
     } catch (error) {
       if (error instanceof ProjectionUnreadable) {
         next = { state: "unreadable", why: error.why };
+      } else if (error instanceof SessionRefusal) {
+        next = { state: "refused", code: error.code, text: REFUSAL_TEXT[error.code], detail: error.detail };
       } else {
-        const refusal = error instanceof SessionRefusal ? error : new SessionRefusal("UNREACHABLE");
-        next = { state: "refused", code: refusal.code, text: REFUSAL_TEXT[refusal.code], detail: refusal.detail };
+        // the shell's own client refused to send it (never the Integration process's answer, nor unreachable)
+        next = { state: "not-sent", why: error instanceof Error ? error.message : String(error) };
       }
     }
     if (mine === serial.current) setRead(next);
@@ -112,25 +121,38 @@ function Plain({ value }: { value: unknown }) {
   return <>{typeof value === "string" ? value : JSON.stringify(value)}</>;
 }
 
+/** One value of a projection entry: an object as its fields, a list element by element, a reference copyable. */
+function Value({ value, label }: { value: unknown; label: string }) {
+  const nested = obj(value);
+  if (nested !== null) return <Fields entry={nested} label={label} />;
+  if (Array.isArray(value)) {
+    return value.length === 0 ? (
+      <span className="owner-outcome__absent">none</span>
+    ) : (
+      <ol className="owner-outcome__list">
+        {value.map((item, i) => (
+          <li key={i}>
+            <Value value={item} label={`${label} ${i + 1}`} />
+          </li>
+        ))}
+      </ol>
+    );
+  }
+  if (typeof value === "boolean" || typeof value === "number") return <>{String(value)}</>;
+  return <Reference value={value} label={label} />;
+}
+
 /** Every field of a projection entry, each as given: references copyable, digests with their size. */
 function Fields({ entry, label }: { entry: Json; label: string }) {
   const keys = Object.keys(entry).filter((k) => k !== "basis" && k !== "statement");
   return (
     <dl className="owner-outcome__fields">
       {keys.map((key) => {
-        const value = entry[key];
-        const nested = obj(value);
         return (
           <div key={key} className="owner-outcome__field">
             <dt>{key}</dt>
             <dd>
-              {nested !== null ? (
-                <Fields entry={nested} label={`${label} ${key}`} />
-              ) : typeof value === "boolean" || typeof value === "number" ? (
-                String(value)
-              ) : (
-                <Reference value={value} label={`${label} ${key}`} />
-              )}
+              <Value value={entry[key]} label={`${label} ${key}`} />
             </dd>
           </div>
         );
@@ -152,6 +174,12 @@ export function StatusBadge({ status, code }: { status: unknown; code: unknown }
       <span className="owner-outcome__code-meaning" data-testid="outcome-code-meaning">
         {codeMeaning(code)}
       </span>
+      {statusCodeDisagree(status, code) ? (
+        <strong className="owner-outcome__disagree" data-testid="outcome-status-code-disagree">
+          {" "}
+          Status and code disagree: the projection&apos;s state table does not give this status for this code.
+        </strong>
+      ) : null}
     </span>
   );
 }
@@ -477,7 +505,7 @@ function ProjectionView({ projection: p }: { projection: Projection }) {
         <section className="owner-outcome__section" data-testid="outcome-missing" aria-label="Blockers and missing sources">
           <h4>Blockers and missing sources</h4>
           {missing.length === 0 ? (
-            <p>No blocker or missing source is recorded in this projection.</p>
+            <p>No blocker, missing source or lineage uncertainty is recorded in this projection.</p>
           ) : (
             <ul>
               {missing.map((m, i) => (
@@ -527,19 +555,23 @@ function ProjectionView({ projection: p }: { projection: Projection }) {
   );
 }
 
-/** The card for OUTCOME, read from the projection through CLIENT. */
+/**
+ * The card for OUTCOME, read from the projection through CLIENT. OUTCOME is checked here, whoever renders the card:
+ * anything but an outcome id (a lower-case UUID) is read from nowhere and shown as given, as text.
+ */
 export function OutcomeProjectionCard({
   client,
   outcome,
   toolCallId,
 }: {
   client: IntegrationClient | null;
-  outcome: string | null;
+  outcome: unknown;
   toolCallId?: string;
 }) {
   const layout = useShellLayout();
-  const { read, load } = useOutcomeProjection(client, outcome);
-  const state = client === null ? "unavailable" : outcome === null ? "unreadable" : read.state;
+  const id = outcomeId(outcome);
+  const { read, load } = useOutcomeProjection(client, id);
+  const state = client === null ? "unavailable" : id === null ? "unreadable" : read.state;
   const fixture = read.state === "shown" && usesFixture(read.projection);
   return (
     <div
@@ -554,9 +586,9 @@ export function OutcomeProjectionCard({
     >
       <div className="owner-outcome__header">
         <p className="owner-outcome__title">
-          Outcome <code data-testid="outcome-id">{outcome ?? "not named"}</code>
+          Outcome <code data-testid="outcome-id">{id ?? (typeof outcome === "string" ? outcome : "not named")}</code>
         </p>
-        {client !== null && outcome !== null ? (
+        {client !== null && id !== null ? (
           <button type="button" className="owner-outcome__refresh" onClick={() => void load()} disabled={read.state === "loading"}>
             Read again
           </button>
@@ -575,8 +607,8 @@ export function OutcomeProjectionCard({
       </p>
       {client === null ? (
         <p data-testid="outcome-unavailable">Sign in to read this outcome&apos;s projection.</p>
-      ) : outcome === null ? (
-        <p data-testid="outcome-unreadable">The card names no outcome id, so nothing is read.</p>
+      ) : id === null ? (
+        <p data-testid="outcome-unreadable">The card names no outcome id (a lower-case UUID), so nothing is read.</p>
       ) : read.state === "loading" ? (
         <p data-testid="outcome-loading">Reading the outcome projection…</p>
       ) : read.state === "refused" ? (
@@ -587,6 +619,8 @@ export function OutcomeProjectionCard({
           <p>{read.text}</p>
           {read.detail ? <p className="owner-outcome__refusal-detail">{read.detail}</p> : null}
         </div>
+      ) : read.state === "not-sent" ? (
+        <p data-testid="outcome-not-sent">The shell&apos;s client refused to send the request, so nothing was read: {read.why}</p>
       ) : read.state === "unreadable" ? (
         <p data-testid="outcome-unreadable">The Integration process answered something that is not an outcome projection: {read.why}</p>
       ) : (
@@ -601,15 +635,10 @@ export function OutcomeProjectionCard({
   );
 }
 
-function outcomeOf(args: unknown): string | null {
-  const outcome = obj(args)?.outcome;
-  return typeof outcome === "string" && OUTCOME_ID.test(outcome) ? outcome : null;
-}
-
 /** The tool UI: the card for its args' outcome, through the chat's Integration client. */
 export const OutcomeCard: ToolCallMessagePartComponent<OutcomeArgs, OutcomeToolResult> = (
   props: ToolCallMessagePartProps<OutcomeArgs, OutcomeToolResult>,
 ) => {
   const client = useContext(OutcomeClientContext);
-  return <OutcomeProjectionCard client={client} outcome={outcomeOf(props.args)} toolCallId={props.toolCallId} />;
+  return <OutcomeProjectionCard client={client} outcome={obj(props.args)?.outcome} toolCallId={props.toolCallId} />;
 };

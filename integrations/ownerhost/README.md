@@ -496,8 +496,11 @@ time); the shape and the decisive values do not. `tests/test_outcome_card_http.p
 this application, in the test's process, serves the real projection of a published fixture attempt on a free loopback
 port (never 13310, 13320 or 13330), and the Owner host's own card and Integration client render it under the pinned
 Vitest (`apps/owner-host/src/areas/outcome-card.http.test.mjs`), twice, with a teardown between (a reload); the
-application decides exactly those two GETs. It runs when Node.js is on PATH and `apps/owner-host/node_modules` is
-installed, and is skipped otherwise (a clean clone without `npm ci` there).
+application decides exactly those two GETs. It runs when Node.js 24 or later is on PATH (as `owner-host:test:if-node`
+requires) and `apps/owner-host/node_modules` is installed, and is skipped otherwise (a clean clone without `npm ci`
+there). It runs Vitest without its result and module caches (`--no-cache --no-fsModuleCache`), but Vite's
+configuration loader still writes a transient bundle of `vite.config.ts` under `apps/owner-host/node_modules/.vite-temp/`
+while it starts (it removes the file once loaded), so the test is not free of writes under `node_modules`.
 
 ## What it never does
 

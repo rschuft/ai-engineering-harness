@@ -176,6 +176,24 @@ describe("the outcome card in the chat (U-04.2)", () => {
     expect(fake.reads(`/outcomes/${OUTCOME_ID}`)).toHaveLength(1);
   });
 
+  it("gives a refused acceptance no outcome card, and reads no projection", async () => {
+    const fake = new FakeIntegration(throwawayCredential());
+    renderChat(fake);
+    await send(REVIEW);
+    const challenge = await screen.findByTestId("acceptance-card");
+    await waitFor(() => expect(challenge.getAttribute("data-state")).toBe("shown"));
+    fake.cards.clear();                        // the Integration process restarted: the challenge is gone
+    await act(async () => {
+      fireEvent.click(within(challenge).getByRole("button", { name: "Accept O1 of add-slugify" }));
+    });
+    const recorded = await screen.findByTestId("acceptance-record-card");
+    await waitFor(() => expect(recorded.getAttribute("data-state")).toBe("refused"));
+    await waitFor(() => expect(stored(fake)).toHaveLength(4));
+    expect(stored(fake)[3].message.content.map((p: any) => p.toolName)).toEqual([ACCEPTANCE_RECORD_TOOL]);
+    expect(screen.queryByTestId("outcome-card")).toBeNull();
+    expect(fake.reads(`/outcomes/${OUTCOME_ID}`)).toEqual([]);
+  });
+
   it("survives a reload: the same card from a fresh read of the projection, and nothing is written again", async () => {
     const fake = new FakeIntegration(throwawayCredential());
     const before = body(await accepted(fake));

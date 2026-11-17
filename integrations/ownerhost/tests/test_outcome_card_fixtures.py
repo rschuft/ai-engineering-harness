@@ -106,6 +106,22 @@ class Committed(unittest.TestCase):
                          [('running', 'RESULT_VERIFIED'), ('succeeded', 'RESULT_PUBLISHED')])
         self.assertEqual(running['body']['attempts'][0]['operationKey'], published['body']['attempts'][0]['operationKey'])
 
+    def test_the_evidence_basis_is_the_host_s_or_the_attempt_s_as_r6_has_it(self):
+        """The card groups evidence by its stated basis: what the host verified (the commit, the diff, the pull request,
+        the intake) and what the attempt reported (its report, its own tests and their output), never the other way."""
+        expected = {('evidence', 'commit'): 'verified', ('evidence', 'diff'): 'verified',
+                    ('evidence', 'pullRequest'): 'verified', ('evidence', 'testOutput'): 'reported',
+                    ('result', 'verified'): 'verified', ('result', 'reported'): 'reported',
+                    ('result', 'tests'): 'reported'}
+        seen = set()
+        for name, answer in bodies():
+            for attempt in answer['body'].get('attempts', ()) if answer['status'] == 200 else ():
+                for part, key, basis in F.bases(attempt):
+                    with self.subTest(scenario=name, entry=(part, key)):
+                        self.assertEqual(basis, expected[(part, key)])
+                    seen.add((part, key))
+        self.assertEqual(seen, set(expected))
+
     def test_the_shape_comparison_sees_a_key_added_removed_or_retyped(self):
         [answer] = committed('pending-created')['answers']
         for change in (lambda b: b['attempts'][0].__setitem__('stageName', 'implement'),

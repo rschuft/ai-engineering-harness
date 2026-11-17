@@ -73,13 +73,62 @@ export function codeMeaning(code: unknown): string {
   if (typeof code !== "string" || code.length === 0) return "No code was given.";
   if (code.endsWith(UNPROVEN_SUFFIX)) {
     const row = code.slice(0, -UNPROVEN_SUFFIX.length);
-    const base = row === "NO_ATTEMPT" ? "No attempt is recorded." : CODE_MEANING[row];
+    const base = row === "NO_ATTEMPT" ? "No attempt is recorded." : Object.hasOwn(CODE_MEANING, row) ? CODE_MEANING[row] : undefined;
     if (base !== undefined) {
       return `Unproven after a restore of the integration store: the records would read "${base}", but the restored history cannot prove that nothing later was recorded.`;
     }
     return UNKNOWN_CODE;
   }
-  return CODE_MEANING[code] ?? UNKNOWN_CODE;
+  return Object.hasOwn(CODE_MEANING, code) ? CODE_MEANING[code] : UNKNOWN_CODE;
+}
+
+/**
+ * The status each code of the state table goes with (integrations/ownerhost/README.md, "The state table"; a task's
+ * NO_ATTEMPT and STORE_UNAVAILABLE included). An `_UNPROVEN` code is always unknown. A code that is not here is one
+ * the card does not know, and no agreement is judged for it.
+ */
+export const CODE_STATUS: Record<string, ExecutionStatus> = {
+  ATTEMPT_AUTHORITY_UNBOUND: "unknown",
+  ATTEMPT_LABEL_MISSING: "unknown",
+  ATTEMPT_LABEL_MISMATCH: "unknown",
+  ATTEMPT_LABEL_ON_LIVE: "unknown",
+  RECORD_UNREADABLE: "unknown",
+  ATTEMPT_RESERVED: "pending",
+  CREATE_SENT: "running",
+  CREATE_OUTCOME_UNKNOWN: "unknown",
+  ATTEMPT_FAILED: "failed",
+  LAUNCH_NOT_LAUNCHED: "failed",
+  ATTEMPT_STOPPED: "failed",
+  ATTEMPT_ENDED: "failed",
+  ATTEMPT_END_UNSETTLED: "unknown",
+  ATTEMPT_ENDING: "running",
+  RESULT_PUBLISHED: "succeeded",
+  RESULT_FAILED: "failed",
+  RESULT_WRITE_UNSETTLED: "unknown",
+  RESULT_PUBLISHING: "running",
+  RESULT_VERIFIED: "running",
+  RESULT_DELIVERED: "running",
+  TURN_OUTCOME_UNKNOWN: "unknown",
+  TURN_FAILED: "failed",
+  TURN_SENT: "running",
+  MESSAGE_SENDING: "running",
+  MESSAGE_RESERVED: "pending",
+  LAUNCHED: "pending",
+  CREATED: "pending",
+  NO_ATTEMPT: "pending",
+  STORE_UNAVAILABLE: "unknown",
+  RESULT_RECEIPT_UNSETTLED: "unknown",
+};
+
+/** Whether STATUS and CODE disagree with the state table (false when the code is not one the card knows). */
+export function statusCodeDisagree(status: unknown, code: unknown): boolean {
+  if (typeof code !== "string") return false;
+  const expected: ExecutionStatus | undefined = code.endsWith(UNPROVEN_SUFFIX)
+    ? "unknown"
+    : Object.hasOwn(CODE_STATUS, code)
+      ? CODE_STATUS[code]
+      : undefined;
+  return expected !== undefined && expected !== status;
 }
 
 /** One of the five statuses; anything else is unknown (never pending, failed or succeeded). */
@@ -229,6 +278,15 @@ export function missingSources(p: Projection): Missing[] {
         detail: str(authority.detail) ?? str(authority.reason),
       });
     }
+  }
+  if (p.uncertainties.length > 0) {
+    const codes = [...new Set(p.uncertainties.map((u) => str(u.code) ?? "no code"))];
+    out.push({
+      kind: "uncertain-sources",
+      code: null,
+      text: `${p.uncertainties.length} lineage ${p.uncertainties.length === 1 ? "uncertainty is" : "uncertainties are"} recorded (missing links, unavailable or unresolved sources; each is listed under Lineage uncertainties): ${codes.join(", ")}.`,
+      detail: null,
+    });
   }
   if (p.objective === null) {
     out.push({ kind: "objective-missing", code: null, text: "The projection holds no objective node.", detail: null });

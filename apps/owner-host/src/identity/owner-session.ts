@@ -349,7 +349,7 @@ export function createIntegrationClient(credential: string, fetchImpl: FetchLike
       if (!response.ok) {
         const code = (answer as { code?: unknown } | null)?.code;
         const detail = (answer as { detail?: unknown } | null)?.detail;
-        if (typeof code === "string" && code in REFUSAL_TEXT)
+        if (typeof code === "string" && Object.hasOwn(REFUSAL_TEXT, code))
           throw new SessionRefusal(code as RefusalCode, response.status, typeof detail === "string" ? detail.slice(0, 500) : null);
         throw new SessionRefusal("ANSWER_INVALID", response.status);
       }

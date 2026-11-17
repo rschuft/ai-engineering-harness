@@ -1,14 +1,18 @@
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { OutcomeProjectionCard, outcomePath } from "./outcome-card";
+import { OutcomeCard, OutcomeClientContext, OutcomeProjectionCard, outcomeId, outcomePath } from "./outcome-card";
 import {
   CODE_MEANING,
   EXECUTION_STATUSES,
   OUTCOME_FORMAT,
   STATUS_LABEL,
   UNPROVEN_SUFFIX,
+  CODE_STATUS,
+  STATUS_MEANING,
   codeMeaning,
   shownStatus,
+  statusCodeDisagree,
 } from "./outcome-projection";
 import {
   INTEGRATION_ORIGIN,
@@ -21,6 +25,8 @@ import {
 import { WIDE_MIN_WIDTH } from "../shell/layout";
 import { setViewportWidth } from "../test/viewport";
 import shellCss from "../shell/shell.css?raw";
+import cardSource from "./outcome-card.tsx?raw";
+import projectionSource from "./outcome-projection.ts?raw";
 import { OUTCOME_ID, SCENARIOS, answer, fixture, schema as projectionSchema, type Answer } from "../test/outcome-fixtures";
 
 // The outcome card (plan leaf U-04.2) over real answers of the Integration process's outcome
@@ -558,5 +564,168 @@ describe("responsive at the shell's breakpoint", () => {
     expect(css).toMatch(/\.owner-outcome__sections\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
     expect(css).toMatch(/\.owner-outcome\[data-layout="wide"\] \.owner-outcome__sections\s*\{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
     expect(css).not.toMatch(/\.owner-outcome[^{]*\{[^}]*(?:min-width|width):\s*\d{3,}px/);
+  });
+});
+
+describe("the review's fixes (U-04.2 fix round)", () => {
+  it("S2: never says there is no blocker while lineage uncertainties hold missing links or unavailable sources", async () => {
+    for (const name of ["published-live", "running-turn-sent"]) {
+      const a = answer(name);
+      renderCard(() => a);
+      const card = await settled();
+      const missing = within(card).getByTestId("outcome-missing");
+      expect(missing.textContent, name).not.toContain("No blocker");
+      const [item] = within(missing)
+        .getAllByTestId("outcome-missing-item")
+        .filter((m) => m.getAttribute("data-kind") === "uncertain-sources");
+      expect(item.textContent, name).toContain(`${a.body.lineageUncertainties.length} lineage uncertainties are recorded`);
+      for (const code of ["NO_ATTEMPT_FOR_TASK", "RESOLVER_NOT_CONFIGURED"]) expect(item.textContent, name).toContain(code);
+      cleanup();
+    }
+    // with nothing at all, the empty case names the uncertainties too
+    const bare = answer("pending-created");
+    bare.body.lineageUncertainties = [];
+    bare.body.tasks = bare.body.tasks.filter((t: any) => t.execution.status !== "failed" && t.execution.status !== "unknown");
+    renderCard(() => bare);
+    const card = await settled();
+    expect(within(card).getByTestId("outcome-missing").textContent).toContain(
+      "No blocker, missing source or lineage uncertainty is recorded in this projection.",
+    );
+  });
+
+  it("S3: an outcome argument that is not an outcome id makes no request, through the tool UI or the exported card", async () => {
+    const seen: string[] = [];
+    const client = createIntegrationClient(throwawayCredential(), async (url) => {
+      seen.push(url);
+      return new Response(JSON.stringify(answer("pending-created").body), { status: 200 });
+    });
+    const Tool = OutcomeCard as unknown as (props: Record<string, unknown>) => ReactElement;
+    for (const outcome of ["../threads", "http://203.0.113.9/x", "//203.0.113.9", OUTCOME_ID.toUpperCase(), `${OUTCOME_ID}/..`, 7]) {
+      render(
+        <OutcomeClientContext.Provider value={client}>
+          <Tool args={{ outcome }} toolCallId="t" toolName="outcome_card" argsText="" status={{ type: "complete" }} />
+        </OutcomeClientContext.Provider>,
+      );
+      expect(screen.getByTestId("outcome-card").getAttribute("data-state"), String(outcome)).toBe("unreadable");
+      cleanup();
+      render(<OutcomeProjectionCard client={client} outcome={outcome} />);
+      expect(screen.getByTestId("outcome-card").getAttribute("data-state"), String(outcome)).toBe("unreadable");
+      cleanup();
+    }
+    render(<OutcomeProjectionCard client={client} outcome=".." />);
+    expect(screen.getByTestId("outcome-card").getAttribute("data-state")).toBe("unreadable");
+    await act(async () => {});
+    expect(seen).toEqual([]);
+    expect(outcomeId(OUTCOME_ID)).toBe(OUTCOME_ID);
+    // the path is encoded besides: nothing given can leave /outcomes/
+    expect(outcomePath("a/../b?c#d")).toBe("/outcomes/a%2F..%2Fb%3Fc%23d");
+  });
+
+  it("S3: a request the shell's own client refuses is shown as not sent, never as unreachable", async () => {
+    const client = { request: async () => Promise.reject(new Error("not a path of the Integration process: x")) };
+    render(<OutcomeProjectionCard client={client} outcome={OUTCOME_ID} />);
+    const card = await settled();
+    expect(card.getAttribute("data-state")).toBe("not-sent");
+    expect(within(card).getByTestId("outcome-not-sent").textContent).toContain("not a path of the Integration process");
+    expect(within(card).queryByTestId("outcome-refusal-code")).toBeNull();
+  });
+
+  it("S4: a hostile string in every string field and key of a projection creates no element, link or source", async () => {
+    const hostile =
+      'javascript:alert(1)<img src=x onerror="window.__aiehHit=1"><a href="http://203.0.113.9/">x</a><script>window.__aiehHit=2</script>[x](javascript:1)';
+    const poison = (value: unknown): unknown => {
+      if (typeof value === "string") return hostile;
+      if (Array.isArray(value)) return value.map(poison);
+      if (value !== null && typeof value === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value)) out[k] = poison(v);
+        out[hostile] = hostile;
+        return out;
+      }
+      return value;
+    };
+    const cases: [string, number][] = [["published-disclosed", 0], ["reconnect", 1], ["unknown-label-missing", 0], ["lineage-failed", 0]];
+    for (const [name, index] of cases) {
+      const a = answer(name, index);
+      const body = poison(a.body) as Record<string, unknown>;
+      body.format = a.body.format;
+      renderCard(() => ({ status: 200, body }));
+      const card = await settled();
+      expect(card.getAttribute("data-state"), name).toBe("shown");
+      expect(card.querySelectorAll("a, img, script, iframe, object, embed, [href], [src]"), name).toHaveLength(0);
+      // a hostile value may stand only in a text attribute (data-*, aria-label), never in one the browser acts on
+      const attributes = Array.from(card.querySelectorAll("*")).flatMap((e) =>
+        Array.from(e.attributes).filter((x) => x.value.includes("javascript:") && !/^(data|aria)-/.test(x.name)),
+      );
+      expect(attributes.map((x) => x.name), name).toEqual([]);
+      expect((card.textContent ?? "").split(hostile).length - 1, name).toBeGreaterThan(10);
+      expect((window as any).__aiehHit, name).toBeUndefined();
+      cleanup();
+    }
+  });
+
+  it("S4: the card's sources build no HTML, link or source from projection data", () => {
+    const sources: [string, string][] = [["outcome-card.tsx", cardSource], ["outcome-projection.ts", projectionSource]];
+    for (const [file, source] of sources) {
+      expect(/dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(source), file).toBe(false);
+      expect(/\bhref\b/.test(source), file).toBe(false);
+      expect(/\bsrc\s*[=:]/.test(source), file).toBe(false);
+      expect(/<(a|img|iframe|script|object|embed)\b/.test(source), file).toBe(false);
+    }
+  });
+
+  it("note 1: a code or refusal named like an Object.prototype member is a code the card does not know", async () => {
+    for (const code of ["constructor", "toString", "__proto__", "hasOwnProperty", "toString_UNPROVEN", "constructor_UNPROVEN"]) {
+      expect(codeMeaning(code), code).toBe(codeMeaning("NO_SUCH_CODE"));
+      expect(statusCodeDisagree("succeeded", code), code).toBe(code.endsWith("_UNPROVEN"));
+    }
+    const a = answer("reconnect", 1);
+    a.body.attempts[0].executionCode = "constructor";
+    renderCard(() => a);
+    let card = await settled();
+    expect(within(attempts(card)[0]).getAllByTestId("outcome-code-meaning")[0].textContent).toBe(codeMeaning("NO_SUCH_CODE"));
+    cleanup();
+    renderCard(() => ({ status: 503, body: { code: "toString", detail: "d", remedy: "r" } }));
+    card = await settled();
+    expect(within(card).getByTestId("outcome-refusal-code").textContent).toBe("ANSWER_INVALID");
+  });
+
+  it("note 2: a status and code the state table does not pair are shown with a visible warning", async () => {
+    const a = answer("reconnect", 1);
+    a.body.attempts[0].executionCode = "RESULT_PUBLISHING";
+    renderCard(() => a);
+    const card = await settled();
+    const [attempt] = attempts(card);
+    expect(attempt.getAttribute("data-status")).toBe("succeeded");
+    expect(within(attempt).getAllByTestId("outcome-status-code-disagree")[0].textContent).toContain("Status and code disagree");
+    // no committed answer of the projection shows the warning, and the table names every code of the projection
+    expect(Object.keys(CODE_STATUS).sort()).toEqual([...projectionSchema().codes].sort());
+    for (const name of SCENARIOS) {
+      for (const f of fixture(name).answers) {
+        if (f.status !== 200) continue;
+        const pairs: [unknown, unknown][] = [
+          ...f.body.attempts.map((t: any) => [t.executionStatus, t.executionCode]),
+          ...f.body.tasks.map((t: any) => [t.execution.status, t.execution.code]),
+        ];
+        for (const [status, code] of pairs) expect(statusCodeDisagree(status, code), `${name} ${status} ${code}`).toBe(false);
+      }
+    }
+  });
+
+  it("note 5: a published result's status carries the Work-status disclaimer", async () => {
+    const card = await show("reconnect", 1);
+    const badge = within(attempts(card)[0]).getAllByTestId("outcome-status")[0];
+    expect(badge.textContent).toContain(STATUS_MEANING.succeeded);
+    expect(badge.textContent).toContain("The Work item's own status is not changed by this.");
+  });
+
+  it("note 6: a list in an entry is shown element by element, never as [object Object]", async () => {
+    const a = answer("reconnect", 1);
+    a.body.attempts[0].evidence.commit.extra = [{ k: "v1" }, "s2", [3, { k: "v4" }]];
+    renderCard(() => a);
+    const card = await settled();
+    expect(card.textContent).not.toContain("[object Object]");
+    const values = within(card).getAllByTestId("outcome-reference-value").map((v) => v.textContent);
+    expect(values).toEqual(expect.arrayContaining(["v1", "s2", "v4"]));
   });
 });

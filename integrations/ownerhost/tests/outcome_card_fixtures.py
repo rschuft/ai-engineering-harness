@@ -305,6 +305,16 @@ def shape(value):
     return type(value).__name__
 
 
+def bases(attempt: dict) -> list:
+    """Every evidence and result entry's basis (verified, reported), by where it is: the card groups them by it."""
+    found = []
+    for part in ('evidence', 'result'):
+        for key, entry in sorted((attempt.get(part) or {}).items()):
+            if isinstance(entry, dict) and 'basis' in entry:
+                found.append((part, key, entry['basis']))
+    return found
+
+
 def decisive(answer: dict) -> dict:
     """The values the card's display rests on."""
     body = answer['body']
@@ -315,9 +325,10 @@ def decisive(answer: dict) -> dict:
         'tasks': [(t['reference'], t['resolution'], t['reachedThrough'], t['execution']['status'],
                    t['execution']['code']) for t in body['tasks']],
         'attempts': [(a['executionStatus'], a['executionCode'], a['authority']['shown'], a['authority']['bound'],
-                      a['authority']['code'], a.get('restoredRow'), len(a.get('disclosed') or ()),
+                      a['authority']['code'], a['authority'].get('reason'), a['authority'].get('detail'),
+                      a.get('restoredRow'), len(a.get('disclosed') or ()),
                       a['evidence'] is not None, a['result']['verified'] is not None,
-                      a['result']['reported'] is not None) for a in body['attempts']],
+                      a['result']['reported'] is not None, bases(a)) for a in body['attempts']],
         'failures': sorted((f['role'], f['outcome'], f['code']) for f in body['failures']),
         'uncertainties': sorted((u['reason'], u['code']) for u in body['lineageUncertainties']),
         'coverage': body['coverage'],

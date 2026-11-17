@@ -7,9 +7,11 @@ under Node.js), its one request a GET with the session header and the shell's Or
 The card is rendered, torn down and rendered again (a reload): both renders show the same outcome, each from its own
 read of the projection, and the application decided exactly those two GETs and nothing else.
 
-It runs when Node.js is on PATH and the Owner host's dependencies are installed (``apps/owner-host/node_modules``, by
-``npm ci`` there); otherwise it is skipped with that reason. No browser is used, and nothing leaves loopback: the
-card's fetch is a loopback ``node:http`` request to the port chosen here.
+It runs when Node.js 24 or later is on PATH (``owner-host:test:if-node``'s condition) and the Owner host's dependencies
+are installed (``apps/owner-host/node_modules``, by ``npm ci`` there); otherwise it is skipped with that reason. No
+browser is used, and nothing leaves loopback: the card's fetch is a loopback ``node:http`` request to the port chosen
+here. Vitest runs without its caches; Vite's configuration loader still writes a transient bundle of the configuration
+under ``node_modules/.vite-temp/`` while it starts.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ APP = F.REPO / 'apps' / 'owner-host'
 VITEST = APP / 'node_modules' / 'vitest' / 'vitest.mjs'
 CARD_TEST = 'src/areas/outcome-card.http.test.mjs'
 NODE = shutil.which('node')
+NODE_MAJOR_MIN = 24       # owner-host:test:if-node's condition (the Owner host's engines: node >= 24)
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 RESERVED_PORTS = (13310, 13320, 13330)
 CEILING_S = 300          # bounds a hang of the Vitest run; it normally ends within seconds
@@ -49,6 +52,15 @@ def free_port() -> int:
             probe.close()
         if port not in RESERVED_PORTS:
             return port
+
+
+def node_major() -> int | None:
+    """The major version of the node on PATH, or None when it cannot be read."""
+    try:
+        ran = subprocess.run([NODE, '--version'], capture_output=True, timeout=STOP_CEILING_S, creationflags=NO_WINDOW)
+        return int(ran.stdout.decode('ascii', 'replace').strip().lstrip('v').split('.')[0])
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
 
 
 class InThread:
@@ -91,6 +103,13 @@ class InThread:
                                                 'needed to render the Owner host\'s card')
 class CardOverHttp(F.Exporter):
 
+    @classmethod
+    def setUpClass(cls):
+        major = node_major()
+        if major is None or major < NODE_MAJOR_MIN:
+            raise unittest.SkipTest(f'Node.js {NODE_MAJOR_MIN} or later is needed; node --version gives {major}')
+        super().setUpClass()
+
     def test_the_card_renders_the_served_projection_of_a_published_fixture_attempt_and_again_after_a_reload(self):
         sources = F.sources_for(self)
         result, _, published, _ = self.go()
@@ -116,7 +135,8 @@ class CardOverHttp(F.Exporter):
                 given = {'port': server.port, 'credential': app.credential, 'outcome': F.OUTCOME_ID,
                          'report': str(report), 'commit': published.receipt['commit']}
                 env = dict(os.environ, AIEH_OUTCOME_CARD_HTTP=json.dumps(given))
-                # without Vitest's caches: nothing is written under node_modules (as owner-host:test:if-node)
+                # without Vitest's caches, as owner-host:test:if-node (Vite's config loader still writes a transient
+                # bundle under node_modules/.vite-temp while it starts)
                 argv = [NODE, str(VITEST), 'run', CARD_TEST, '--no-color', '--no-cache', '--no-fsModuleCache']
                 ran = subprocess.run(argv, cwd=APP, env=env, capture_output=True, timeout=CEILING_S,
                                      creationflags=NO_WINDOW)

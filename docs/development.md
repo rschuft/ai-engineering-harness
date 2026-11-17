@@ -1831,7 +1831,7 @@ the component lock's versions for every package they share. Install it with
 | `owner-host:install` | `npm ci --ignore-scripts --no-audit --no-fund` | yes | Installs the locked dependencies; npm checks each tarball's integrity. |
 | `owner-host:typecheck` | `npm run typecheck` (`tsc --noEmit -p tsconfig.json`) | no | TypeScript 7.0.2 check of the app, its tests and the build plugin. |
 | `owner-host:test` | `npm test` (`vitest run`) | no | Component, routing, identity, responsive-logic, no-network and Canvas compatibility tests in jsdom; since U-04.2 the outcome card over the projection's committed answers and its reconnect fixture (its end-to-end file is skipped here: `ownerhost:test` runs it). |
-| `owner-host:test:if-node` | when `node` is 24 or later, `npm test -- --no-cache --no-fsModuleCache`; otherwise a skip message | no | The same tests, without Vitest's result and module caches (nothing written under `node_modules/`); part of `test:all`. Fails when `node_modules/` is missing (`owner-host:install` first). |
+| `owner-host:test:if-node` | when `node` is 24 or later, `npm test -- --no-cache --no-fsModuleCache`; otherwise a skip message | no | The same tests, without Vitest's result and module caches (no cache is kept under `node_modules/`; Vite's configuration loader still writes a transient bundle of `vite.config.ts` under `node_modules/.vite-temp/` while it starts); part of `test:all`. Fails when `node_modules/` is missing (`owner-host:install` first). |
 | `owner-host:build` | `npm run build` (`vite build`) | no | Production build into `apps/owner-host/dist/`. Canvas is a lazy chunk. |
 
 `npm run dev` and `npm run preview` serve the app on 127.0.0.1 only. Neither has a
