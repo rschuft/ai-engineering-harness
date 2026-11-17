@@ -146,5 +146,39 @@ class LiveBytes(TA.Bound):
         self.assertEqual(authority_keys(record), [])
         self.assertUnlabelled()
 
+class NotLaunchedLabel(TA.Bound):
+    """U-04.1's review (rv12, ruling 4): a launch receipt written ``not-launched`` because the gate could not read the
+    admitted values still carries the bound authority, from the pinned route allowlist (``bound_label``'s source); a
+    live one carries none, byte for byte as before; and with the allowlist unreadable too there is none to copy."""
+
+    def gate(self, result):
+        def unreadable(*args, **kwargs):
+            raise OSError('the approved profile cannot be read')
+        return LG.gate(self.store, result.operation_key, inspect_source=self.core.container_inspect, source=SOURCE,
+                       actor=ACTOR, read_profile=unreadable, read_artifact=self.read_artifact)
+
+    def test_a_fixture_not_launched_receipt_carries_the_bound_authority(self):
+        result = self.fixture_attempt()
+        problems = self.gate(result)(result.conversation_id)
+        self.assertTrue(problems)
+        record = LG.launch_record(self.store, result.attempt_id)
+        self.assertEqual((record['verdict'], record['authority']), (LG.NOT_LAUNCHED, 'fixture'))
+
+    def test_a_live_not_launched_receipt_carries_none(self):
+        result = self.dispatch(self.core, provider(), profile=ci.REAL, manifest=self.approve_real())
+        self.assertTrue(self.gate(result)(result.conversation_id))
+        record = LG.launch_record(self.store, result.attempt_id)
+        self.assertEqual(record['verdict'], LG.NOT_LAUNCHED)
+        self.assertEqual(authority_keys(record), [])
+
+    def test_with_the_allowlist_unreadable_too_the_receipt_is_unlabelled(self):
+        result = self.fixture_attempt()
+        (self.profiles / TA.FIX / 'agent-server' / 'routes.json').unlink()
+        self.assertTrue(self.gate(result)(result.conversation_id))
+        record = LG.launch_record(self.store, result.attempt_id)
+        self.assertEqual(record['verdict'], LG.NOT_LAUNCHED)
+        self.assertNotIn('authority', record)
+
+
 if __name__ == '__main__':
     unittest.main()

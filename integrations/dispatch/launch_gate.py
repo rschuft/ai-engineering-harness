@@ -239,17 +239,26 @@ def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str
     reserved_conversation = store.conversation_id_for(operation_key)
 
     def inspect(conversation_id: str) -> list:
-        problems, values, document, fields, label = [], None, None, [], {}
+        problems, values, document, fields, label, labelled = [], None, None, [], {}, False
         try:
             values = admitted(integration_store, operation_key, read_profile=read_profile, read_artifact=read_artifact)
             # E-01.8, R11: the receipt carries the attempt's bound authority (its pinned route allowlist's) when it is
             # not live; a live receipt is byte for byte what it was
             label = di.authority_label(di.attempt_authority(
                 di.stored_inputs(integration_store, operation_key, state='confirmed'), read_artifact))
+            labelled = True
         except DispatchRefused as refusal:
             problems.append(f'the admitted values could not be read ({refusal.code})')
         except Exception as exc:  # noqa: BLE001 - no admitted values: nothing is compared
             problems.append(f'the admitted values could not be read ({type(exc).__name__})')
+        if not labelled:
+            # U-04.1's review (rv12, ruling 4): a not-launched receipt whose admitted values could not be read still
+            # carries the bound authority, read from the pinned route allowlist as bound_label reads it; when that
+            # cannot be read either there is none to copy and the receipt stays unlabelled (a live one: nothing)
+            try:
+                label = di.bound_label(integration_store, operation_key, read_artifact)
+            except Exception:  # noqa: BLE001 - the receipt is written whatever the label's read meets
+                label = {}
         if conversation_id != reserved_conversation:
             problems.append('the inspect was asked for another conversation than the attempt\'s')
         else:
