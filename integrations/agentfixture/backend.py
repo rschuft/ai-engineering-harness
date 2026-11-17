@@ -23,7 +23,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -145,9 +144,11 @@ class Puller:
         self.names.append(name)
         data = (self.exchange / name).read_bytes()
         local = self.guest.staging_dir(self.ctx, INSTANCE, 'inbound') / name
-        if os.path.lexists(local):
-            raise self.guest.Refused('REFUSED', f'{local} exists; never overwritten')
-        local.write_bytes(data)
+        try:            # an exclusive create: a staged name is never overwritten, and no check races the write
+            with open(local, 'xb') as handle:
+                handle.write(data)
+        except FileExistsError:
+            raise self.guest.Refused('REFUSED', f'{local} exists; never overwritten') from None
         try:
             bundle = self.guest.verify_pulled_bundle(self.ctx, INSTANCE, local)
         except self.guest.Refused as exc:

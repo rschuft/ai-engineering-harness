@@ -214,7 +214,10 @@ class _Recovery:
         self.held.append({'operationKey': key, 'class': kind, 'code': code, 'resolver': RESOLVERS[code], **extra})
 
     def move(self, key, from_state, to_state, reason, detail) -> bool:
-        """One transition, expected from FROM_STATE; another writer's move is a conflict, reported, never retried."""
+        """One transition, expected from FROM_STATE; another writer's move is a conflict, reported, never retried. Its
+        detail carries the attempt's bound authority when it is not live (E-01.8, R11; ``bound_label``: the typed
+        attempt's own, or a turn journal's attempt's), so a live record is byte for byte what it was."""
+        detail = {**detail, **di.bound_label(self.store, self.turn_attempts.get(key, key), self.read_artifact)}
         try:
             di._mark(self.store, key, from_state, to_state, self.actor, reason, detail)
             return True

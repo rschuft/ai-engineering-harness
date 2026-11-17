@@ -9,7 +9,7 @@ log).
 |---|---|---|---|
 | `openspec/schemas/intent-driven/` | OpenSpec workflow schema: proposal (with the intent record), specs, design. `apply.requires` lists all three; no `apply.tracks`, because Backlog.md tracks implementation. | schema `version: 1` | P-01.1 |
 | `skills/intent-normalization/` | Agent Skill that turns a request into the proposal's intent record (`intent-record/v1`). | `metadata.version` in `SKILL.md`; history in its `CHANGELOG.md` | P-01.1 |
-| `assignments/<pin id>.json` | Agent assignments (`agent-assignment/v1`): what a catalog pin assigns to an attempt. The dispatch resolver reads one at its pin's commit and refuses another digest ([integrations/dispatch](../integrations/dispatch/README.md#agent-assignment-plan-leaf-e-053)). `d1-implement.json`: D1's, the claude-code ACP registry entry, the D1 create template, no Skill. | the pin's commit and `manifest_sha256` | E-05.3 |
+| `assignments/<pin id>.json` | Agent assignments (`agent-assignment/v1`): what a catalog pin assigns to an attempt. The dispatch resolver reads one at its pin's commit and refuses another digest ([integrations/dispatch](../integrations/dispatch/README.md#agent-assignment-plan-leaf-e-053)). `d1-implement.json`: D1's, the claude-code ACP registry entry, the D1 create template, no Skill. `fixture-d1-implement.json` (E-01.8): the fixture pin's, the same registry entry, the fixture profile `fixture-d1-replay`'s own copy of the D1 create template, no Skill. | the pin's commit and `manifest_sha256` | E-05.3 |
 
 The Skill was qualified on live model runs in plan leaf P-01.2 (Skill 1.1.0, one
 model, Claude Code headless, 13 synthetic requests): see

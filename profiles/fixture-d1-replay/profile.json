@@ -4,7 +4,7 @@
   "plan_leaf": "E-01.8",
   "contract": "profiles/README.md, section 13 (fixture profiles)",
   "decision": "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
-  "purpose": "A fixture profile, not an execution profile (the I1 integration design, R9; decision 0026 point 5): it declares the fixture authority, cannot be launched, has no tier and claims none of P1 to P12. It replays the native execution kind of the profile D1 ran, with that profile's admission values, so that the dispatcher admits it and the launch gate compares the fixture's recorded inspect with its logic unchanged; its attempts are answered by the Agent Server fixture (integrations/agentfixture).",
+  "purpose": "A fixture profile, not an execution profile (the I1 integration design, R9; decision 0026 point 5): it declares the fixture authority, cannot be launched, has no tier and claims none of P1 to P12. It replays the native execution kind of the profile D1 ran, with that profile's admission values, so that the dispatcher admits it and the launch gate compares the fixture's recorded inspect with its logic unchanged; its attempts are answered by the Agent Server fixture (integrations/agentfixture). Its provider block holds only the image pin the launch gate reads (launch_gate.admitted: image.image_id): no provider, binary, boot input or launch (the engineering manager's reading of R9 for E-01.8).",
   "status": {
     "operational": true,
     "operational_evidence": "For a fixture profile, its conformance suite passed at the pinned answers: E-01.7, evidence/bootstrap-log.md#e-01-7-verdict-2026-11-16 (integrations/agentfixture/tests). Contract C6 is not claimed: no property, no tier."
@@ -26,8 +26,7 @@
     "provision_lock": {
       "path": "profiles/strong-windows-qemu-whpx/provision.lock.json",
       "sha256": "f02e430a3f3de69976e5eb632d757126c9d1a879ab68cf2c3681f9977a8168e0"
-    },
-    "note": "Only the image pin the launch gate reads (integrations/dispatch/launch_gate.py admitted: image.image_id); no provider, binary, boot input or launch: the profile cannot be launched (the engineering manager's reading of R9 for E-01.8)."
+    }
   },
   "provisioning": {
     "agent_server": {

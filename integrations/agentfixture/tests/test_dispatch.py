@@ -268,7 +268,51 @@ class Delivery(unittest.TestCase):
             transport('POST', '/x', {'command': 'c'}, deliver={'part': 'bundle', 'name': 'x.bundle'})
         self.assertEqual((caught.exception.code, transport.calls), ('FIXTURE_DELIVERY_UNAVAILABLE', []))
 
+    def test_a_delivery_name_outside_the_grammar_is_refused_before_anything_is_sent(self):
+        """The review's item 7: tools/guest.py's own check_exchange_name, applied before sending, as the live path
+        (exchange_delivery) applies it."""
+        tmp = Path(tempfile.mkdtemp(prefix='e18n-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        bounds = json.loads((NATIVE / 'profile.json').read_bytes())['exchange']['pull']
+        transport = S.TRANSPORT.FixtureTransport(S.free_port(), exchange=tmp, bounds={
+            k: bounds[k] for k in ('name_pattern', 'max_bytes')})
+        for name in ('../x.bundle', 'x.bundle.partial', '.hidden', 'a/b'):
+            with self.subTest(name=name):
+                with self.assertRaises(S.TRANSPORT.FixtureTransportError) as caught:
+                    transport('POST', '/x', {'command': 'c'}, deliver={'part': 'bundle', 'name': name})
+                self.assertEqual((caught.exception.code, transport.calls), ('DELIVERY_INVALID', []))
+        import ast
+        source = (REPO / 'tools' / 'guest.py').read_text(encoding='utf-8')
+        node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                    and n.name == 'check_exchange_name')
+        self.assertEqual(hashlib.sha256(ast.get_source_segment(source, node).encode('utf-8')).hexdigest(),
+                         PINNED_NAME_CHECK_SHA256, 'tools/guest.py check_exchange_name changed shape')
 
+
+class Pull(unittest.TestCase):
+    """The review's item 8: the fixture's pull stages a name exclusively; a second pull of it is refused."""
+    category = 'integration'
+
+    def test_a_second_pull_of_one_name_is_refused(self):
+        tmp = Path(tempfile.mkdtemp(prefix='e18p-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for name in ('exchange', 'gstate', 'home'):
+            (tmp / name).mkdir()
+        (tmp / 'exchange' / 'x.bundle').write_bytes(b'not a bundle')
+        with mock.patch.dict(os.environ, {'USERPROFILE': str(tmp / 'home'), 'HOME': str(tmp / 'home')}):
+            puller = backend.Puller(tmp / 'exchange', tmp / 'gstate', NATIVE)
+        with contextlib.suppress(Exception):      # the first pull stages it (its verification is not the point)
+            puller('x.bundle')
+        staged = backend.guest_module().staging_dir(puller.ctx, backend.INSTANCE, 'inbound') / 'x.bundle'
+        self.assertEqual(staged.read_bytes(), b'not a bundle')
+        with self.assertRaises(puller.guest.Refused) as caught:
+            puller('x.bundle')
+        self.assertIn('never overwritten', str(caught.exception))
+        self.assertEqual(staged.read_bytes(), b'not a bundle')
+
+
+# sha256 of tools/guest.py check_exchange_name's source text: a change of its shape fails Delivery
+PINNED_NAME_CHECK_SHA256 = '9e89d46901ae56b3d16f057392e8f218698a2f9ec9678b282591da1deef8b6b6'
 # sha256 of tools/guest.py API_PROBE's deliver function's source text: a change of its shape fails Delivery
 PINNED_DELIVER_SHA256 = '083a466a2d661849676dbebccd7b898753445386ffa01fdf6222ca22a549b2a1'
 
@@ -426,6 +470,13 @@ class Dispatched(Context):
                 if record.operation_key == key:      # the reservation: its label is its binding (R11)
                     continue
                 self.assertIn('"authority":"fixture"', di._canonical(json.loads(record.intent_json)))
+        # the review's item 4: the labelled fixture intake receipt is never resumed as live
+        base = AR.read_base(self.project, repository=REPOSITORY, design_commit=self.design)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AR.recorded_result(self.store, key, base=base)                    # no reader: only a live record
+        self.assertEqual(caught.exception.code, 'RESULT_STAGED_UNVERIFIED')
+        self.assertEqual(AR.recorded_result(self.store, key, base=base, read_artifact=di.read_profile_artifact)
+                         .authority, 'fixture')
         # the result commit: author and committer the commissioning user's configured identity
         commit = self.remote.repo[receipt['commit'].encode('ascii')]
         name_email = IDENTITY.encode('utf-8')

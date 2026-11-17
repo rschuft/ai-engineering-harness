@@ -229,29 +229,35 @@ class Dispatch(Bound):
         self.assertEqual(len(self.core.creates), 1)
 
     def test_a_fixture_profile_is_refused_for_a_live_transport(self):
-        live = Seam(self.core, None)
+        live, held = Seam(self.core, None), provider('fixture')
         del live.authority
-        refusal = self.refused('TRANSPORT_AUTHORITY_MISMATCH', lambda: self.dispatch(live, provider('fixture')))
-        self.assertEqual((refusal.context['declared'], refusal.context['presented']), ('fixture', 'live'))
-        self.assertEqual((live.count, self.core.calls), (0, []), 'zero transport calls')
+        refusal = self.refused('TRANSPORT_AUTHORITY_MISMATCH', lambda: self.dispatch(live, held))
+        self.assertEqual(refusal.context, {'declared': 'fixture', 'presented': 'live'})
+        self.assertEqual((live.count, self.core.calls, held.reads), (0, [], []), 'zero calls, no entry read')
         [attempt] = self.store.attempts()
         moves = self.details(attempt.operation_key)
-        self.assertEqual(moves[-1][0], 'failed')
-        self.assertEqual((moves[-1][1]['code'], moves[-1][1]['create_sent'], moves[-1][1]['authority']),
-                         ('TRANSPORT_AUTHORITY_MISMATCH', False, 'fixture'))
+        self.assertEqual([to for to, _ in moves], ['reserved', 'failed'], 'never dispatched')
+        self.assertEqual((moves[-1][1]['code'], moves[-1][1]['authority']), ('TRANSPORT_AUTHORITY_MISMATCH', 'fixture'))
 
     def test_a_live_profile_is_refused_as_fixture(self):
+        """The review's item 2: a live attempt handed a fixture transport is refused before the native entry is
+        read, the workspace made or the attempt marked dispatched; a fixture provider on it reads no entry."""
         manifest = self.approve_real()
-        claimed = Seam(self.core, 'fixture')
+        claimed, live_held = Seam(self.core, 'fixture'), provider()
         refusal = self.refused('TRANSPORT_AUTHORITY_MISMATCH',
-                               lambda: self.dispatch(claimed, provider(), profile=ci.REAL, manifest=manifest))
-        self.assertEqual((refusal.context['declared'], refusal.context['presented']), ('live', 'fixture'))
-        self.assertEqual((claimed.count, self.core.calls), (0, []))
+                               lambda: self.dispatch(claimed, live_held, profile=ci.REAL, manifest=manifest))
+        self.assertEqual(refusal.context, {'declared': 'live', 'presented': 'fixture'})
+        self.assertEqual((claimed.count, self.core.calls, live_held.reads), (0, [], []), 'the native entry not read')
+        [attempt] = self.store.attempts()
+        moves = self.details(attempt.operation_key)
+        self.assertEqual([to for to, _ in moves], ['reserved', 'failed'], 'never dispatched')
+        self.assertNotIn('authority', moves[-1][1], 'a live record is unlabelled')
+        self.assertEqual(list(Path(str(self.workspaces.paths['workspaces'])).rglob('*')), [], 'no workspace made')
         held = provider('fixture')
         refusal = self.refused('CREDENTIAL_AUTHORITY_MISMATCH',
-                               lambda: self.dispatch(claimed, held, profile=ci.REAL, manifest=manifest))
+                               lambda: self.dispatch(self.core, held, profile=ci.REAL, manifest=manifest))
         self.assertEqual(refusal.context, {'declared': 'live', 'presented': 'fixture'})
-        self.assertEqual((held.reads, claimed.count), ([], 0), 'no entry read, nothing sent')
+        self.assertEqual(held.reads, [], 'no entry read')
 
     def test_a_live_provider_is_refused_for_a_fixture_attempt_with_no_entry_read(self):
         held, transport = provider(), Seam(self.core, 'fixture')
@@ -391,6 +397,15 @@ class Labels(Bound):
 
 
 class Recovery(Bound):
+    """The review's item 1: the transitions the dispatch modules write outside ``dispatch`` carry the bound authority
+    (``restart_recovery``'s moves). The store's own reconcile (``IntegrationStore.reconcile``, its generic
+    ``unknown -> confirmed | failed``) writes no detail at all: labelling it needs the store's generic code, which is
+    the engineering manager's STOP, reported and not built; those two transitions are asserted as they are."""
+
+    def moves(self, key):
+        return [(e.to_state, e.reason, json.loads(e.detail_json) if e.detail_json else None)
+                for e in self.store.events(key)]
+
     def test_recover_settles_an_interrupted_fixture_attempt_through_its_fixture_transport(self):
         def dies_after_the_create(method, path, body=None, **kwargs):
             answer = self.core(method, path, body, **kwargs)
@@ -406,42 +421,160 @@ class Recovery(Bound):
         self.assertEqual(report['held'], [], 'settled, not held for its wrapper (CLIENT_UNAVAILABLE)')
         self.assertEqual(self.store.get(attempt.operation_key).state, 'confirmed')
         self.assertEqual(len(self.core.creates), 1, 'no second create')
+        moves = self.moves(attempt.operation_key)
+        self.assertEqual([(to, (d or {}).get('authority')) for to, _, d in moves],
+                         [('reserved', None), ('dispatched', 'fixture'), ('unknown', 'fixture'),
+                          ('confirmed', None)], 'recover\'s own move labelled; the store\'s reconcile writes no detail')
+        self.assertEqual(moves[2][1], RR.REASON_CREATE_UNKNOWN)
+
+    def test_an_unanswered_create_is_labelled_and_reconciled(self):
+        def no_answer(method, path, body=None, **kwargs):
+            if (method, path) == ('POST', '/api/conversations'):
+                raise OSError('no answer')
+            return self.core(method, path, body, **kwargs)
+        with self.assertRaises(OSError):
+            self.dispatch(Seam(no_answer, 'fixture'), provider('fixture'))
+        [attempt] = self.store.attempts()
+        report = RR.recover(self.store, transport=Seam(self.core, 'fixture'), actor=ACTOR,
+                            read_artifact=self.read_artifact)
+        self.assertEqual(report['held'], [])
+        self.assertEqual([(to, (d or {}).get('authority')) for to, _, d in self.moves(attempt.operation_key)],
+                         [('reserved', None), ('dispatched', 'fixture'), ('unknown', 'fixture'), ('failed', None)])
+
+    def test_a_reserved_attempt_recover_fails_carries_the_label(self):
+        held = provider('fixture')
+        held.error = Crash('the dispatcher died reading the entry')
+        with self.assertRaises(Crash):
+            self.dispatch(Seam(self.core, 'fixture'), held)
+        [attempt] = self.store.attempts()
+        self.assertEqual(attempt.state, 'reserved')
+        RR.recover(self.store, transport=Seam(self.core, 'fixture'), actor=ACTOR, read_artifact=self.read_artifact)
+        to, reason, detail = self.moves(attempt.operation_key)[-1]
+        self.assertEqual((to, reason, detail['authority']), ('failed', RR.REASON_NOT_SENT, 'fixture'))
+
+    def test_a_live_attempts_recovery_writes_no_label(self):
+        def dies_after_the_create(method, path, body=None, **kwargs):
+            answer = self.core(method, path, body, **kwargs)
+            if (method, path) == ('POST', '/api/conversations'):
+                raise Crash('died')
+            return answer
+        with self.assertRaises(Crash):
+            self.dispatch(dies_after_the_create, provider(), profile=ci.REAL, manifest=self.approve_real())
+        [attempt] = self.store.attempts()
+        RR.recover(self.store, transport=self.core, actor=ACTOR, read_artifact=self.read_artifact)
+        self.assertFalse(any(d and 'authority' in d for _, _, d in self.moves(attempt.operation_key)))
+
+
+class AdmissionRefusal(Bound):
+    """The review's item 1: an admission refusal's ``reserved -> failed`` carries the bound authority when the
+    attempt's pinned allowlist can be read; when it cannot, there is none to copy, and it is unlabelled."""
+
+    def test_a_readable_allowlist_labels_the_refusal(self):
+        path = self.profiles / FIX / 'profile.json'
+        declared = json.loads(path.read_bytes())
+        declared['provisioning']['agent_server'].pop('transport')
+        path.write_bytes((json.dumps(declared, indent=2) + '\n').encode('utf-8'))
+        self.refused('TRANSPORT_DECLARATION_MISMATCH',
+                     lambda: self.dispatch(Seam(self.core, 'fixture'), provider('fixture'),
+                                           manifest=self.approve_fixture()))
+        [attempt] = self.store.attempts()
+        moves = self.details(attempt.operation_key)
+        self.assertEqual((moves[-1][0], moves[-1][1]['code'], moves[-1][1]['authority']),
+                         ('failed', 'TRANSPORT_DECLARATION_MISMATCH', 'fixture'))
+
+    def test_an_unreadable_allowlist_leaves_it_unlabelled(self):
+        manifest = self.fixture_manifest
+        (self.profiles / FIX / 'agent-server' / 'routes.json').unlink()
+        self.refused('PROFILE_ARTIFACT_MISSING', lambda: self.dispatch(Seam(self.core, 'fixture'),
+                                                                     provider('fixture'), manifest=manifest))
+        [attempt] = self.store.attempts()
+        moves = self.details(attempt.operation_key)
+        self.assertEqual(moves[-1][0], 'failed')
+        self.assertNotIn('authority', moves[-1][1])
+
+
+class Identity(Bound):
+    """The review's item 9: a fixture-bound attempt's result commit is never the bot's."""
+
+    def test_a_fixture_attempt_without_an_identity_is_refused_before_any_call(self):
+        result = self.fixture_attempt()
+        calls = len(self.core.calls)
+        base = self.base_for(result)
+        refusal = self.refused('RESULT_IDENTITY_REQUIRED', lambda: AR.run_attempt(
+            self.store, result.operation_key, transport=Seam(self.core, 'fixture'), base=base, actor=ACTOR,
+            inspect=Seam(lambda cid: [], 'fixture'), pull=Seam(lambda n: {}, 'fixture'),
+            read_artifact=self.read_artifact))
+        self.assertEqual(refusal.context, {'authority': 'fixture'})
+        refusal = self.refused('RESULT_IDENTITY_REQUIRED', lambda: AR.resume_result(
+            self.store, result.operation_key, transport=Seam(self.core, 'fixture'), base=base, actor=ACTOR,
+            pull=Seam(lambda n: {}, 'fixture'), exists=Seam(lambda n: False, 'fixture'),
+            read_artifact=self.read_artifact))
+        self.assertEqual(len(self.core.calls), calls, 'no Agent Server call')
+        self.assertIsNone(self.store.get(AR.TURN_KEY.format(attempt_id=result.attempt_id)))
+        resolved = di.stored_inputs(self.store, result.operation_key, state='confirmed')
+        self.refused('RESULT_IDENTITY_REQUIRED', lambda: AR.prepare(resolved, base, result.attempt_id, 1,
+                                                                    authority='fixture'))
+        self.assertEqual(AR.prepare(resolved, base, result.attempt_id, 1).identity, AR.BOT_IDENTITY, 'live: the bot')
+
+    def test_the_intake_cross_checks_the_authority_it_is_given_against_the_binding(self):
+        result = self.fixture_attempt()
+        refusal = self.refused('RESULT_AUTHORITY_MISMATCH', lambda: AR.intake_result(
+            self.store, result.operation_key, base=self.base_for(result), printed={}, pulled={}, message='x',
+            when=1, authority='live', read_artifact=self.read_artifact))
+        self.assertEqual(refusal.context, {'given': 'live'})
 
 
 class Census(unittest.TestCase):
-    """R8 point 7: the dispatch modules compare declared values and contain no fixture-specific path. In each module
-    the string ``fixture`` occurs only in the authority vocabulary, the refusals' texts and the profile's pre-existing
-    F-04.2 fixture template (its declaration key and its refusal texts); no module compares anything with it, and none
-    imports the fixture package."""
+    """R8 point 7: the dispatch modules compare declared values and contain no fixture-specific path, and none imports
+    the fixture package. The review's item 5: any reference to ``FIXTURE``, or to the literal ``'fixture'``, is
+    refused outside the named vocabulary (dispatch_inputs' module-level LIVE, FIXTURE, AUTHORITIES and
+    TRANSPORT_DECLARATIONS) and the pre-existing F-04.2 template key (``server.get('fixture')`` in
+    ``admission_policy`` and ``stage_create_template``), whatever its use: a comparison, a membership test, a dict key
+    or a lookup. Any other string holding ``fixture`` is a refusal's text or the F-04.2 template's wording."""
     category = 'contract'
     MODULES = ('dispatch_inputs.py', 'attempt_run.py', 'attempt_end.py', 'result_path.py', 'attempt_tokens.py',
                'launch_gate.py', 'restart_recovery.py', 'reconcile.py')
-    # the authority vocabulary (dispatch_inputs: FIXTURE and TRANSPORT_DECLARATIONS' kind) and the F-04.2 fixture
-    # template's declaration key and path, which predate the authority
-    ALLOWED = {'fixture', 'loopback-fixture', 'agent_server.fixture'}
+    VOCABULARY = {'LIVE', 'FIXTURE', 'AUTHORITIES', 'TRANSPORT_DECLARATIONS'}
+    TEMPLATE_KEY_FUNCTIONS = {'admission_policy', 'stage_create_template'}
+    TEXTS = {'loopback-fixture', 'agent_server.fixture'}
 
-    def test_the_string_occurs_only_in_the_vocabulary_and_refusal_texts(self):
+    @staticmethod
+    def references(node):
+        return [n for n in ast.walk(node)
+                if isinstance(n, ast.Name) and n.id == 'FIXTURE' or isinstance(n, ast.Attribute) and n.attr == 'FIXTURE'
+                or isinstance(n, ast.Constant) and n.value == 'fixture']
+
+    def test_fixture_is_referenced_only_in_the_vocabulary(self):
+        for name in self.MODULES:
+            tree = ast.parse((HERE.parent / name).read_text(encoding='utf-8'))
+            with self.subTest(module=name):
+                for top in tree.body:
+                    targets = {getattr(t, 'id', None) for n in ([top] if isinstance(top, ast.Assign) else [])
+                               for t in n.targets} | {getattr(e, 'id', None) for n in (
+                                   [top] if isinstance(top, ast.Assign) else []) for t in n.targets
+                                   for e in getattr(t, 'elts', [])}
+                    vocabulary = name == 'dispatch_inputs.py' and bool(targets & self.VOCABULARY)
+                    for ref in self.references(top):
+                        template_key = isinstance(ref, ast.Constant) and isinstance(top, ast.FunctionDef) \
+                            and top.name in self.TEMPLATE_KEY_FUNCTIONS
+                        self.assertTrue(vocabulary or template_key, f'{name}:{ref.lineno}: a reference to fixture')
+
+    def test_other_texts_holding_the_word_are_refusals_or_the_template(self):
+        meanings = set(di.REFUSALS.values())
         for name in self.MODULES:
             source = (HERE.parent / name).read_text(encoding='utf-8')
             tree = ast.parse(source)
             docstrings = {id(n.body[0].value) for n in ast.walk(tree)
                           if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef))
                           and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
-            meanings = set(di.REFUSALS.values())
             with self.subTest(module=name):
                 self.assertNotIn('agentfixture', source.replace('agentfixture catalog', ''), 'no fixture import')
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings \
-                            and 'fixture' in node.value.lower():
-                        self.assertTrue(node.value in self.ALLOWED or node.value in meanings
+                            and 'fixture' in node.value.lower() and node.value != 'fixture':
+                        self.assertTrue(node.value in self.TEXTS or node.value in meanings
                                         or 'F-04.2' in node.value or 'disposable fixture' in node.value,
                                         f'{name}:{node.lineno}: {node.value[:80]!r}')
-                    if isinstance(node, ast.Compare):
-                        operands = [node.left, *node.comparators]
-                        self.assertFalse(any(isinstance(o, ast.Constant) and o.value == 'fixture'
-                                             or isinstance(o, ast.Name) and o.id == 'FIXTURE'
-                                             or isinstance(o, ast.Attribute) and o.attr == 'FIXTURE'
-                                             for o in operands), f'{name}:{node.lineno}: a branch on fixture')
 
 
 if __name__ == '__main__':

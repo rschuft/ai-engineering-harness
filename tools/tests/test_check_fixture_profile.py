@@ -67,6 +67,7 @@ class FixtureProfile(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertFails(lambda p: p.__setitem__(key, {}), 'a fixture profile holds only')
         self.assertFails(lambda p: p['provider'].__setitem__('name', 'qemu'), 'provider: only the image pin')
+        self.assertFails(lambda p: p['provider'].__setitem__('note', 'x'), 'provider: only the image pin')
 
     def test_the_name_and_the_declaration_go_together(self):
         self.assertFails(lambda p: p.__setitem__('name', 'strong-replay'), 'name: a profile that declares')

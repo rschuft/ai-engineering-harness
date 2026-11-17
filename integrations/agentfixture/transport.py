@@ -83,6 +83,27 @@ def pinned_delivery(path: Path = GUEST):
     return _PINNED[path]
 
 
+class _NameRefused(Exception):
+    def __init__(self, code, detail):
+        super().__init__(f'{code}: {detail}')
+
+
+def pinned_name_check(path: Path = GUEST):
+    """tools/guest.py's ``check_exchange_name`` (what ``exchange_delivery`` applies to a delivery's name before the
+    live transport sends anything), read as data from that file's source and compiled alone, its ``Refused`` the
+    local ``_NameRefused``; LookupError when the source no longer has it."""
+    key = (path, 'check_exchange_name')
+    if key not in _PINNED:
+        found = [n for n in ast.parse(Path(path).read_text(encoding='utf-8')).body
+                 if isinstance(n, ast.FunctionDef) and n.name == 'check_exchange_name']
+        if len(found) != 1:
+            raise LookupError('tools/guest.py has no check_exchange_name')
+        namespace: dict = {'re': re, 'Refused': _NameRefused}
+        exec(compile(ast.Module(body=found, type_ignores=[]), f'{path}:check_exchange_name', 'exec'), namespace)
+        _PINNED[key] = namespace['check_exchange_name']
+    return _PINNED[key]
+
+
 class FixtureTransportError(Exception):
     def __init__(self, code: str, detail: str):
         self.code, self.detail = code, detail
@@ -114,6 +135,10 @@ class FixtureTransport:
                 or not all(isinstance(deliver[k], str) for k in DELIVERY_KEYS) \
                 or not PART_RE.fullmatch(deliver['part']):
             raise FixtureTransportError('DELIVERY_INVALID', 'an exchange delivery is {part, name}; nothing was sent')
+        try:   # the name checked before anything is sent, as tools/guest.py exchange_delivery checks it (review 7)
+            pinned_name_check()(deliver['name'], self.bounds['name_pattern'], 'exchange delivery name')
+        except _NameRefused as exc:
+            raise FixtureTransportError('DELIVERY_INVALID', f'{exc}; nothing was sent') from None
         _, limit = pinned_delivery()
         return {'field': 'stdout', 'part': deliver['part'], 'name': deliver['name'], 'dir': str(self.exchange),
                 'name_pattern': self.bounds['name_pattern'], 'max_bytes': min(self.bounds['max_bytes'], limit)}

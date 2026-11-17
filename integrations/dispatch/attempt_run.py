@@ -700,7 +700,12 @@ class Prepared:
     identity: tuple = BOT_IDENTITY
 
 
-def prepare(resolved, base: Base, attempt_id: str, when: int, *, deliver: bool = True, identity=None) -> Prepared:
+def prepare(resolved, base: Base, attempt_id: str, when: int, *, deliver: bool = True, identity=None,
+            authority: str = di.LIVE) -> Prepared:
+    """Everything the run sends. An attempt whose bound AUTHORITY is not live takes the commissioning user's IDENTITY
+    for its result commit (decision 0028 point 2; E-01.8's review, item 9): without one, RESULT_IDENTITY_REQUIRED,
+    never the bot's."""
+    _identity_required(authority, identity)
     text = build_message(resolved, base)
     message = commit_message(resolved, base, attempt_id)
     return Prepared(text=text, message=message, when=when, seed=build_seed(base),
@@ -1036,7 +1041,7 @@ def _tree_refused(problems: list[dict], what: str) -> DispatchRefused:
 
 def intake_result(integration_store, operation_key: str, *, base: Base, printed: dict, pulled: Mapping,
                   message: str, when: int, resumed: bool = False, identity=None,
-                  authority: str = di.LIVE) -> VerifiedResult:
+                  authority: str = di.LIVE, read_artifact: Callable[[str], bytes] | None = None) -> VerifiedResult:
     """The host's intake of the pulled bundle: the attempt confirmed with no end record (ATTEMPT_ENDED) and its turn
     confirmed; the pull verified by the retained verifier (RESULT_NOT_VERIFIED) at the bundle digest the command
     printed before the tests and the probe delivered (a resumed intake: the pulled bundle's own digest, the
@@ -1045,8 +1050,12 @@ def intake_result(integration_store, operation_key: str, *, base: Base, printed:
     (RESULT_COMMIT_MISMATCH); the tree within its bounds, regular files only, no link, gitlink or forbidden name,
     ``openspec/`` and ``backlog/`` exactly the base's, the blobs at most MAX_INFLATED inflated (RESULT_TREE_REFUSED
     with a reason). Any repository error is RESULT_NOT_VERIFIED. IDENTITY is the result rule's (``expected_commit``);
-    AUTHORITY the attempt's bound authority, which the result carries (the run passes its client's)."""
+    AUTHORITY the attempt's bound authority, which the result carries (the run passes its client's); given
+    READ_ARTIFACT it is read from the pinned route allowlist again and must agree (RESULT_AUTHORITY_MISMATCH)."""
     resolved = _check_attempt(integration_store, operation_key)
+    if read_artifact is not None and di.attempt_authority(resolved, read_artifact) != authority:
+        raise _refused('RESULT_AUTHORITY_MISMATCH', f'the intake was given authority {authority!r}, not the one the '
+                       'attempt\'s pinned route allowlist declares', given=str(authority))
     attempt_id = store.attempt_id_for(operation_key)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
     if turn is None or turn.state != 'confirmed':
@@ -1231,6 +1240,14 @@ def _stop(integration_store, operation_key, transport, actor, records, read_arti
                                       read_artifact=read_artifact)
 
 
+def _identity_required(authority: str, identity) -> None:
+    """RESULT_IDENTITY_REQUIRED when an attempt whose bound AUTHORITY is not live is given no IDENTITY: its result
+    commit is the commissioning user's (decision 0028 point 2), never the bot's."""
+    if identity is None and authority != di.LIVE:
+        raise _refused('RESULT_IDENTITY_REQUIRED', f'the attempt is bound to authority {authority!r}: its result '
+                       'commit takes the commissioning user\'s identity, and none was given', authority=authority)
+
+
 def _authority(authority) -> str:
     if authority not in di.AUTHORITIES:
         raise ValueError(f'an authority is one of {di.AUTHORITIES}')
@@ -1377,7 +1394,7 @@ def _staged_again(receipt: dict, delivery: dict | None) -> dict:
 
 
 def _result_step(integration_store, operation_key, client, *, base, prepared, pull, observe, reserve_result,
-                 stopped, resumed, status, actor, reuse=None):
+                 stopped, resumed, status, actor, reuse=None, read_artifact=None):
     """RESULT, the intake and what follows it. The delivery, the verified pull and the intake are each recorded as
     a receipt; a resumed step reuses a verified pull (REUSE) instead of pulling again."""
     attempt_id, conversation_id = store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
@@ -1410,7 +1427,7 @@ def _result_step(integration_store, operation_key, client, *, base, prepared, pu
                 'refs': [list(r) for r in header.get('refs') or ()], **label}, actor)
     verified = intake_result(integration_store, operation_key, base=base, printed=printed, pulled=pulled,
                              message=prepared.message, when=prepared.when, resumed=resumed,
-                             identity=prepared.identity, authority=bound)
+                             identity=prepared.identity, authority=bound, read_artifact=read_artifact)
     _receipt(integration_store, INTAKE_KEY.format(attempt_id=attempt_id),
              {'format': INTAKE_FORMAT, 'record': verified.to_json(), 'staged': verified.staged,
               'verifyRepo': verified.verify_repo, **label}, actor)
@@ -1477,13 +1494,14 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     try:
         resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                                read_artifact)
-        _observers(client, inspect=inspect, pull=pull)
+        bound = _observers(client, inspect=inspect, pull=pull)
+        _identity_required(bound, identity)
         held = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
         if held is not None:
             raise _refused('TURN_ALREADY_SENT', f'the turn journal is {held.state}: the run is not repeated; a result '
                            'step is resumed with resume_result', state=held.state)
         prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),   # S2: first
-                           identity=identity)
+                           identity=identity, authority=bound)
         observe = observe or (lambda phase, **facts: ())
 
         def stopped(records, outcome='stopped', problems=(), status=None):
@@ -1553,7 +1571,7 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
     # 5. RESULT, 6. the intake, 7. close
     return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
                         observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=False,
-                        status=status, actor=actor)
+                        status=status, actor=actor, read_artifact=read_artifact)
 
 
 def _resumed_result(integration_store, operation_key, base, receipt, authority=None) -> VerifiedResult:
@@ -1636,6 +1654,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     resolved, client, attempt_id, conversation_id = _start(integration_store, operation_key, base, transport,
                                                            read_artifact)
     bound = _observers(client, pull=pull, exists=exists)
+    _identity_required(bound, identity)          # before any call (E-01.8's review, item 9)
     turn = integration_store.get(TURN_KEY.format(attempt_id=attempt_id))
     if turn is None or turn.state != 'confirmed':
         raise _refused('TURN_NOT_CONFIRMED', f'the turn journal is {getattr(turn, "state", None)}, not confirmed')
@@ -1673,7 +1692,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
         reuse = _staged_again(pulled, _delivery_receipt(integration_store, attempt_id))
     resumed = reuse is not None or bool(exists(result_name(attempt_id)))
     prepared = prepare(resolved, base, attempt_id, attempt_time(integration_store, operation_key),
-                       deliver=not resumed, identity=identity)
+                       deliver=not resumed, identity=identity, authority=bound)
     return _result_step(integration_store, operation_key, client, base=base, prepared=prepared, pull=pull,
                         observe=observe, reserve_result=reserve_result, stopped=stopped, resumed=resumed,
-                        status=status, actor=actor, reuse=reuse)
+                        status=status, actor=actor, reuse=reuse, read_artifact=read_artifact)

@@ -16,7 +16,7 @@
   "profiles": [
     {
       "id": "fixture-d1-replay",
-      "sha256": "14675b82177ca741241001931e6d8b66d4c6b9dc39f3ff971f212140cef383b7"
+      "sha256": "c136af2bf8960e9d7a991a286a0ce7b38894f06d78b98489bd792d17fe5bf90e"
     }
   ],
   "catalog_pins": [

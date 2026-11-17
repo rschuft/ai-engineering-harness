@@ -2887,7 +2887,7 @@ def check_fixture(report, profile, root=REPO):
     if set(profile.get('provisioning') or {}) != {'agent_server'}:
         report.fail('provisioning: only agent_server')
     provider = profile.get('provider') or {}
-    if set(provider) - {'provision_lock', 'note'} or 'provision_lock' not in provider:
+    if set(provider) != {'provision_lock'}:
         report.fail('provider: only the image pin the launch gate reads (provision_lock)')
     status = profile.get('status') or {}
     if status.get('operational') is True and not status.get('operational_evidence'):

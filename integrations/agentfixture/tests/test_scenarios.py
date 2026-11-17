@@ -30,6 +30,8 @@ OPENAPI = S.locked_openapi_path()
 LOCKED = None if OPENAPI is None else SERVER.locked_document(OPENAPI)
 CEILING_S = 3            # the transport's ceiling on one request: a withheld answer ends there
 FIXTURE_TRANSPORT = {'authority': 'fixture', 'kind': 'loopback-fixture'}      # R8 point 2
+# a fixture-bound attempt's result commit takes the commissioning user's identity (decision 0028; a synthetic one here)
+IDENTITY = ('E-01.8 Fixture Owner', 'e18-fixture-owner@users.noreply.github.com')
 
 
 class Declared:
@@ -86,7 +88,8 @@ class OverTheListener(TRM.Matrix):
                               inspect=Declared(lambda cid: ()),
                               pull=Declared(lambda name: self.fail('no pull expected')), observe=observe,
                               ceiling_s=0, clock=lambda: 0.0,
-                              wait=lambda s: self.fail('no wait expected'), read_artifact=self.fixture.read_artifact)
+                              wait=lambda s: self.fail('no wait expected'), read_artifact=self.fixture.read_artifact,
+                              identity=IDENTITY)
 
     def recover(self):
         before = len(self.wire.calls)

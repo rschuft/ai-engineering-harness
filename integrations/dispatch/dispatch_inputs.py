@@ -477,6 +477,11 @@ REFUSALS = {
                                    'pinned route allowlist: nothing was called',
     'TRANSPORT_DECLARATION_MISMATCH': 'the profile\'s declared transport and its pinned route allowlist\'s differ, or '
                                       'one is not a declaration of the authority vocabulary',
+    # E-01.8's review (items 9): the result commit's identity and the verified result's authority, bound
+    'RESULT_IDENTITY_REQUIRED': 'an attempt whose bound authority is not live takes the commissioning user\'s '
+                                'identity for its result commit, and none was given: nothing was called',
+    'RESULT_AUTHORITY_MISMATCH': 'the authority the intake was given is not the one the attempt\'s pinned route '
+                                 'allowlist declares: nothing is taken',
 }
 
 
@@ -2779,6 +2784,22 @@ def check_transport_declarations(declared: dict, routes: dict) -> str:
     return profile
 
 
+def bound_label(integration_store, operation_key: str, read_artifact: Callable[[str], bytes] = None) -> dict:
+    """``authority_label`` of the typed attempt OPERATION_KEY's bound authority, in whatever state its reservation is,
+    for the writers that move it outside ``dispatch`` (``recover``): its stored record (checked against its digest)
+    and its pinned route allowlist, read through READ_ARTIFACT. When either cannot be read there is no bound
+    authority to copy, and the record is left unlabelled (a reader then treats it as unknown, R11)."""
+    reservation = integration_store.get(operation_key)
+    try:
+        if reservation is None or _sha256(reservation.intent_json) != reservation.intent_digest:
+            return {}
+        intent = _strict_loads(reservation.intent_json)
+        resolved = ResolvedInputs.from_json(intent.get(INTENT_KEY) if isinstance(intent, dict) else None)
+        return authority_label(attempt_authority(resolved, read_artifact))
+    except (DispatchRefused, ValueError, TypeError, KeyError):
+        return {}
+
+
 def authority_label(authority: str) -> dict:
     """What a writer adds to a record of an attempt bound to AUTHORITY (R11): ``{"authority": ...}`` when it is not
     ``live``, else nothing, so that a live record stays byte for byte what it was."""
@@ -3509,7 +3530,10 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
         staged = stage_inference(admitted, resolved=reserved)   # the D1 stage's inference inputs, or None
     except DispatchRefused as refusal:
         if refusal.code != 'ATTEMPT_NOT_RESERVED':
-            _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code, _refusal_detail(refusal))
+            # E-01.8's review, item 1: labelled when the attempt's pinned allowlist can be read (its binding);
+            # when it cannot, there is no bound authority to copy, and the refusal is left unlabelled
+            _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code,
+                  _refusal_detail(refusal, **bound_label(integration_store, key, read_artifact)))
         raise
     custody, grant = _GrantCustody(integration_store, key, inference, actor), None
     # E-01.8 (R8, R11): the attempt's bound authority, as its admitted (pinned) route allowlist declares it; every
@@ -3518,6 +3542,10 @@ def _dispatch(request, *, manifest, work_sources, integration_store, workspaces,
     bound = label.get('authority', LIVE)
     try:
         try:
+            # E-01.8 (R8 point 4, ruling A; the review's item 2): the transport's declared authority, before any
+            # entry is read, the workspace is made or the attempt is marked dispatched (the client compares the same
+            # values again when it is built)
+            require_authority(transport, bound, 'TRANSPORT_AUTHORITY_MISMATCH', 'the Agent Server transport')
             if isinstance(staged, StageNative):   # E-05.9: only now, the native token's one entry
                 # E-01.8 (R8 point 5): the provider's declared authority first; a mismatch reads no entry
                 require_authority(native_credentials, bound, 'CREDENTIAL_AUTHORITY_MISMATCH',
