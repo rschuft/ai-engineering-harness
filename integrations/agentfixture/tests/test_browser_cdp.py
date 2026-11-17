@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -149,8 +150,12 @@ class StartFailures(unittest.TestCase):
 
     def test_a_browser_that_never_listens_is_ended_at_the_ceiling(self):
         b, profile, launched = self.browser('import threading; threading.Event().wait()', ceiling=1.0)
+        began = time.monotonic()
         with self.assertRaises(B.BrowserError) as caught:
             b.start()
+        # the tree is ended at once (taskkill /T), not after the process wait's own ceiling (a bound, generously
+        # under START_CEILING_S, that only a teardown which relies on that fallback exceeds)
+        self.assertLess(time.monotonic() - began, B.START_CEILING_S / 2)
         self.assertIn('within 1.0 s', str(caught.exception))
         self.assertLeftNothing(b, profile, launched)
 
