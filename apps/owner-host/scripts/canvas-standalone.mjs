@@ -27,7 +27,7 @@
 //
 // DIR defaults to node_modules/.cache/aieh-canvas-standalone (ignored, and emptied by every `npm ci`).
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -246,11 +246,35 @@ export function compareDerived(source, copy, { csp = null } = {}) {
  * the one stylesheet that has them and, with CSP, the policy's <meta> first in index.html; checked by
  * compareDerived. OUT/build is replaced; the package is only read.
  */
+/** Whether PATH is DIR or lies under it (resolved, compared case-insensitively on Windows). */
+export function within(path, dir) {
+  const fold = (p) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const a = fold(path);
+  const b = fold(dir);
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+}
+
+/** The marker derive writes beside the copy (OUT/derived.json): only a directory carrying it may be replaced. */
+export function isDerivedMarker(path) {
+  try {
+    const marker = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(marker.changed) && Array.isArray(marker.removed) && Number.isInteger(marker.files) && "csp" in marker;
+  } catch {
+    return false;
+  }
+}
+
 export function deriveBuild(source, out, { csp = false, port = CANVAS_PORT } = {}) {
   const resolvedOut = resolve(out);
   const target = join(resolvedOut, "build");
-  if (resolve(source) === target || resolve(source).startsWith(resolvedOut + sep)) {
-    throw new Refusal("CANVAS_BUILD_DIR_INVALID", "the derived copy must not contain the package");
+  const pkg = dirname(resolve(source));
+  // review S2: never inside the source package, never around it; checked before anything is written
+  if (within(resolvedOut, pkg) || within(pkg, resolvedOut)) {
+    throw new Refusal("CANVAS_BUILD_DIR_INVALID", `the derived copy must be outside the package (${pkg}) and must not contain it`);
+  }
+  // review S2: an existing build/ is replaced only when it is this step's own (its marker beside it)
+  if (existsSync(target) && !isDerivedMarker(join(resolvedOut, "derived.json"))) {
+    throw new Refusal("CANVAS_BUILD_DIR_INVALID", `${target} exists and is not a derived copy (no derived.json beside it): refusing to replace it`);
   }
   rmSync(target, { recursive: true, force: true });
   const policy = csp ? cspPolicy(readFileSync(join(source, INDEX), "utf8"), { port }) : null;
@@ -297,12 +321,47 @@ export function serverEnvironment(env = process.env) {
 }
 
 /** Refuses (PORT_IN_USE) when 127.0.0.1:PORT cannot be bound exclusively now. */
-export function checkPortFree(port) {
-  return new Promise((resolvePort, reject) => {
+// The addresses an exclusive bind probe tries (review N6): a holder on 0.0.0.0, 127.0.0.1 or :: is found by its own
+// address; a holder on any other address by the TCP table.
+export const PROBE_HOSTS = ["0.0.0.0", "127.0.0.1", "::"];
+
+function probeBind(host, port) {
+  return new Promise((resolveProbe) => {
     const probe = createServer();
-    probe.once("error", (error) => reject(new Refusal("PORT_IN_USE", `${LOOPBACK}:${port}: ${error.code ?? error.message}`)));
-    probe.listen({ host: LOOPBACK, port, exclusive: true }, () => probe.close(() => resolvePort()));
+    probe.once("error", (error) => resolveProbe(error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT" ? null : error.code ?? "error"));
+    probe.listen({ host, port, exclusive: true }, () => probe.close(() => resolveProbe(null)));
   });
+}
+
+/** The local addresses listening on PORT in a `netstat -ano` text (the platform's TCP table), any address family. */
+export function listeningIn(netstat, port) {
+  const out = [];
+  for (const line of netstat.split(/\r?\n/)) {
+    const m = /^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\b/i.exec(line);
+    if (m && Number(m[2]) === port) out.push(m[1]);
+  }
+  return out;
+}
+
+function tcpTable() {
+  if (process.platform !== "win32") return "";
+  const result = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8", windowsHide: true, timeout: 60000 });
+  const six = spawnSync("netstat", ["-ano", "-p", "TCPv6"], { encoding: "utf8", windowsHide: true, timeout: 60000 });
+  return `${result.stdout ?? ""}\n${six.stdout ?? ""}`;
+}
+
+/**
+ * Refuses (PORT_IN_USE) when PORT is in use on any address, as the Integration process's rule has it
+ * (integrations/platform/platform_windows.py port_in_use): an exclusive bind of each of PROBE_HOSTS fails, or the
+ * platform's TCP table lists a listener on the port. Never another port.
+ */
+export async function checkPortFree(port, { table = tcpTable } = {}) {
+  for (const host of PROBE_HOSTS) {
+    const code = await probeBind(host, port);
+    if (code !== null) throw new Refusal("PORT_IN_USE", `${host}:${port}: ${code}`);
+  }
+  const listening = listeningIn(table(), port);
+  if (listening.length > 0) throw new Refusal("PORT_IN_USE", `port ${port} is listening on ${listening.join(", ")}`);
 }
 
 export function parseOptions(argv) {

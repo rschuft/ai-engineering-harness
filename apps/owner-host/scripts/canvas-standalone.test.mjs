@@ -3,7 +3,7 @@
 // are exactly the rule's, and the start command serves upstream's own server on loopback (ephemeral ports here;
 // never 13310, 13320 or 13330).
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -26,6 +26,7 @@ import {
   injectedScript,
   inlineScripts,
   listFiles,
+  listeningIn,
   parseOptions,
   serverEnvironment,
   staticServerArgs,
@@ -121,6 +122,32 @@ describe("the derived build", () => {
     expect(listFiles(source).map((f) => [f, sha(join(source, f))])).toEqual(before);
     expect(() => deriveBuild(source, join(source, ".."))).toThrow(/CANVAS_BUILD_DIR_INVALID/);
   });
+
+  it("review S2 (a): refuses an output directory inside the source package, before writing anything", () => {
+    const source = fakeBuild();
+    const before = listFiles(join(source, "..")).map((f) => [f, sha(join(source, "..", f))]);
+    for (const out of [join(source, "sub"), source, join(source, "..", "elsewhere")]) {
+      expect(() => deriveBuild(source, out), out).toThrow(/CANVAS_BUILD_DIR_INVALID: the derived copy must be outside the package/);
+    }
+    expect(listFiles(join(source, "..")).map((f) => [f, sha(join(source, "..", f))])).toEqual(before);
+  });
+
+  it("review S2 (b): never replaces a build/ that is not its own derived copy", () => {
+    const other = tmp();
+    mkdirSync(join(other, "build"), { recursive: true });
+    writeFileSync(join(other, "build", "precious.txt"), "not a derived copy");
+    expect(() => deriveBuild(fakeBuild(), other)).toThrow(/exists and is not a derived copy/);
+    expect(readFileSync(join(other, "build", "precious.txt"), "utf8")).toBe("not a derived copy");
+    writeFileSync(join(other, "derived.json"), '{"not": "ours"}');
+    expect(() => deriveBuild(fakeBuild(), other)).toThrow(/exists and is not a derived copy/);
+    expect(readFileSync(join(other, "build", "precious.txt"), "utf8")).toBe("not a derived copy");
+    // its own copy, with its marker, is replaced (a second derive of the same directory)
+    const mine = tmp();
+    deriveBuild(fakeBuild(), mine);
+    writeFileSync(join(mine, "build", "stale.txt"), "x");
+    deriveBuild(fakeBuild(), mine);
+    expect(existsSync(join(mine, "build", "stale.txt"))).toBe(false);
+  });
 });
 
 describe("the content-security policy option (evidence for planning; off by default)", () => {
@@ -182,14 +209,35 @@ describe("the static server's arguments and environment", () => {
     expect(env).toEqual({ SystemRoot: "C:\\Windows", TEMP: "T", MARS_WEB: "0" });
   });
 
-  it("refuses a busy port (PORT_IN_USE), never another port", async () => {
-    const held = createNetServer();
-    await new Promise((resolve) => held.listen({ host: "127.0.0.1", port: 0, exclusive: true }, resolve));
-    try {
-      await expect(checkPortFree(held.address().port)).rejects.toThrow(/PORT_IN_USE/);
-    } finally {
-      await new Promise((resolve) => held.close(resolve));
+  it("refuses a busy port (PORT_IN_USE) on any address (review N6), never another port", async () => {
+    for (const host of ["127.0.0.1", "0.0.0.0", "::"]) {
+      const held = createNetServer();
+      await new Promise((resolve) => held.listen({ host, port: 0, exclusive: true }, resolve));
+      try {
+        await expect(checkPortFree(held.address().port, { table: () => "" }), host).rejects.toThrow(/PORT_IN_USE/);
+      } finally {
+        await new Promise((resolve) => held.close(resolve));
+      }
     }
+    // a port the table lists on another address (one no probe binds) is in use too
+    const free = await freePort();
+    await expect(checkPortFree(free, { table: () => `  TCP    192.0.2.7:${free}    0.0.0.0:0    LISTENING    4242\n` }))
+      .rejects.toThrow(/listening on 192\.0\.2\.7/);
+    await expect(checkPortFree(free, { table: () => "" })).resolves.toBeUndefined();
+  });
+
+  it("reads the platform's TCP table: listeners on the port only, any address family", () => {
+    const table = [
+      "Active Connections",
+      "  Proto  Local Address          Foreign Address        State           PID",
+      "  TCP    0.0.0.0:13330          0.0.0.0:0              LISTENING       100",
+      "  TCP    127.0.0.1:13331        0.0.0.0:0              LISTENING       101",
+      "  TCP    127.0.0.1:50000        127.0.0.1:13330        ESTABLISHED     102",
+      "  TCP    [::1]:13330            [::]:0                 LISTENING       103",
+      "  TCP    192.0.2.7:113330       0.0.0.0:0              LISTENING       104",
+    ].join("\r\n");
+    expect(listeningIn(table, 13330)).toEqual(["0.0.0.0", "[::1]"]);
+    expect(listeningIn(table, 13332)).toEqual([]);
   });
 });
 
@@ -244,6 +292,29 @@ function get(port, path) {
   });
 }
 
+/** Whether process PID is alive (signal 0 probes without signalling). */
+function alive(pid) {
+  if (pid === null) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Ends PID and every process it started (taskkill /T on Windows; the process group elsewhere). */
+function killTree(pid) {
+  if (process.platform === "win32") spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { windowsHide: true });
+  else {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
 function freePort() {
   return new Promise((resolve) => {
     const probe = createNetServer();
@@ -257,8 +328,11 @@ function freePort() {
 describe.skipIf(!existsSync(join(canvasPackageDir(), "build", "index.html")))("the start command", () => {
   it("serves upstream's server on loopback, with the rule's injections and routes, and stops when its input closes", async () => {
     const seen = [];
+    const hosts = [];
+    let started = null;
     const stub = createServer((req, res) => {
       seen.push(req.url);
+      hosts.push(req.headers.host);
       res.writeHead(200, { "content-type": "application/json", "x-stub": "fixture" });
       res.end('{"uptime":1,"idle_time":1}');
     });
@@ -281,6 +355,7 @@ describe.skipIf(!existsSync(join(canvasPackageDir(), "build", "index.html")))("t
       });
       expect(ready.port).toBe(port);
       expect(ready.out).toContain(`Static-server + proxy listening on http://127.0.0.1:${port}/`);
+      started = ready.pid;
       const index = await get(port, "/");
       expect(index.status).toBe(200);
       // the exact script injectedScript() reproduces (the CSP option hashes it)
@@ -290,11 +365,16 @@ describe.skipIf(!existsSync(join(canvasPackageDir(), "build", "index.html")))("t
       expect(info.headers["x-stub"]).toBe("fixture");
       await get(port, "/api/settings");
       expect(seen).toEqual(["/ui/server_info", "/ui/api/settings"]);
+      // what upstream's proxy (changeOrigin) sends as Host: the target's own host and port (the fixture checks it)
+      expect(hosts).toEqual([`127.0.0.1:${fixturePort}`, `127.0.0.1:${fixturePort}`]);
       const exited = new Promise((resolve) => child.once("exit", (code) => resolve(code)));
       child.stdin.end();
       expect(await exited).toBe(0);
+      expect(alive(started), "the static server's own process ended with the start command").toBe(false);
     } finally {
-      if (child.exitCode === null) child.kill();
+      // review N8: whatever happened, the whole tree this test started is ended
+      if (child.exitCode === null && child.pid) killTree(child.pid);
+      if (started !== null && alive(started)) killTree(started);
       await new Promise((resolve) => stub.close(resolve));
     }
   }, 60000);
