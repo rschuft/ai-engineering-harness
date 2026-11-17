@@ -1,9 +1,10 @@
 ---
 id: TASK-12
 title: 'E-01.5: Gate dispatch by observed isolation and source identity'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-17T02:50:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -22,8 +23,14 @@ Plan contract: leaf E-01.5 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 No unauthorized workspace path or local-runtime fallback is reported as an accepted attempt; original parent proof remains satisfied.
-- [ ] #2 Per attempt, the gate compares an independent docker inspect's caps, image ID and mounts with the admitted ones, and its NetworkMode and ExtraHosts with the recorded limit values of fd-container-network-deviations; any other value, or an inspect it cannot obtain, marks the attempt not launched: shown offline over inspect documents taken from recorded live observations (F-04.2; the D1 run record of 2026-11-16, steps (3) and (5b)), each cited, and over an altered copy for each compared field.
-- [ ] #3 Execution non-overlap (review finding 1): no ordinal N+1 is reserved or dispatched for a Work, design revision and stage while ordinal N's conversation is executing as the Agent Server reports it, and an unknown execution state also refuses; acceptance tests prove both refusals.
-- [ ] #4 The lineage attempt resolver resolves the dispatched attempt, against the Agent Server fake with its authority mode stated; against a live server, E-01.6's.
+- [x] #1 No unauthorized workspace path or local-runtime fallback is reported as an accepted attempt; original parent proof remains satisfied.
+- [x] #2 Per attempt, the gate compares an independent docker inspect's caps, image ID and mounts with the admitted ones, and its NetworkMode and ExtraHosts with the recorded limit values of fd-container-network-deviations; any other value, or an inspect it cannot obtain, marks the attempt not launched: shown offline over inspect documents taken from recorded live observations (F-04.2; the D1 run record of 2026-11-16, steps (3) and (5b)), each cited, and over an altered copy for each compared field.
+- [x] #3 Execution non-overlap (review finding 1): no ordinal N+1 is reserved or dispatched for a Work, design revision and stage while ordinal N's conversation is executing as the Agent Server reports it, and an unknown execution state also refuses; acceptance tests prove both refusals.
+- [x] #4 The lineage attempt resolver resolves the dispatched attempt, against the Agent Server fake with its authority mode stated; against a live server, E-01.6's.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+E-01.5 PASS, the engineering manager's verdict (decision 0018 point 1): evidence/bootstrap-log.md#e-01-5-verdict-2026-11-16. Two known-open live-path defects (S1, S2) routed to planning as PB-13.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -5519,6 +5519,77 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - Decision answers are last-writer-wins, as display state, disclosed.
   - **Discovered work (planning's):** the lineage traversal reaches an archived task only through a reservation that cites the outcome. Without one, the task is omitted silently, because `task list --json` does not list archived tasks. The lineage README and the schema now say so.
   - **Not verified:** a real browser; a killed-process restart; migration 0003 on the Owner's own store, which applies at its next open; a decision asked by a real producer (none yet; P-04.4 is the first); Linux and macOS.
+- <a id="e-01-5-verdict-2026-11-16"></a>**2026-11-16: E-01.5 PASS, the engineering manager's verdict (decision 0018 point 1), with two known-open defects on the live path routed to planning.** Offline. Judged against the proof as written, and against the design in [`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md) (R8, R11, slice 7, N10) and [`evidence/I1-restart-recovery-design-2026-11-16.md`](I1-restart-recovery-design-2026-11-16.md) (R22 point 1).
+  - **Commits, all pushed by this entry:**
+    - the slice: `21fb22f`, `743e5c4`, `27ff857`, `2bcf9e5`, `1f2ed03`, `d4a9e7a`, `bed613b`;
+    - the review's fixes: `d78f2ab`.
+    - `27ff857` and `2bcf9e5` fail the lineage example tests on their own; `1f2ed03` restores them. They were never pushed separately.
+  - **"No unauthorized workspace path or local-runtime fallback is reported as an accepted attempt; original parent proof remains satisfied."**
+    - `test_launch_gate.Wired` runs the gate as `run_attempt`'s `inspect`, before SEED and the message. Each of these ends the attempt `inspection-failed`, with a `containment-stop` / `INSPECTION_FAILED` end, a durable `not-launched` receipt (`dispatch/attempt/<id>/launch`, `attempt-launch/v1`), and no SEED and no message:
+      - a mount source elsewhere;
+      - an inspect with no container (the local-runtime fallback);
+      - since `d78f2ab`, a document the gate cannot compare;
+      - since `d78f2ab`, a receipt that cannot be written.
+    - The parent proof is unchanged: `test_reconcile` and `test_restart_matrix` pass.
+  - **The gate's five comparisons.** These are caps (`Memory`, `NanoCpus`, `PidsLimit`); the image ID against the provision lock; mounts as `(Type, Source, Destination, RW)`; and `NetworkMode` and `ExtraHosts` against the limits of `fd-container-network-deviations`.
+    - **Positive case:** the gate passes on the cited `container-inspect` catalog entry.
+    - **Negative cases:** `NotLaunched` alters each field (caps 5 ways, image 2, mounts 6, NetworkMode 3, ExtraHosts 3) and each alteration is not launched; so is an inspect that cannot be obtained.
+    - **Provenance:** 8 provenance rows were added, with the same four classes as E-01.4.2's catalog.
+      - Image, caps, NetworkMode, ExtraHosts and the mounts' `Type` and `RW` are observations cited to F-04.2 §4.3 and §7, and to D1 §5 (3) and (5b).
+      - The mounts' `Source` and `Destination` are a pinned rule (`dispatch_inputs._binds_for` over the declared binds of D1's profile).
+      - The reviewer checked the determining inputs at `fec83d9`, `9684d9c` and HEAD.
+      - The read-binding test binds the gate's reads.
+  - **"Execution non-overlap ... while ordinal N's conversation is executing as the Agent Server reports it, and an unknown execution state also refuses".**
+    - `admit_new_attempt` runs before `reserve_attempt`, under the dispatcher lock.
+    - It asks the Agent Server about every earlier ordinal whose history holds a `dispatched` event, whatever its stored state, including `failed` (R22 point 1). It skips only an attempt recorded as never having sent its create. Since `d78f2ab`, that record covers only a refusal raised before the create's call.
+    - **The two refusals** (`test_non_overlap`):
+      - `PRIOR_CONVERSATION_RUNNING` while the conversation is held with its runtime not stopped;
+      - `PRIOR_CONVERSATION_UNOBSERVED` while its state is unknown.
+      In both, nothing is reserved and no create is sent.
+    - **Further rules and cases:**
+      - A conversation that appears after the lookup answered 404 refuses the next ordinal. This is a test knob derived from the pinned handler's order and cited by wheel and line.
+      - An unrevoked grant refuses with `PRIOR_GRANT_UNREVOKED`. This was carried from E-01.4.2; `end_attempt` is the exit.
+  - **"The lineage attempt resolver resolves the dispatched attempt, against the Agent Server fake with its authority mode stated".**
+    - `AttemptResolver` is read-only (`mode=ro`, `query_only`, one GET).
+    - It answers with mode `fixture`, a `FIXTURE` label and a `fixture-authority` uncertainty, so a projection is never `complete` on a fixture answer.
+    - It answers `ATTEMPT_AUTHORITY_MISMATCH` when the bound and answering authorities disagree. Since `d78f2ab` that includes a fixture label claiming live.
+    - `attempt` is `implemented` (N10), and the attempt sample is retired: no sample authority remains.
+    - **The P-03.2 example:** `projection-fixture-authority.json` replaces `projection-sample-authorities.json`. It has 13 nodes and 14 edges: 11 authoritative and 2 fixture, both attempts resolved with their mode stated. The attempts are built with the dispatcher's constructors in a throwaway store, not by a dispatch. The real-registry projection keeps the attempts `RESOLVER_NOT_CONFIGURED`.
+  - **Review.** A fresh read-only review (dispatch 19) found no blocker, 3 should-fix and 11 notes.
+    - Fixed: S3, N1, N6, N7 and N8, and the wording of N4 and S2.
+    - Routed: S1 and S2 (below).
+    - The reviewer's probes now show the fixed behaviour.
+  - **Validation:**
+    - 30 mutants killed (20 at build, 10 for the fixes).
+    - The full `tools/run_tests.py` (15 suites) passed at `d4a9e7a` and at `d78f2ab`; dispatch has 854 tests, lineage 177.
+    - `verify_seed` PASS.
+    - The engineering manager re-ran test_launch_gate, test_non_overlap and the lineage resolver and trace tests at `d78f2ab`: all OK.
+  - **Changed existing assertions.** Each is named by N10, the retired attempt sample or the regenerated example, and none weakens; they are tabulated in the review record (dispatch 19). One test in test_trace was strengthened so that it no longer reads its expected pairs back from the projection. The fake `FakeAgentServer` answers two more GETs by delegating to the core; no assertion or test id changed.
+  - **Known-open defects, the live path only; nothing in I1's fixture run reaches them:**
+    - **S1, the 404 window.** At the pinned source (openhands-agent-server 1.60.1), a create in flight answers 404 to a conversation lookup until it completes. Observed durations were 10.64 s and 24.8 s; by source reading the bound is about 3 minutes.
+      - The admission's lookup and E-01.4.1's reconcile ask the same question seconds apart in the restart path, so both can be fooled together.
+      - The next ordinal is then admitted, its inspection's count fails, and its non-retryable end bars the work item (`PRIOR_END_SECURITY_STOP`).
+      - The proof's words are met. R22's intent, to refuse before reserving rather than rely on the inspection, is not met on a live server.
+    - **S2, no exit for a surviving earlier conversation.** An earlier conversation on the same server, idle or stopped, has no exit inside the harness. Upstream evicts only terminal conversations, and the inspection's count includes a stopped one. Any surviving earlier conversation therefore blocks or dooms the next ordinal.
+    - **The reviewer's options:**
+      - a time bound on a 404, at admission or in reconcile;
+      - asking the guest's container facts too;
+      - a fresh guest per ordinal, destroying the earlier one;
+      - a recorded exit that deletes an orphan (`DELETE /api/conversations/{id}` is dispatcher-allowed);
+      - relaxing the count rule (not recommended).
+    - **Routed:** these go to planning as **PB-13**, before E-01.6 runs live, with a recommended architecture consultation (gates A and G) when that work is taken up. The dispatch README states both residuals and their cost.
+  - **Carried to slice 11 (E-01.8):**
+    - wire the gate as the fixture composition's `inspect`;
+    - run `recover` first and stop on a held row (R22 point 3);
+    - consider requiring a confirmed `launched` receipt before SEED (review N3), since R11 left `run_attempt` unchanged.
+  - **Delegated decisions:**
+    - `PRIOR_GRANT_UNREVOKED`;
+    - "executing" read as the runtime not stopped, the stricter reading;
+    - the never-sent exception and its narrowing;
+    - a gate that cannot compare records `not-launched`;
+    - a fixture label is never live, `{'fixture': None}` included;
+    - the example's attempts are built in a throwaway store.
+  - **Not verified:** anything live (the inspect from the guest's root facts, a live refusal, a live resolver: E-01.6); repeated live inspects (review N5); the guest-per-attempt lifecycle (review N2); Linux and macOS.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
