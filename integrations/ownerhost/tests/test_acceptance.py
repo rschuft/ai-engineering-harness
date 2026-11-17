@@ -465,6 +465,56 @@ class RaceWindow(Rig):
         self.assertIn(f'{AC.DECISION_TRAILER}d', message.split('\n'))
 
 
+class SessionBindingVerifier(Rig):
+    """The owner-ui channel's verifier itself (acceptance.SessionBinding), as the recorder calls it: it re-reads the
+    message and answers a reason unless the statement is that stored Owner message of the requesting session and the
+    challenge is the one held for that session. The service's own checks come first, so each clause is shown here."""
+
+    def setUp(self):
+        super().setUp()
+        self.card = self.challenge()
+        self.append('Acc0001', ACCEPT, 'Crd0001')
+        self.held = self.accepter.held[self.card['nonce']]
+        stored = self.store.message(self.thread_id, 'Acc0001')
+        self.statement = {'text': ACCEPT, 'attributedTo': 'owner', 'channel': 'owner-ui',
+                          'reference': f'conversation:{self.thread_id}/Acc0001#sha256:{stored.sha256}'}
+
+    def statement_of(self, message_id):
+        stored = self.store.message(self.thread_id, message_id)
+        return {'text': stored.content.decode('utf-8'), 'attributedTo': 'owner', 'channel': 'owner-ui',
+                'reference': f'conversation:{self.thread_id}/{message_id}#sha256:{stored.sha256}'}
+
+    def verify(self, message_id='Acc0001', session_id=None, statement=None, challenge=None, held=None):
+        binding = AC.SessionBinding(self.store, self.thread_id, message_id, session_id or self.record.session_id,
+                                    held or self.held)
+        return binding(statement or self.statement, challenge or self.held.challenge)
+
+    def test_the_bound_statement_is_admitted(self):
+        self.assertIsNone(self.verify())
+
+    def test_each_unbound_statement_gets_a_reason(self):
+        other = json.loads(json.dumps(self.held.challenge))
+        other['shown']['nonce'] = 'ab' * 16
+        cases = {
+            'another challenge': dict(challenge=other),
+            'a challenge held for another session': dict(held=AC.Held(self.held.challenge, self.thread_id, 'Rev0001',
+                                                                      'Crd0001', 'another-session')),
+            # each case differs from the bound statement by its one clause only
+            'a message of another session than the requesting one': dict(
+                session_id='another-session', held=AC.Held(self.held.challenge, self.thread_id, 'Rev0001', 'Crd0001',
+                                                            'another-session')),
+            'an assistant message': dict(message_id='Crd0001', statement=self.statement_of('Crd0001')),
+            'an absent message': dict(message_id='Abs0001'),
+            'another text': dict(statement={**self.statement, 'text': ACCEPT + '!'}),
+            'another reference': dict(statement={**self.statement, 'reference': self.statement['reference'][:-1] + '0'}),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(case=name):
+                reason = self.verify(**kwargs)
+                self.assertIsInstance(reason, str)
+                self.assertTrue(reason)
+
+
 class NoModelNoSocket(Rig):
     EVENTS = ('socket.', 'subprocess.Popen', 'os.system', 'os.exec', 'os.posix_spawn', 'os.spawn', 'os.startfile',
               'urllib.Request', 'http.client.connect', 'webbrowser.open')

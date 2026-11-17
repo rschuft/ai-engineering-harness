@@ -3172,6 +3172,8 @@
     "test_acceptance.RaceWindow.test_a_backstop_refusal_leaves_the_receipt_reserved_and_the_repository_unchanged",
     "test_acceptance.RaceWindow.test_a_process_that_ended_after_the_commit_is_settled_by_reading_the_repository",
     "test_acceptance.RaceWindow.test_the_settlement_line_is_the_recorder_s",
+    "test_acceptance.SessionBindingVerifier.test_each_unbound_statement_gets_a_reason",
+    "test_acceptance.SessionBindingVerifier.test_the_bound_statement_is_admitted",
     "test_acceptance.SessionRefusals.test_a_missing_or_foreign_session_is_refused_and_changes_nothing",
     "test_acceptance.SessionRefusals.test_a_statement_authored_by_a_model_or_an_agent_is_refused",
     "test_acceptance.SessionRefusals.test_an_acceptance_not_made_in_the_owner_s_session_is_refused",
