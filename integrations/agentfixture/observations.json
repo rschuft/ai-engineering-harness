@@ -1321,7 +1321,8 @@
         "status": 200,
         "body": {
           "uptime": 31.0,
-          "idle_time": 31.0
+          "idle_time": 31.0,
+          "version": "1.60.1"
         }
       },
       "ui-conversation": {
@@ -1996,9 +1997,21 @@
       {
         "face": "ui",
         "answer": "ui-server-info",
+        "field": "`body.version`",
+        "class": "observation",
+        "citation": "F-04.1c §3 (`\"version\": \"1.60.1\"`, the pinned release; one package version at every server of the release: `as:openhands/agent_server/server_details_router.py:42-44`)",
+        "determinedBy": "the pinned release (`openhands-agent-server` 1.60.1)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-server-info",
         "field": "`body.<every other ServerInfo field>`",
         "class": "none",
-        "citation": "not served: unobserved at the UI's vantage and not required (`ServerInfo` requires `uptime` and `idle_time` only: `as:openhands/agent_server/server_details_router.py:38-103`)",
+        "citation": "not served: unobserved at the UI's vantage and not required (`ServerInfo` requires `uptime` and `idle_time` only: `as:openhands/agent_server/server_details_router.py:38-103`); `version` is served (Agent Canvas 1.36.0 refuses a backend whose `/server_info` has no valid version: U-01.2's G5)",
         "determinedBy": "",
         "read": false,
         "readBy": [],

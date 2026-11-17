@@ -563,7 +563,8 @@ lines).
 | dispatcher | `unauthorized` | `fixture` | label | the fixture's label |  | no | yes |  |
 | ui | `ui-server-info` | `status` | source-derived | `as:openhands/agent_server/server_details_router.py:184-192` (the public route answers `ServerInfo`) | the route (no input) | no | yes | source-derived |
 | ui | `ui-server-info` | `body.uptime`, `body.idle_time` | observation | F-04.1c §3 | the clock | no | yes | clock-valued |
-| ui | `ui-server-info` | `body.<every other ServerInfo field>` | none | not served: unobserved at the UI's vantage and not required (`ServerInfo` requires `uptime` and `idle_time` only: `as:openhands/agent_server/server_details_router.py:38-103`) |  | no | no |  |
+| ui | `ui-server-info` | `body.version` | observation | F-04.1c §3 (`"version": "1.60.1"`, the pinned release; one package version at every server of the release: `as:openhands/agent_server/server_details_router.py:42-44`) | the pinned release (`openhands-agent-server` 1.60.1) | no | yes |  |
+| ui | `ui-server-info` | `body.<every other ServerInfo field>` | none | not served: unobserved at the UI's vantage and not required (`ServerInfo` requires `uptime` and `idle_time` only: `as:openhands/agent_server/server_details_router.py:38-103`); `version` is served (Agent Canvas 1.36.0 refuses a backend whose `/server_info` has no valid version: U-01.2's G5) |  | no | no |  |
 | ui | `ui-server-info` | `fixture` | label | the fixture's label, naming the source-derived fields |  | no | yes |  |
 | ui | `ui-conversation` | `status` | source-derived | `as:openhands/agent_server/conversation_router.py:219-234` (`ConversationInfo` for a conversation the server holds) | a conversation the server holds, idle, running or finished | no | yes | source-derived |
 | ui | `ui-conversation` | `body.id` | echo | the request path's `conversation_id` | the request | no | yes |  |
@@ -610,6 +611,18 @@ lines).
 
 **Source-derived entries** are on the UI face only, but for the core's one dispatcher-face entry (`message-event`),
 which the listener refuses to serve. Their observed counterparts are U-03.2's (planning's re-homing).
+
+**Agent Canvas's bootstrap (U-01.2's G5, a fix-forward of E-01.7's catalog).** The engineering manager's ruling 5
+(the minimal UI catalog) proved too narrow: Agent Canvas 1.36.0's local-backend check
+(`dist/api/agent-server-compatibility.js` `validateLocalBackend`) reads `GET /api/settings` before `/server_info`,
+and refuses a backend whose `/server_info` carries no valid `version` (1.59.0 or newer). So the UI face also answers
+`GET /api/settings` (`ui-settings`: a server that persists no settings, source-derived from the pinned wheels, the
+rows written before the route) and its `/server_info` carries the observed `version` (F-04.1c §3). Nothing else was
+added: the other routes Canvas asks for at start-up (`/api/llm/models/verified`, `/api/profiles`,
+`/api/agent-profiles`, `/api/meta-profiles`, `/api/settings/agent-schema`, `/api/automation/*`) stay the labelled
+501, since G5 did not show that the conversation view needs them (it stopped before the view: see
+`apps/owner-host/README.md`, G5). The UI face stays read only: Canvas's telemetry-consent dialog sends
+`PATCH /api/settings`, which it refuses.
 
 **Not verified here:** Agent Canvas against the UI face (G5, slice 13); the "finished with a result" path over the
 listener (E-01.8); every source-derived field live (U-03.2, and E-01.6 for `message-event`).
