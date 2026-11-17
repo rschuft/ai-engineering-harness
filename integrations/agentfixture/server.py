@@ -314,6 +314,17 @@ async def _lifespan(scope, receive, send, lifespan):
     await send({'type': 'lifespan.shutdown.complete'})
 
 
+def host_allowed(scope, headers: dict) -> bool:
+    """The UI face's Host rule (U-01.2's review, N2: DNS rebinding): the request's Host must be the literal address of
+    the listener that received it, ``127.0.0.1:<its port>`` (13320 when served; a test's own free port), exactly what
+    upstream's static server sends through its proxy (``changeOrigin``: the target's host and port)."""
+    server = scope.get('server')
+    return bool(server) and server[0] == LOOPBACK and headers.get('host') == f'{LOOPBACK}:{server[1]}'
+
+
+HOST_REFUSED = 'a Host that is not this listener\'s own address, 127.0.0.1:<port> (DNS rebinding)'
+
+
 def _split(path: str) -> tuple[str, str]:
     if path == UI_PREFIX or path.startswith(UI_PREFIX + '/'):
         return 'ui', path[len(UI_PREFIX):] or '/'
@@ -344,6 +355,10 @@ async def _http(fixture: Fixture, scope, receive, send):
     raw, connected = await _body(receive)
     if not connected:
         return
+    if face == 'ui' and not host_allowed(scope, headers):
+        answer = fixture.core.refuse(HOST_REFUSED)
+        fixture.note(face=face, method=method, path=path, event='answered', answer='refusal', status=answer['status'])
+        return await _respond(send, answer)
     if method == 'OPTIONS':
         answer, cors = fixture.preflight(face, path, headers)
         fixture.note(face=face, method=method, path=path, event='answered', answer=answer['fixture']['answer'],
@@ -402,6 +417,8 @@ async def _socket(fixture: Fixture, scope, receive, send):
     refusal = None
     if face != 'ui' or not cid or set(params) - {'after_seq', 'session_api_key'}:
         refusal = 'a socket outside the catalog'
+    elif not host_allowed(scope, headers):
+        refusal = HOST_REFUSED
     after_seq = None
     if refusal is None and 'after_seq' in params:
         try:

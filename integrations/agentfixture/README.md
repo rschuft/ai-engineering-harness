@@ -386,6 +386,16 @@ walks bodies recursively), is the labelled 400 (`malformed`) before the core see
 `FIXTURE_NO_OBSERVATION: <why>` after a labelled handshake. A request line the HTTP layer itself rejects (uvicorn's
 own 400, before the application runs) carries no label: no application code sees it.
 
+**The UI face's Host rule** (U-01.2's review, N2: DNS rebinding). The UI face answers a request, a preflight or a
+session socket only when its `Host` is the literal address of the listener that received it, `127.0.0.1:<its port>`
+(`127.0.0.1:13320` when served): exactly what upstream's static server sends through its reverse proxy
+(`changeOrigin`: the target's host and port; pinned by `apps/owner-host/scripts/canvas-standalone.test.mjs`).
+Anything else is the labelled refusal (a socket: closed 1008 after a labelled handshake). The dispatcher's face keeps
+its own rules (its transport targets the literal address). **No request header is recorded** (N1): the call log
+holds a request's face, method, path, event, answer and status only, so a `Cookie` or `Authorization` that upstream's
+proxy forwards, and the session key header's value, are only ever compared by the labelled key check, never recorded
+or echoed (`test_served.NoCredentialRecorded`).
+
 **CORS** (the engineering manager's ruling 2 of E-01.7's review). The dispatcher's face has none: no browser drives
 it, so a preflight there is the labelled 501 and no answer carries an `Access-Control-*` header. The UI face answers a
 browser only from origins configured explicitly (`--ui-origin`; none by default; loopback `http` origins only,

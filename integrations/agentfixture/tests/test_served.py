@@ -8,6 +8,7 @@ saying so, otherwise. Every other test creates the conversation in process, thro
 """
 import json
 import unittest
+from pathlib import Path
 
 import fixture_support as S
 
@@ -138,6 +139,81 @@ class Settings(Listener):
         answer = self.ui('GET', '/server_info')
         self.assertEqual(answer['body']['version'], '1.60.1')
         self.assertEqual(answer['label']['sourceDerived'], ['status'])
+
+
+class HostRule(Listener):
+    """U-01.2's review, N2 (DNS rebinding): the UI face answers only a request whose Host is the literal address of the
+    listener, 127.0.0.1:<its port>, which is what upstream's static server sends through its proxy (changeOrigin;
+    pinned in apps/owner-host/scripts/canvas-standalone.test.mjs). Anything else is the labelled refusal."""
+
+    def test_the_ui_face_refuses_another_host_and_answers_its_own(self):
+        self.held()
+        port = self.served.port
+        for host in ('evil.example', f'evil.example:{port}', f'localhost:{port}', f'127.0.0.1:{port + 1}', '127.0.0.1',
+                     f'[::1]:{port}', f'127.0.0.1:{port}.evil.example'):
+            for path in ('/server_info', '/api/settings', CONVERSATION):
+                with self.subTest(host=host, path=path):
+                    answer = self.ui('GET', path, headers={'Host': host})
+                    self.assertEqual((answer['status'], answer['label']['answer']), (501, 'refusal'))
+                    self.assertIn('DNS rebinding', answer['label']['refused'])
+                    self.assertIsNone(answer['body'])
+        preflight = self.ui('OPTIONS', CONVERSATION, key=None, headers={'Host': f'evil.example:{port}',
+                                                                         'Origin': 'http://127.0.0.1:13330',
+                                                                         'Access-Control-Request-Method': 'GET'})
+        self.assertEqual((preflight['status'], preflight['label']['answer']), (501, 'refusal'))
+        self.assertEqual(self.ui('GET', CONVERSATION, headers={'Host': f'127.0.0.1:{port}'})['status'], 200)
+        # the dispatcher's face is not the UI face's rule (the dispatcher's transport targets the literal address)
+        self.assertEqual(S.http(port, 'GET', '/server_info', headers={'Host': f'localhost:{port}'})['status'], 200)
+
+    def test_the_session_socket_refuses_another_host(self):
+        import socket
+        connect, ConnectionClosed, _ = websockets_client()
+        self.held()
+        port = self.served.port
+        raw = socket.create_connection(('127.0.0.1', port), timeout=30)
+        with connect(f'ws://evil.example:{port}/ui/sockets/session/{S.CID}', sock=raw, open_timeout=30,
+                     close_timeout=30) as ws:
+            with self.assertRaises(ConnectionClosed) as caught:
+                ws.recv(timeout=30)
+        self.assertEqual(caught.exception.rcvd.code, 1008)
+        self.assertIn('DNS rebinding', caught.exception.rcvd.reason)
+        with self.socket() as ws:
+            ws.send(json.dumps({'type': 'auth', 'session_api_key': S.UI_ACCESS}))
+            self.assertEqual(json.loads(ws.recv(timeout=30))['type'], 'sync')
+
+
+class NoCredentialRecorded(Listener):
+    """U-01.2's review, N1: the fixture records no request header. Upstream's proxy forwards a browser's cookies and
+    any Authorization; the call log and every answer hold none of them, nor the session key header's value (it is only
+    compared, by the labelled key check)."""
+
+    SECRETS = {'Cookie': 'aieh_cookie=c00k1e-value-0123456789', 'Authorization': 'Bearer auth-value-0123456789'}
+
+    def test_no_cookie_authorization_or_key_is_recorded_or_echoed(self):
+        self.held()
+        tmp = Path(S.tempfile.mkdtemp(prefix='aieh-fx-n1-'))
+        self.addCleanup(S.shutil.rmtree, tmp, True)
+        self.fixture.log_path = log = tmp / 'calls.jsonl'
+        port = self.served.port
+        answers = [self.ui('GET', path, headers=dict(self.SECRETS)) for path in ('/server_info', '/api/settings',
+                                                                                  CONVERSATION, '/api/profiles')]
+        answers.append(self.ui('GET', CONVERSATION, key='a-wrong-key-value-0123456789', headers=dict(self.SECRETS)))
+        answers.append(S.http(port, 'GET', '/api/conversations/count', key=S.DISPATCHER_ACCESS, headers=dict(self.SECRETS)))
+        answers.append(self.ui('POST', CONVERSATION, body={}, headers=dict(self.SECRETS)))
+        with self.socket(additional_headers=dict(self.SECRETS)) as ws:
+            ws.send(json.dumps({'type': 'auth', 'session_api_key': S.UI_ACCESS}))
+            ws.recv(timeout=30)
+        recorded = log.read_text(encoding='utf-8') + json.dumps(self.fixture.log)
+        echoed = json.dumps([[a['status'], a['headers'], a['body']] for a in answers])
+        for value in [*self.SECRETS.values(), S.UI_ACCESS, S.DISPATCHER_ACCESS, 'a-wrong-key-value-0123456789']:
+            with self.subTest(value=value):
+                self.assertNotIn(value, recorded)
+                self.assertNotIn(value, echoed)
+        for name in ('cookie', 'authorization', 'x-session-api-key'):
+            self.assertNotIn(name, recorded.lower())
+        self.assertEqual({tuple(sorted(e)) for e in self.fixture.log} - {
+            ('answer', 'event', 'face', 'method', 'path', 'status'), ('event', 'face', 'method', 'path'),
+            ('answer', 'event', 'face', 'method', 'path'), ('answer', 'code', 'event', 'face', 'method', 'path')}, set())
 
 
 class Cors(Listener):
