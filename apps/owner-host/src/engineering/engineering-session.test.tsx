@@ -170,6 +170,16 @@ describe("the engineering session route", () => {
     expect(document.querySelectorAll("iframe, a[href*='threads']")).toHaveLength(0);
   });
 
+  it("shows no frame for a conversation the outcome's projection does not name", async () => {
+    signIn(throwawayCredential());
+    const a = answer("running-turn-sent");
+    const { fetchImpl } = fakeIntegration(() => a);
+    app(sessionPath("11111111-2222-4333-8444-555555555555"), fetchImpl);
+    const refused = await shown("engineering-session-refused");
+    expect(refused.getAttribute("data-reason")).toBe("SESSION_ACCESS_UNAVAILABLE");
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
   it("shows no frame while signed out", async () => {
     const { fetchImpl } = fakeIntegration(() => answer("running-turn-sent"));
     app(sessionPath(answer("running-turn-sent").body.attempts[0].conversationId), fetchImpl);
