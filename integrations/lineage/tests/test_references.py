@@ -283,7 +283,7 @@ class Schema(unittest.TestCase):
     def test_the_overseer_kinds_and_statuses(self):
         expected = {
             'conversation': 'implemented', 'message': 'implemented', 'objective': 'implemented',
-            'design': 'implemented', 'work': 'implemented', 'attempt': 'authority-unavailable',
+            'design': 'implemented', 'work': 'implemented', 'attempt': 'implemented',     # implemented at E-01.5
             'commit': 'implemented', 'review': 'authority-unavailable', 'ci': 'authority-unavailable',
             'authorization': 'authority-unavailable', 'effect-receipt': 'implemented', 'release': 'unknown',
             'catalog': 'unknown'}
@@ -339,10 +339,11 @@ class Schema(unittest.TestCase):
                                     'status unknown exactly when'),
             'settled but unknown': (lambda s, k: k['commit'].update(status='unknown'), 'status unknown exactly when'),
             'unknown without open': (lambda s, k: k['release'].update(open=[]), 'lists what is open'),
-            'unavailable without leaf': (lambda s, k: k['attempt'].update(supplied_by=[]),
+            # (attempt is implemented since E-01.5: these three take review, still unavailable)
+            'unavailable without leaf': (lambda s, k: k['review'].update(supplied_by=[]),
                                          'names the leaves that supply it'),
-            'unverified claim': (lambda s, k: k['attempt'].update(verified='verified'), 'verified must be'),
-            'resolver on unavailable': (lambda s, k: k['attempt'].update(resolver='x'),
+            'unverified claim': (lambda s, k: k['review'].update(verified='verified'), 'verified must be'),
+            'resolver on unavailable': (lambda s, k: k['review'].update(resolver='x'),
                                         'only an implemented kind names a resolver'),
             'implemented without resolver': (lambda s, k: k['design'].update(resolver=None), 'resolver is required'),
             'outcomes without resolved': (lambda s, k: k['design'].update(outcomes=['missing', 'authority-unavailable']),
@@ -463,8 +464,7 @@ class _Stub:
 class RegistryContract(unittest.TestCase):
     def test_declared_but_unavailable_kinds_name_their_leaves(self):
         registry = L.Registry()
-        for text, leaves in (('openhands:conversation/' + UUID, ('E-01.3.1', 'E-01.4.1')),
-                             (f'gitea:o/r/pulls/7/reviews/31@{C40}', ('E-03.3.1', 'E-03.3.2', 'D-01.1')),
+        for text, leaves in ((f'gitea:o/r/pulls/7/reviews/31@{C40}', ('E-03.3.1', 'E-03.3.2', 'D-01.1')),
                              (f'gitea:o/r/actions/runs/9@{C40}', ('Q-03.1', 'Q-03.2')),
                              (f'gitea:o/r/branches/main@{C40}#sha256:{D}', ('G-03.1', 'G-04.3.1'))):
             for method in (registry.resolve, registry.current):
@@ -507,7 +507,8 @@ class RegistryContract(unittest.TestCase):
         registry = L.Registry()
         for text in ('backlog:TASK-1', f'git:r@{C40}', 'effect:' + KEY, f'outcome:{OUTCOME}',
                      f'openspec:changes/x/design.md@{C40}#sha256={D}',
-                     'conversation:thread-42', 'conversation:thread-42/message-8'):  # implemented at U-02.2
+                     'conversation:thread-42', 'conversation:thread-42/message-8',   # implemented at U-02.2
+                     'openhands:conversation/' + UUID):                                   # implemented at E-01.5
             with self.subTest(text=text):
                 result = registry.resolve(text)
                 self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'RESOLVER_NOT_CONFIGURED'))
@@ -519,7 +520,7 @@ class RegistryContract(unittest.TestCase):
         self.assertEqual(registry.resolve(f'git:r@{C40}').outcome, L.RESOLVED)
         self.assertEqual(registry.current(f'git:r@{C40}').query, 'current')
         with self.assertRaises(ValueError):
-            L.Registry([_Stub('attempt', 'OpenHands Agent Server', outcomes, good)])  # not implemented
+            L.Registry([_Stub('review', 'Gitea', outcomes, good)])  # not implemented (attempt is, since E-01.5)
         with self.assertRaises(ValueError):
             L.Registry([_Stub('commit', 'Git', {'resolved'}, good)])            # outcomes differ
         with self.assertRaises(ValueError):

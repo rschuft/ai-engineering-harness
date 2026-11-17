@@ -14,7 +14,7 @@ and returns a projection (``lineage-projection/v1``): every node with its author
 ``authority_mode``, the resolution of its reference as written and at the authority's
 current revision; every edge with the record that asserts it (its provenance); and an
 explicit list of uncertainties. The verdict is ``complete`` only when that list is empty,
-so a missing, changed, moved, unavailable or sample-backed node can never pass silently.
+so a missing, changed, moved, unavailable, fixture-answered or sample-backed node can never pass silently.
 
 Where each edge's assertion comes from:
 
@@ -39,7 +39,9 @@ Where each edge's assertion comes from:
 
 Every node is resolved through ``Authorities``: the lineage ``Registry`` (P-03.1), plus
 optional, clearly labelled sample authorities that may stand in only for kinds whose real
-authority does not exist yet (``lineage_samples.py``). A statement's content, which an
+authority does not exist yet (``lineage_samples.py``; none remains since E-01.5). A node the
+Agent Server fixture answered (the attempt resolver, E-01.5) has ``authority_mode`` ``fixture``
+and its authority label begins ``FIXTURE``. A statement's content, which an
 original quote is checked against, is taken from the resolver that answered it: the Owner
 conversation store's, read-only (U-02.2). Nothing here writes, runs OpenSpec, or reads a
 Backlog.md status.
@@ -81,8 +83,8 @@ L = resolve_mod.lineage
 planning = resolve_mod.planning
 
 PROJECTION_FORMAT = 'lineage-projection/v1'
-AUTHORITATIVE, SAMPLE, UNAVAILABLE = 'authoritative', 'sample', 'unavailable'
-AUTHORITY_MODES = (AUTHORITATIVE, SAMPLE, UNAVAILABLE)
+AUTHORITATIVE, FIXTURE, SAMPLE, UNAVAILABLE = 'authoritative', 'fixture', 'sample', 'unavailable'
+AUTHORITY_MODES = (AUTHORITATIVE, FIXTURE, SAMPLE, UNAVAILABLE)
 
 # Relations: the blueprint's names where it has one (#authority, minimal relationship
 # contract); accepted_by is decision 0008's acceptance field; cites is a task's reference.
@@ -95,7 +97,7 @@ CURRENT, SUPERSEDED, MOVED, MOVED_CHANGED, GONE, UNKNOWN = (
 
 # Uncertainty reasons (closed vocabulary).
 REASONS = ('unresolved', 'current-unresolved', 'superseded', 'moved', 'moved-changed', 'gone',
-           'sample-authority', 'quote-unverified', 'missing-link', 'malformed-reference',
+           'sample-authority', 'fixture-authority', 'quote-unverified', 'missing-link', 'malformed-reference',
            'enumeration-unavailable')
 
 ROLE = {'message': 'statement', 'conversation': 'statement', 'objective': 'objective', 'design': 'design',
@@ -116,7 +118,7 @@ def _intent_module():
 
 
 def _store_module():
-    return _load('integration_store', REPO / 'integrations' / 'store' / 'integration_store.py')
+    return resolve_mod._integration_store_module()
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +132,9 @@ class Authorities:
     only for a kind whose schema status is ``authority-unavailable``; it can never
     replace an implemented authority. Every answer carries its ``authority_mode``:
     ``sample`` for a sample, ``unavailable`` when the authority could not be asked,
-    ``authoritative`` otherwise.
+    ``fixture`` when the resolver reports that the kind's fixture answered (its authority label
+    is ``lineage.fixture_authority`` of the kind's authority: a resolver's own finding per
+    reference, never a caller's flag), ``authoritative`` otherwise.
     """
 
     def __init__(self, registry, samples=None):
@@ -154,7 +158,12 @@ class Authorities:
                 raise RuntimeError(f'the {reference.kind} sample answered outside its contract: {result!r}')
             return result, SAMPLE
         result = getattr(self.registry, method)(reference)
-        return result, (UNAVAILABLE if result.outcome == L.AUTHORITY_UNAVAILABLE else AUTHORITATIVE)
+        if result.outcome == L.AUTHORITY_UNAVAILABLE:
+            return result, UNAVAILABLE
+        entry = self.registry.kinds.get(reference.kind)
+        if entry is not None and result.authority == L.fixture_authority(entry['authority']['name']):
+            return result, FIXTURE
+        return result, AUTHORITATIVE
 
     def content(self, reference):
         """The durable bytes of a statement, from the authority that answers its kind (a sample's, where one
@@ -168,49 +177,8 @@ class Authorities:
 # ---------------------------------------------------------------------------
 # Read-only views of the sources the traversal enumerates
 
-class ReadOnlyIntegrationStore:
-    """The integration store's read methods on a read-only connection.
-
-    The store's own ``open_store`` migrates (a write transaction) and creates an absent
-    file, so it is not used. This opens the existing file with SQLite's ``mode=ro``
-    (``storecore.open_read_only``), sets ``query_only``, verifies the store kind and its
-    migrations without migrating (``storecore.check_current``) and exposes only
-    ``attempts``, ``events`` and the verified ``version``. SQLite's WAL protocol still creates
-    or updates the ``-wal`` and ``-shm`` sidecar files for any reader; the database file
-    and its content are not changed (tested).
-    """
-
-    def __init__(self, path):
-        self.store_mod = _store_module()
-        storecore = self.store_mod.storecore
-        resolved = self.store_mod.check_location(Path(path))
-        if not resolved.is_file():
-            raise self.store_mod.StoreError(f'no integration store file: {resolved.name}')
-        self._conn = storecore.open_read_only(resolved)
-        try:
-            self._conn.execute('PRAGMA query_only = ON')
-            if self._conn.execute('PRAGMA query_only').fetchone()[0] != 1:
-                raise self.store_mod.StoreError('the connection did not take query_only')
-            self.version = storecore.check_current(self._conn, self.store_mod.KIND)
-            self._store = self.store_mod.IntegrationStore(self._conn, resolved)
-        except BaseException:
-            self._conn.close()
-            raise
-
-    def attempts(self):
-        return self._store.attempts()
-
-    def events(self, operation_key):
-        return self._store.events(operation_key)
-
-    def close(self):
-        self._conn.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
+# The integration store opened read-only (lineage_resolve, where the attempt resolver reads it too).
+ReadOnlyIntegrationStore = resolve_mod.ReadOnlyIntegrationStore
 
 
 def _task_field(task, name):
@@ -270,6 +238,9 @@ class _Projection:
         if mode == SAMPLE or current_mode == SAMPLE:
             self.uncertain(text, 'sample-authority', 'SAMPLE_AUTHORITY',
                            f'resolved only by a sample authority ({pinned.authority}); no live authority was asked')
+        if mode == FIXTURE or current_mode == FIXTURE:
+            self.uncertain(text, 'fixture-authority', 'FIXTURE_AUTHORITY',
+                           f'resolved by a fixture ({pinned.authority}); no live authority was asked')
         if current.resolved:
             if current.observed_digest != pinned.observed_digest:
                 node['freshness'] = SUPERSEDED

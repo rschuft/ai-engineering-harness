@@ -756,6 +756,16 @@ def answer(reference, outcome, authority, code=None, detail='', **extra):
 
 MESSAGE_AUTHORITY = 'Owner conversation store'
 
+# A resolution a fixture answered (plan leaf E-01.5; the I1 integration design, R11): its authority label begins
+# FIXTURE, as a sample's begins SAMPLE, and names the authority it stands in for. Only a resolver computes it, per
+# reference, from the record's bound declaration and the answering transport; a traversal reads the mode from it.
+FIXTURE_PREFIX = 'FIXTURE'
+
+
+def fixture_authority(authority):
+    """The authority label of a resolution that the fixture of AUTHORITY answered."""
+    return f'{FIXTURE_PREFIX} (the Agent Server fixture\'s cited catalog) standing in for the {authority}'
+
 
 def check_message_content(reference, content, authority=MESSAGE_AUTHORITY):
     """The message kind's validation rule, applied to CONTENT: the message's durable bytes
@@ -951,7 +961,8 @@ class Registry:
             result = getattr(resolver, method)(reference)
             if not isinstance(result, Resolution) or result.reference != reference.text \
                     or result.kind != reference.kind or result.query != query \
-                    or result.outcome not in entry['outcomes'] or result.authority != authority:
+                    or result.outcome not in entry['outcomes'] \
+                    or result.authority not in (authority, fixture_authority(authority)):
                 raise RuntimeError(f'{reference.kind} resolver answered outside its contract: {result!r}')
             return result
         if entry is None:

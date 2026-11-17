@@ -8,9 +8,12 @@ Backlog.md's own recorded P-02.1 output, or its own small state), an integration
 through the store's own API, and an Owner conversation store made through its own API that
 holds the corpus statements the cases quote under store identities
 (``lineage_example.build_conversations``; a case that needs a statement to resolve cites
-them, ``cite_store``). The attempt sample (lineage_samples.py) stands in for the Agent Server
-where a case needs it. Since U-02.2 no sample stands in for the Owner conversation store: its
+them, ``cite_store``). Since U-02.2 no sample stands in for the Owner conversation store: its
 statement sample is retired (I1 work design, R5), and statements are read from the real store.
+Since E-01.5 no sample stands in for the Agent Server either: the attempt sample is retired, and
+a case that needs an attempt to resolve dispatches it (``fixture_attempts``: the dispatcher's
+records, made through the store's own API) and asks the attempt resolver over the Agent Server
+fixture's cited core, whose answers state their mode ``fixture``.
 """
 import hashlib
 import json
@@ -29,6 +32,7 @@ CATEGORY = 'integration'
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import lineage_example as E  # noqa: E402
+import fixture_attempts as FA  # noqa: E402
 
 T, S, R, L, fx = E.T, E.S, E.R, E.L, E.fx
 planning = R.planning
@@ -496,15 +500,24 @@ class MissingNode(Case):
         self.assertEqual(edge[0]['provenance'][0]['record'], T.STORE_RECORD)  # asserted by the reservation
 
     def test_a_reservation_whose_conversation_has_no_attempt_record(self):
+        # (Until E-01.5 the attempt sample answered; since, the attempt resolver reads the dispatcher's record: a
+        # reservation that was never dispatched and confirmed is no attempt of the Agent Server's.)
         self.reserve(('work-TASK-1/implement/revision-1', E.task_intent('TASK-1')),
                      ('work-TASK-2/implement/revision-2', E.task_intent('TASK-2')))
-        projection = self.trace()
+        core = FA.AC.AgentServerCore()
+        self.addCleanup(core.close)
+        attempts = FA.FixtureAttempts(self.tmp / 'fixture-root')
+        auth = T.Authorities(R.build_registry(project=self.repo, backlog=E.FAKE_BACKLOG,
+                                              conversations=E.conversations_path(self.repo),
+                                              attempts=R.AttemptResolver(self.store, core, attempts.read_artifact)))
+        projection = E.run_trace(f'outcome:{OUTCOME}@{self.declared}', auth, self.repo, self.store)
         conversation = E.store_module().conversation_id_for('work-TASK-2/implement/revision-2')
         reference = f'openhands:conversation/{conversation}'
         node = by_reference(projection)[reference]
         self.assertEqual((node['resolution']['outcome'], node['resolution']['code'], node['authority_mode']),
-                         (L.MISSING, 'ATTEMPT_MISSING', T.SAMPLE))
-        self.assertUncertain(projection, reference, 'unresolved', 'ATTEMPT_MISSING')
+                         (L.MISSING, 'ATTEMPT_NOT_CONFIRMED', T.AUTHORITATIVE))
+        self.assertUncertain(projection, reference, 'unresolved', 'ATTEMPT_NOT_CONFIRMED')
+        self.assertEqual(core.calls, [], 'no create was confirmed: the Agent Server is not asked')
 
     def test_an_outcome_declared_by_no_change(self):
         self.reserve_tasks('TASK-1', 'TASK-2')
@@ -945,12 +958,28 @@ class Intents(Case):
 
 
 class Contract(Case):
+    def dispatched(self, *tasks, live=False):
+        """TASKS dispatched and confirmed on a fresh core (fixture_attempts), in this case's integration store; the
+        attempt resolver over them (its transport the core)."""
+        core = FA.AC.AgentServerCore()
+        self.addCleanup(core.close)
+        attempts = FA.FixtureAttempts(self.tmp / ('live-root' if live else 'fixture-root'), live=live)
+        self.store.parent.mkdir(parents=True, exist_ok=True)
+        store = E.store_module().open_store(self.store)
+        try:
+            for task in tasks:
+                attempts.attempt(store, core, task, change=CHANGE, design_commit=self.design,
+                                 outcome_ref=f'outcome:{OUTCOME}')
+        finally:
+            store.close()
+        return core, R.AttemptResolver(self.store, core, attempts.read_artifact)
+
     def test_complete_only_when_every_node_is_authoritative_resolved_and_current(self):
         class Trusted(T.Authorities):
-            """A test double that treats the samples as live authorities."""
+            """A test double that treats the fixture as a live authority (until E-01.5: the samples)."""
             def ask(self, reference, method):
                 result, mode = super().ask(reference, method)
-                return result, (T.AUTHORITATIVE if mode == T.SAMPLE else mode)
+                return result, (T.AUTHORITATIVE if mode == T.FIXTURE else mode)
 
         # The statements resolve in the real Owner conversation store only where the intent record cites store
         # identities, so the case cites them at a commit and declares the tasks' design pointers at it, as the
@@ -962,35 +991,46 @@ class Contract(Case):
         later = self.commit('an unrelated change')
         self.fake_backlog(('TASK-1', [self.pointer('design.md', cited), self.pointer('proposal.md', cited)]),
                           ('TASK-2', [self.pointer('design.md', cited), self.pointer(SPEC, cited)]))
-        self.reserve_tasks('TASK-1', 'TASK-2')
-        auth = Trusted(E.registry(self.repo), S.sample_authorities())
-        projection = E.run_trace(f'outcome:{OUTCOME}@{later}', auth, self.repo, self.store, snapshot=None)
+        _core, resolver = self.dispatched('TASK-1', 'TASK-2')
+        registry = R.build_registry(project=self.repo, backlog=E.FAKE_BACKLOG,
+                                    conversations=E.conversations_path(self.repo), attempts=resolver)
+        projection = E.run_trace(f'outcome:{OUTCOME}@{later}', Trusted(registry), self.repo, self.store, snapshot=None)
         self.assertEqual((projection['verdict'], projection['uncertainties']), ('complete', []))
-        self.assertEqual(projection['authority_modes'], {'authoritative': 13, 'sample': 0, 'unavailable': 0})
+        self.assertEqual(projection['authority_modes'], {'authoritative': 13, 'fixture': 0, 'sample': 0,
+                                                         'unavailable': 0})
+        # untrusted, the same projection is incomplete: the attempts are the fixture's, and say so
+        projection = E.run_trace(f'outcome:{OUTCOME}@{later}', T.Authorities(registry), self.repo, self.store,
+                                 snapshot=None)
+        self.assertEqual(projection['verdict'], 'incomplete')
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'fixture-authority'})
+        self.assertEqual(projection['authority_modes'], {'authoritative': 11, 'fixture': 2, 'sample': 0,
+                                                         'unavailable': 0})
 
     def test_samples_stand_in_only_where_no_authority_exists(self):
         registry = E.registry(self.repo)
-        attempts = S.SampleAttemptRecords()
-        # message and conversation are implemented since U-02.2: no sample stands in for them any more (R5).
-        for kind in ('message', 'conversation', 'design', 'objective', 'work', 'commit', 'effect-receipt', 'release',
-                     'no-such-kind'):
+        sample = ReviewSample()
+        # message and conversation are implemented since U-02.2, and attempt since E-01.5: no sample stands in for
+        # them any more (R5, R11). A sample may still stand in for a kind whose authority is unavailable (review).
+        for kind in ('message', 'conversation', 'attempt', 'design', 'objective', 'work', 'commit', 'effect-receipt',
+                     'release', 'no-such-kind'):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
-                T.Authorities(registry, {kind: attempts})
+                T.Authorities(registry, {kind: sample})
+        self.assertEqual(set(T.Authorities(registry, {'review': sample}).samples), {'review'})
 
-        class Unlabelled(S.SampleAttemptRecords):
-            authority = 'OpenHands Agent Server'
+        class Unlabelled(ReviewSample):
+            authority = 'Gitea'
         with self.assertRaises(ValueError):
-            T.Authorities(registry, {'attempt': Unlabelled()})
+            T.Authorities(registry, {'review': Unlabelled()})
         self.assertEqual(R.build_registry(project=self.repo).resolve('conversation:qual-02/message-1').outcome,
                          L.AUTHORITY_UNAVAILABLE)  # the default registry never answers from a sample
 
     def test_a_sample_answering_outside_its_contract_is_refused(self):
-        class Wrong(S.SampleAttemptRecords):
+        class Wrong(ReviewSample):
             def resolve(self, reference):
-                return L.answer(L.parse(f'openhands:conversation/{OTHER_OUTCOME}'), L.RESOLVED, self.authority)
-        auth = T.Authorities(E.registry(self.repo), {'attempt': Wrong()})
+                return L.answer(L.parse(f'gitea:o/r/pulls/8/reviews/1@{"c" * 40}'), L.RESOLVED, self.authority)
+        auth = T.Authorities(E.registry(self.repo), {'review': Wrong()})
         with self.assertRaises(RuntimeError):
-            auth.ask(L.parse(f'openhands:conversation/{OUTCOME}'), 'resolve')
+            auth.ask(L.parse(f'gitea:o/r/pulls/7/reviews/31@{"c" * 40}'), 'resolve')
 
     def test_the_root_is_an_outcome(self):
         auth = E.authorities(self.repo)
@@ -1003,7 +1043,7 @@ class Contract(Case):
         # authority, and the cases it answered from the P-01.2 corpus are answered by the Owner conversation
         # store's own resolvers, read-only, for the same statements stored under store identities.
         self.assertFalse(hasattr(S, 'SampleStatementStore'))
-        self.assertEqual(set(S.sample_authorities()), {'attempt'})
+        self.assertEqual(set(S.sample_authorities()), set())      # and the attempt sample since E-01.5
         registry = E.registry(self.repo)
         content = QUAL02_MESSAGE1.read_bytes()
         cases = {
@@ -1041,32 +1081,69 @@ class Contract(Case):
         self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'CONVERSATION_STORE_UNAVAILABLE'))
 
     def test_the_sample_attempt_records(self):
-        records = S.SampleAttemptRecords()
-        known = json.loads(S.ATTEMPTS.read_text(encoding='utf-8'))['records'][0]['id']
-        result = records.resolve(L.parse(f'openhands:conversation/{known}'))
-        self.assertEqual(result.outcome, L.RESOLVED)
-        result = records.resolve(L.parse(f'openhands:conversation/{known}@event-1'))
-        self.assertEqual((result.outcome, result.code), (L.REVISION_MISMATCH, 'ATTEMPT_EVENT_MISSING'))
-        self.assertEqual(records.current(L.parse(f'openhands:conversation/{known}@event-1')).outcome, L.RESOLVED)
-        result = records.resolve(L.parse(f'openhands:conversation/{OTHER_OUTCOME}'))
-        self.assertEqual((result.outcome, result.code), (L.MISSING, 'ATTEMPT_MISSING'))
-        data = json.loads(S.ATTEMPTS.read_text(encoding='utf-8'))
-        for name, change in {'a field F-04.2 did not record': lambda d: d['records'][0].update(execution_status='idle'),
-                             'not marked sample': lambda d: d.update(sample=False),
-                             'another format': lambda d: d.update(format='x')}.items():
-            with self.subTest(case=name):
-                bad = json.loads(json.dumps(data))
-                change(bad)
-                path = self.tmp / 'bad.json'
-                path.write_text(json.dumps(bad), encoding='utf-8')
-                result = S.SampleAttemptRecords(path).resolve(L.parse(f'openhands:conversation/{known}'))
-                self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'SAMPLE_RECORDS_INVALID'))
+        # The attempt sample is retired at E-01.5 (I1 integration design, R11): no SampleAttemptRecords and no sample
+        # file; the attempt kind is implemented and answered by the attempt resolver, here over the Agent Server
+        # fixture's cited core, with its mode stated.
+        self.assertFalse(hasattr(S, 'SampleAttemptRecords'))
+        self.assertFalse((HERE / 'fixtures' / 'sample-attempts.json').exists())
+        self.assertEqual(L.schema_kinds(L.load_schema())['attempt']['status'], 'implemented')
+        core, resolver = self.dispatched('TASK-1')
+        auth = T.Authorities(R.build_registry(attempts=resolver))
+        (held,) = core.conversations
+        result, mode = auth.ask(L.parse(f'openhands:conversation/{held}'), 'resolve')
+        self.assertEqual((result.outcome, mode, result.authority), (L.RESOLVED, T.FIXTURE,
+                                                                     L.fixture_authority('OpenHands Agent Server')))
+        self.assertTrue(result.authority.startswith('FIXTURE'))
+        result, mode = auth.ask(L.parse(f'openhands:conversation/{held}@event-1'), 'resolve')
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_EVENT_UNOBSERVED'))
+        self.assertEqual(auth.ask(L.parse(f'openhands:conversation/{held}@event-1'), 'current')[0].outcome, L.RESOLVED)
+        result, mode = auth.ask(L.parse(f'openhands:conversation/{OTHER_OUTCOME}'), 'resolve')
+        self.assertEqual((result.outcome, result.code, mode), (L.MISSING, 'ATTEMPT_MISSING', T.AUTHORITATIVE))
+
+    def test_a_fixture_answered_attempt_is_never_complete(self):
+        """E-01.5: the attempts the fixture answered carry mode fixture, a label beginning FIXTURE and the
+        fixture-authority uncertainty, so the projection is incomplete; a fixture answer for an attempt bound live is
+        authority-unavailable, never a mode the caller chose."""
+        _core, resolver = self.dispatched('TASK-1', 'TASK-2')
+        registry = R.build_registry(project=self.repo, backlog=E.FAKE_BACKLOG,
+                                    conversations=E.conversations_path(self.repo), attempts=resolver)
+        projection = E.run_trace(f'outcome:{OUTCOME}@{self.declared}', T.Authorities(registry), self.repo, self.store)
+        attempts = [n for n in projection['nodes'] if n['role'] == 'attempt']
+        self.assertEqual(len(attempts), 2)
+        for node in attempts:
+            with self.subTest(node=node['reference']):
+                self.assertEqual((node['authority_mode'], node['resolution']['outcome'], node['freshness']),
+                                 (T.FIXTURE, L.RESOLVED, T.CURRENT))
+                self.assertTrue(node['authority'].startswith('FIXTURE'))
+                self.assertUncertain(projection, node['reference'], 'fixture-authority', 'FIXTURE_AUTHORITY')
+        self.assertEqual(projection['authority_modes']['fixture'], 2)
+
+    def test_a_fixture_answer_for_a_live_bound_attempt_is_unavailable(self):
+        _core, resolver = self.dispatched('TASK-1', live=True)
+        registry = R.build_registry(project=self.repo, backlog=E.FAKE_BACKLOG,
+                                    conversations=E.conversations_path(self.repo), attempts=resolver)
+        projection = E.run_trace(f'outcome:{OUTCOME}@{self.declared}', T.Authorities(registry), self.repo, self.store)
+        (node,) = [n for n in projection['nodes'] if n['role'] == 'attempt']
+        self.assertEqual((node['authority_mode'], node['resolution']['outcome'], node['resolution']['code']),
+                         (T.UNAVAILABLE, L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_AUTHORITY_MISMATCH'))
+        self.assertEqual(projection['authority_modes']['fixture'], 0)
 
     def test_change_name(self):
         self.assertEqual(T.change_name(CHANGE_DIR), (CHANGE, False))
         self.assertEqual(T.change_name(ARCHIVED_DIR), (CHANGE, True))
         self.assertEqual(T.change_name('openspec/changes/archive'), (None, False))
         self.assertEqual(T.change_name('elsewhere/x'), (None, False))
+
+
+class ReviewSample:
+    """A test-only SAMPLE stand-in for the review kind (still unavailable), for the samples' contract alone."""
+    authority = 'SAMPLE reviews (test only)'
+
+    def resolve(self, reference):
+        return L.answer(reference, L.RESOLVED, self.authority)
+
+    def current(self, reference):
+        return L.answer(reference, L.RESOLVED, self.authority, query='current')
 
 
 class CommandLine(Case):

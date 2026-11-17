@@ -1043,6 +1043,145 @@ class ConversationResolution(TempDirCase):
                          (L.AUTHORITY_UNAVAILABLE, 'RESOLVER_NOT_CONFIGURED'))
 
 
+class AttemptResolution(unittest.TestCase):
+    """The attempt resolver (plan leaf E-01.5): the dispatched attempt resolved against the Agent Server fixture's
+    cited core, its authority mode stated (fixture_attempts: the dispatcher's records, made through the store's own
+    API, bound to a route allowlist that declares the fixture authority, R8 point 2)."""
+    category = 'integration'
+
+    def setUp(self):
+        sys.path.insert(0, str(HERE))
+        import fixture_attempts
+        self.FA = fixture_attempts
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-lineage-attempt-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.core = fixture_attempts.AC.AgentServerCore()
+        self.addCleanup(self.core.close)
+        (self.tmp / 'st').mkdir()
+        self.path = self.tmp / 'st' / 'integration.sqlite'
+
+    def attempts(self, live=False, confirm=True, work_id='TASK-1'):
+        attempts = self.FA.FixtureAttempts(self.tmp / ('live' if live else 'fixture'), live=live)
+        store = self.FA.store_mod.open_store(self.path)
+        try:
+            key, cid = attempts.attempt(store, self.core, work_id, change=CHANGE, design_commit='a' * 40,
+                                        outcome_ref='outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a', confirm=confirm)
+        finally:
+            store.close()
+        return attempts, key, cid
+
+    def ask(self, text, attempts, transport=None, method='resolve'):
+        registry = R.build_registry(attempts=R.AttemptResolver(self.path, transport or self.core,
+                                                                attempts.read_artifact))
+        return getattr(registry, method)(L.parse(text))
+
+    def test_the_dispatched_attempt_resolves_with_its_mode_stated(self):
+        attempts, key, cid = self.attempts()
+        before = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        calls = len(self.core.calls)
+        for method in ('resolve', 'current'):
+            with self.subTest(method=method):
+                result = self.ask(f'openhands:conversation/{cid}', attempts, method=method)
+                self.assertEqual((result.outcome, result.code), (L.RESOLVED, None))
+                self.assertEqual(result.authority, L.fixture_authority(R.ATTEMPT_AUTHORITY))
+                self.assertTrue(result.authority.startswith(L.FIXTURE_PREFIX))
+                self.assertEqual(result.observed_digest, hashlib.sha256(
+                    json.dumps({'id': cid}, separators=(',', ':')).encode()).hexdigest())
+        self.assertEqual([c[:2] for c in self.core.calls[calls:]], [('GET', f'/api/conversations/{cid}')] * 2,
+                         'one GET a question, nothing else')
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), before, 'read-only')
+
+    def test_each_unresolved_answer(self):
+        attempts, key, cid = self.attempts()
+        other, _, unconfirmed = self.attempts(confirm=False, work_id='TASK-2')
+        gone = self.FA.store_mod.conversation_id_for(key)
+        self.core('DELETE', f'/api/conversations/{gone}/runtime')
+        cases = {
+            'openhands:conversation/00000000-0000-4000-8000-000000000000': (L.MISSING, 'ATTEMPT_MISSING'),
+            f'openhands:conversation/{unconfirmed}': (L.MISSING, 'ATTEMPT_NOT_CONFIRMED'),
+            f'openhands:conversation/{cid}@evt-17': (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_EVENT_UNOBSERVED'),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                result = self.ask(text, attempts)
+                self.assertEqual((result.outcome, result.code), expected)
+        # the server no longer holds it: 404 (F-04.2 4.9, the core's conversation-absent)
+        del self.core.conversations[cid]
+        result = self.ask(f'openhands:conversation/{cid}', attempts)
+        self.assertEqual((result.outcome, result.code), (L.MISSING, 'ATTEMPT_CONVERSATION_MISSING'))
+        self.assertTrue(result.authority.startswith(L.FIXTURE_PREFIX), 'the fixture answered the 404')
+
+    def test_the_bound_and_the_answering_authority_must_agree(self):
+        """R11: a fixture-bound attempt answered without the label, or a label on a live-bound attempt, is
+        neither: authority-unavailable."""
+        attempts, _, cid = self.attempts()
+
+        def unlabelled(method, path, body=None, **kwargs):
+            answer = dict(self.core(method, path, body, **kwargs))
+            answer.pop('fixture')
+            return answer
+        result = self.ask(f'openhands:conversation/{cid}', attempts, transport=unlabelled)
+        self.assertEqual((result.outcome, result.code, result.authority),
+                         (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_AUTHORITY_MISMATCH', R.ATTEMPT_AUTHORITY))
+        self.path.unlink()
+        live, _, cid = self.attempts(live=True, work_id='TASK-3')
+        result = self.ask(f'openhands:conversation/{cid}', live)
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_AUTHORITY_MISMATCH'))
+        result = self.ask(f'openhands:conversation/{cid}', live, transport=unlabelled)
+        self.assertEqual((result.outcome, result.code, result.authority), (L.RESOLVED, None, R.ATTEMPT_AUTHORITY),
+                         'live-bound, answered without a label: live')
+
+    def test_declared_and_answering_authority(self):
+        self.assertEqual(R.declared_authority(b'{"routes": []}'), R.LIVE)
+        self.assertEqual(R.declared_authority(b'{"transport": {"authority": "fixture", "kind": "x"}}'), R.FIXTURE)
+        for raw in (b'{"transport": {"authority": "other"}}', b'{"transport": "fixture"}', b'[]', b'\xff'):
+            with self.subTest(raw=raw):
+                self.assertIsNone(R.declared_authority(raw))
+        self.assertEqual(R.answering_authority({'status': 200}), R.LIVE)
+        self.assertEqual(R.answering_authority({'fixture': {'authority': 'fixture'}}), R.FIXTURE)
+        self.assertIsNone(R.answering_authority({'fixture': {'authority': 'elsewhere'}}))
+        self.assertIsNone(R.answering_authority({'fixture': 'fixture'}))
+
+    def test_an_unreadable_record_or_allowlist_or_no_answer_is_unavailable(self):
+        attempts, key, cid = self.attempts()
+        text = f'openhands:conversation/{cid}'
+
+        def silent(method, path, body=None, **kwargs):
+            raise ConnectionError('no answer')
+        self.assertEqual(self.ask(text, attempts, transport=silent).code, 'ATTEMPT_UNANSWERED')
+
+        def other(method, path, body=None, **kwargs):
+            answer = self.core(method, path, body, **kwargs)
+            return {**answer, 'body': {'id': '00000000-0000-4000-8000-000000000000'}}
+        self.assertEqual(self.ask(text, attempts, transport=other).code, 'ATTEMPT_UNOBSERVED')
+        routes = attempts.root / 'profiles' / self.FA.PROFILE / 'agent-server' / 'routes.json'
+        routes.write_bytes(routes.read_bytes() + b' ')
+        self.assertEqual(self.ask(text, attempts).code, 'ATTEMPT_ALLOWLIST_UNREADABLE')
+        result = R.AttemptResolver(self.tmp / 'nowhere.sqlite', self.core, attempts.read_artifact).resolve(
+            L.parse(text))
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'INTEGRATION_STORE_UNAVAILABLE'))
+
+    def test_a_reservation_that_is_not_the_dispatchers_record(self):
+        store = self.FA.store_mod.open_store(self.path)
+        try:
+            store.reserve('work-TASK-1/implement/revision-1', {'workRef': 'backlog:TASK-1'}, actor='t')
+            for state in ('dispatched', 'confirmed'):
+                store.transition('work-TASK-1/implement/revision-1', state, actor='t', reason='t')
+        finally:
+            store.close()
+        cid = self.FA.store_mod.conversation_id_for('work-TASK-1/implement/revision-1')
+        result = self.ask(f'openhands:conversation/{cid}', self.FA.FixtureAttempts(self.tmp / 'f'))
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'ATTEMPT_RECORD_INVALID'))
+        self.assertEqual(self.core.calls, [], 'not asked of the Agent Server')
+
+    def test_the_resolver_is_configured_only_with_a_transport(self):
+        self.assertEqual(R.build_registry().resolve(L.parse('openhands:conversation/'
+                                                            '00000000-0000-4000-8000-000000000000')).code,
+                         'RESOLVER_NOT_CONFIGURED')
+        with self.assertRaises(TypeError):
+            R.build_registry(attempts=object())
+
+
 class RegistryAndCommandLine(TempDirCase):
     category = 'contract'
 
