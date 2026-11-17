@@ -71,3 +71,15 @@ implementation mechanisms, not independent git contributors.
 ## Not verified
 
 - A commit read back from the Owner's real configured identity. That happens at the I1 demonstration.
+
+## Current facts (2026-11-16, at P-01.3's verdict)
+
+Point 5's placeholder list is applied as its intent ("an invented placeholder domain") requires. It also covers:
+- the RFC 2606 names `example.com`, `example.net` and `example.org`, and their subdomains;
+- `.local`, `.internal`, `.home.arpa` and `.lan`;
+- IP-literal domains: bracketed, bare, or with an all-digit last label;
+- single-label domains.
+
+The email must be ASCII, and the name must hold a visible character and no format or control character. `.onion` stays
+accepted. The capture enforces this (`integrations/ownerhost/capture.py`, `check_git_identity`; the log entry
+p-01-3-verdict-2026-11-16).

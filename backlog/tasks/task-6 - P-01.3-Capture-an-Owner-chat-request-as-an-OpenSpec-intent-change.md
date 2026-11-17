@@ -1,9 +1,10 @@
 ---
 id: TASK-6
 title: 'P-01.3: Capture an Owner chat request as an OpenSpec intent change'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-17T04:40:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -22,5 +23,11 @@ Plan contract: leaf P-01.3 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 One message yields exactly one intent change, idempotent by message id, and a retry or reconnect creates no second change; the Original Quote's span verifies against the stored message; the change passes tools/check_intent_record.py; the statement-to-objective originates edge resolves to the message; a request whose bytes differ from the stored message is refused with a stable code and changes nothing; no model is called; a method the Owner marks as a suggestion is recorded as a hypothesis, never as the objective.
+- [x] #1 One message yields exactly one intent change, idempotent by message id, and a retry or reconnect creates no second change; the Original Quote's span verifies against the stored message; the change passes tools/check_intent_record.py; the statement-to-objective originates edge resolves to the message; a request whose bytes differ from the stored message is refused with a stable code and changes nothing; no model is called; a method the Owner marks as a suggestion is recorded as a hypothesis, never as the objective.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+P-01.3 PASS, the engineering manager's verdict (decision 0018 point 1): evidence/bootstrap-log.md#p-01-3-verdict-2026-11-16.
+<!-- SECTION:FINAL_SUMMARY:END -->

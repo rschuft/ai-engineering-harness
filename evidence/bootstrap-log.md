@@ -5728,6 +5728,57 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - the Gitea service accounts include `aieh-bot-planner` (`integrations/gitea/gitea_host.py`, `BOT_ACCOUNTS`);
     - their registered email domain is `localhost.invalid` (`gitea_host.EMAIL_DOMAIN`);
     - decision 0024 point 4's result commit uses `aieh-bot-builder <aieh-bot-builder@localhost.invalid>`.
+- <a id="p-01-3-verdict-2026-11-16"></a>**2026-11-16: P-01.3 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline. Judged against the proof as written, the design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R2, R6, slice 8) and decision 0028, which records and applies [the Owner's governing direction on git attribution](#owner-direction-git-attribution-2026-11-16).
+  - **Commits, all pushed by this entry:**
+    - the slice: `c8fca16`, `4db7689`, `23d8893`, `63662b6`, `11ec0e5`;
+    - the review's fixes: `114eab9`, `500e583`, `00d8822`, `3841ee7`, `cb5ee06`.
+  - **The capture.** The Integration process's capture route (`integrations/ownerhost/capture.py`), behind the session, Host and Origin guards, turns one stored Owner message into one `intent-record/v1` OpenSpec change in the project repository configured under `components.owner_host`.
+    - It adds only `openspec/changes/<change>/proposal.md` and `.openspec.yaml`, through `repository_access.Repository.write_commit`.
+    - It has no remote and makes no push.
+    - The shell's labelled form sends the exact text its preview shows; the capturing chat adapter and the capture card are in the shell.
+  - **Proof clauses** (`integrations/ownerhost/tests/test_capture.py` unless named):
+    - **"One message yields exactly one intent change, idempotent by message id, and a retry or reconnect creates no second change":**
+      - one commit with exactly the two files and the trailer;
+      - a retry, a new process and a new session make no second change.
+      - Since `114eab9`, the commit id is recorded in the write-ahead receipt (`owner-ui/intent-capture/v1/<thread>/<message>`) before the branch moves. Settlement then finds an earlier capture through every local branch and every parent: after a branch switch, a `--no-ff` merge, or packed refs.
+      - A crash at each step settles to one change (`Settlement`, `CrashWindows`).
+    - **"The Original Quote's span verifies against the stored message":** `check_message_content` resolves it, and one changed byte is `SPAN_DIGEST_MISMATCH`.
+    - **"The change passes tools/check_intent_record.py":** it passes with the store's bytes as the source and fails `quote-not-in-source` with altered bytes. The capture also runs the checker before writing.
+    - **"The statement-to-objective originates edge resolves to the message":** `OriginatesEdge`. The real acceptance recorder accepts the objective in a throwaway repository, and `lineage_trace` resolves the edge to the stored message, authoritatively.
+    - **"A request whose bytes differ from the stored message is refused with a stable code and changes nothing":** `CAPTURE_MESSAGE_MISMATCH`. The project, the conversation store and the integration store are unchanged.
+    - **"No model is called":** an audited capture opens no socket and starts no process, and the capture imports no model, inference or network module.
+      - Since `3841ee7`, the Integration process arms an outbound guard at startup (an audit hook armed in `serve`'s lifespan, once the event loop exists). It refuses every `socket.connect` and `getaddrinfo` (`OUTBOUND_REFUSED`), and is tested in a real child process.
+    - **"A method the Owner marks as a suggestion is recorded as a hypothesis, never as the objective":** `test_a_suggestion_is_a_hypothesis_never_the_objective`.
+  - **Attribution under decision 0028.** The author and committer are both the configured git identity of the session's principal (`components.owner_host.git_identities`). The principal is read through `session_principal`, which refuses any session shape other than decision 0025's one-Owner shape.
+    - No git config, environment variable or shared identity is ever used.
+    - An absent identity is `COMMIT_IDENTITY_UNAVAILABLE`, with nothing written, and a retry succeeds once it is configured.
+    - Invalid identities are refused (`COMMIT_IDENTITY_INVALID`, `COMMIT_IDENTITY_PLACEHOLDER`): a non-ASCII email, a name with no visible character or with a format character, and placeholder domains, including Unicode look-alikes.
+    - The author and committer are read back with `git log` in tests.
+  - **Other guards.**
+    - A project repository that is the harness checkout, or shares its git directory, is refused (`CAPTURE_PROJECT_IS_HARNESS`).
+    - A confirmed receipt under another configuration is `CAPTURE_RECEIPT_CONFLICT`, and an answer is built from the receipt's own intent.
+    - Bidi control characters are refused.
+    - Every store error has a stable code.
+    - A crash that leaves the work tree behind the commit is flagged to the Owner.
+  - **Review.** One fresh read-only review (dispatch 22) found no blocker, 5 should-fix findings and 7 notes. All were fixed or documented. The changed `repository_access.py` assertion (network imports pinned to their functions) is now backed by the process-level guard.
+  - **Validation:**
+    - mutants: at build, all but one equivalent killed; at the fixes, 28 plus 17 killed;
+    - the full `tools/run_tests.py` passed: 15 suites at `11ec0e5` and at `cb5ee06`;
+    - the shell: 89 tests and the typecheck;
+    - `verify_seed` PASS;
+    - the engineering manager re-ran test_capture, test_outbound_guard and test_repository_branches at `cb5ee06`: OK.
+  - **Delegated decisions:**
+    - the receipt records the commit id before the branch moves;
+    - settlement through every local branch;
+    - `Repository.branches()` in the shared module;
+    - `session_principal`;
+    - the harness-repository refusal;
+    - the outbound guard;
+    - the stable codes;
+    - bidi controls refused, zero-width characters accepted;
+    - **decision 0028 point 5's placeholder list, applied as its intent ("an invented placeholder domain") requires.** It now also covers the RFC 2606 `example.{com,net,org}` names, `.local`, `.internal`, `.home.arpa`, `.lan`, IP literals (bracketed, bare, or with an all-digit last label) and single-label domains, together with an ASCII-only email and a visible name. `.onion` stays accepted.
+  - **Detected, not a defect of this leaf.** Under a very long TEMP, `tools/guest.py` `verify_pulled_bundle` fails, because git does not find a repository whose path is 252 characters or more (measured on git 2.52.0.windows.1). This was observed on P-03.1's row in 2026-11. The production guest state root is far below that, and the full run passes under an ordinary TEMP.
+  - **Not verified:** a capture in the real project repository with the Owner's real identity, from a real browser, against the live Integration process (U-06.1); the OpenSpec CLI validating a captured change; Linux and macOS.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
