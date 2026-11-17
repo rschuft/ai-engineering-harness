@@ -2258,7 +2258,7 @@ core's read record, each in a process of its own through
 module's tests to pass there, and shows the keys read of the core's answers to be exactly the provenance table's rows
 marked read (containers included), none clock-valued or not served, and each row's named functions to be exactly
 the dispatch functions recorded reading it; reads of the core's refusals are listed, not judged; an opaque read
-(dispatch 14) is a violation, `OPAQUE_READ`, on any answer. The core answers in 16 of the 29 modules run. `Judge`
+(dispatch 14) is a violation, `OPAQUE_READ`, on any answer. The core answers in 18 of the 31 modules run (E-01.5 added `test_launch_gate.py` and `test_non_overlap.py`). `Judge`
 (unit) is the falsifier set of the judgement: a read of an unmarked, clock-valued, not served, unlisted or absent
 field is a violation, and a container is not; an opaque read of each operation class is a named violation.
 
