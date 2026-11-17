@@ -161,11 +161,13 @@ class Example(unittest.TestCase):
         return pointer
 
     def test_sample_authorities_resolve_the_whole_chain_and_say_so(self):
+        # (The name is recorded in evidence/test-profile/test-ids.json from before E-01.5, when the attempt sample
+        # answered. Since E-01.5 the example's attempts are dispatched and answered by the Agent Server fixture's
+        # cited core through the attempt resolver: they resolve with their mode stated, fixture, and say so.)
         # The example's statements are the Owner conversation store's (lineage_example.example: build_conversations
-        # and cite_store in a commit after the declaring one): they resolve authoritatively. The attempt sample is
-        # the only sample, and says so. The recorded tasks' proposal pointer, pinned at the design commit, is
-        # superseded by that later commit, and says so.
-        projection = self.projections['sample']
+        # and cite_store in a commit after the declaring one): they resolve authoritatively. The recorded tasks'
+        # proposal pointer, pinned at the design commit, is superseded by that later commit, and says so.
+        projection = self.projections['fixture']
         self.assertEqual(projection['format'], T.PROJECTION_FORMAT)
         roles = {node['role'] for node in projection['nodes']}
         self.assertEqual(roles, {'statement', 'objective', 'design', 'work', 'attempt'})
@@ -174,31 +176,35 @@ class Example(unittest.TestCase):
             with self.subTest(node=node['reference']):
                 freshness = T.SUPERSEDED if node['reference'] == superseded else T.CURRENT
                 self.assertEqual((node['resolution']['outcome'], node['freshness']), (L.RESOLVED, freshness))
-                expected = T.SAMPLE if node['role'] == 'attempt' else T.AUTHORITATIVE
+                expected = T.FIXTURE if node['role'] == 'attempt' else T.AUTHORITATIVE
                 self.assertEqual(node['authority_mode'], expected)
-                if expected == T.SAMPLE:
-                    self.assertTrue(node['authority'].startswith('SAMPLE'))
+                if expected == T.FIXTURE:
+                    self.assertTrue(node['authority'].startswith('FIXTURE'))
                 if node['role'] == 'statement':
                     self.assertEqual((node['kind'], node['authority']), ('message', 'Owner conversation store'))
         self.assertEqual(sorted(n['reference'] for n in projection['nodes'] if n['role'] == 'statement'), [M1, M2])
         self.assertEqual(projection['verdict'], 'incomplete')
-        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority', 'superseded'})
-        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'sample-authority'},
-                         {n['reference'] for n in projection['nodes'] if n['authority_mode'] == T.SAMPLE})
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'fixture-authority', 'superseded'})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'fixture-authority'},
+                         {n['reference'] for n in projection['nodes'] if n['authority_mode'] == T.FIXTURE})
+        self.assertEqual(len([n for n in projection['nodes'] if n['authority_mode'] == T.FIXTURE]), 2)
         self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'superseded'},
                          {superseded})
 
     def test_the_chain_runs_from_the_original_message_to_the_attempts(self):
-        projection = self.projections['sample']
+        projection = self.projections['fixture']
         root = projection['root']
         self.assertIn((M1, root, T.ORIGINATES), edges(projection))
         self.assertIn((root, M2, T.ACCEPTED_BY), edges(projection))
         self.assertEqual({t for _, t, _ in edges(projection, T.FULFILLED_BY)}, {'backlog:TASK-1', 'backlog:TASK-2'})
-        attempts = {(f, t) for f, t, _ in edges(projection, T.EXECUTED_BY)}
         store_mod = E.store_module()
-        self.assertEqual(attempts, {
-            (f'backlog:{task}', f'openhands:conversation/{store_mod.conversation_id_for(E.operation_key(task))}')
-            for task in ('TASK-1', 'TASK-2')})
+        executed = [e for e in projection['edges'] if e['relation'] == T.EXECUTED_BY]
+        # each attempt is the dispatched typed attempt of its task: its conversation the reserved one of its key
+        self.assertEqual({(e['from'], e['to']) for e in executed}, {
+            (f'backlog:{e["provenance"][0]["operation_key"].split("/")[2]}',
+             f'openhands:conversation/{store_mod.conversation_id_for(e["provenance"][0]["operation_key"])}')
+            for e in executed})
+        self.assertEqual({e['from'] for e in executed}, {'backlog:TASK-1', 'backlog:TASK-2'})
         self.assertEqual(len(edges(projection, T.SHAPED_BY)), 3)  # proposal, design, spec at the traced commit
         # D2: Q1's quote is located in the statement's durable bytes, read from the Owner conversation store, and
         # its span verifies.
@@ -226,12 +232,13 @@ class Example(unittest.TestCase):
                     self.assertEqual(provenance['event_seq'], 0)
                     self.assertIsInstance(provenance['event_id'], int)
                     self.assertRegex(provenance['intent_digest'], '^[0-9a-f]{64}$')
-                    self.assertTrue(provenance['operation_key'].startswith('work-TASK-'))
+                    self.assertTrue(provenance['operation_key'].startswith('attempt/v1/TASK-'))   # dispatched
 
     def test_the_real_registry_marks_statements_and_attempts_unavailable(self):
         # (The name is recorded in evidence/test-profile/test-ids.json from before U-02.2, when no authority held the
         # statements. Since U-02.2 the real registry resolves them from the Owner conversation store; only the
-        # attempts are unavailable.)
+        # attempts are unavailable: since E-01.5 the kind is implemented, and this registry configures no Agent
+        # Server transport for it.)
         projection = self.projections['real']
         for node in projection['nodes']:
             with self.subTest(node=node['reference']):
@@ -242,8 +249,7 @@ class Example(unittest.TestCase):
                 elif node['role'] == 'attempt':
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome'],
                                       node['resolution']['code']),
-                                     (T.UNAVAILABLE, L.AUTHORITY_UNAVAILABLE, 'AUTHORITY_NOT_YET_AVAILABLE'))
-                    self.assertTrue(node['resolution']['detail'].endswith('E-01.3.1, E-01.4.1'))
+                                     (T.UNAVAILABLE, L.AUTHORITY_UNAVAILABLE, 'RESOLVER_NOT_CONFIGURED'))
                 else:
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome']),
                                      (T.AUTHORITATIVE, L.RESOLVED))
@@ -254,9 +260,10 @@ class Example(unittest.TestCase):
                          {self.recorded_proposal_pointer()})
         quote = by_reference(projection)[M1]['quotes'][0]
         self.assertEqual((quote['item'], quote['outcome']), ('Q1', L.RESOLVED))
-        self.assertEqual(projection['authority_modes'], {'authoritative': 11, 'sample': 0, 'unavailable': 2})
-        # The same edges as with the samples: the links are asserted by records, not by the authorities.
-        self.assertEqual(edges(projection), edges(self.projections['sample']))
+        self.assertEqual(projection['authority_modes'], {'authoritative': 11, 'fixture': 0, 'sample': 0,
+                                                         'unavailable': 2})
+        # The same edges as with the fixture: the links are asserted by records, not by the authorities.
+        self.assertEqual(edges(projection), edges(self.projections['fixture']))
 
 
 QUAL02_MESSAGE1 = E.CORPUS / 'qual-02' / 'message-1.txt'

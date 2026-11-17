@@ -23,13 +23,17 @@ points a throwaway project's intent record at them.
 ``example`` builds those sources, then fills the Owner conversation store with the statements
 (``build_conversations``) and, in a third commit after the declaring one, points the intent
 record at them (``cite_store``; never before the design commit, whose pointers the recorded
-Backlog.md output carries). It traces the outcome, pinned at that third commit, twice with the
-real registry, whose statement resolver reads that store: the statements resolve
-authoritatively and Q1's quote is verified against the store's bytes, and the recorded tasks'
-proposal pointer (pinned at the design commit) is superseded. Once with the attempt sample
-(``lineage_samples.py``: the attempts resolve, and are marked sample) and once with the real
-registry only (the attempts are ``authority-unavailable``). Until U-02.2 a statement sample
-over the corpus stood in for the Owner conversation store; it is retired (I1 work design, R5).
+Backlog.md output carries). It dispatches the two tasks' attempts in an integration store of
+their own (``build_dispatched``: the dispatcher's records, made through the store's own API by
+``fixture_attempts``, each create answered by the Agent Server fixture's cited core, bound to a
+route allowlist that declares the fixture authority). It traces the outcome, pinned at that
+third commit, twice with the real registry, whose statement resolver reads that store: the
+statements resolve authoritatively and Q1's quote is verified against the store's bytes, and the
+recorded tasks' proposal pointer (pinned at the design commit) is superseded. Once with the
+attempt resolver over the core (``fixture``: the attempts resolve, their mode stated ``fixture``,
+each with the fixture-authority uncertainty) and once without it (``real``: no Agent Server is
+configured, so the attempts are ``authority-unavailable``). Until U-02.2 a statement sample, and
+until E-01.5 an attempt sample, stood in; both are retired (I1 work design, R5 and R11).
 ``build`` itself, which the tests share, is unchanged.
 
 Record or refresh the committed example (offline):
@@ -74,7 +78,7 @@ FAKE_BACKLOG = [sys.executable, '-I', '-B', str(PLANNING_TESTS / 'fake_backlog.p
 RECORDED_TASKS = PLANNING_TESTS / 'fixtures' / 'two-task' / 'recorded'
 CORPUS = REPO / 'tools' / 'tests' / 'fixtures' / 'intent_qualification' / 'corpus'
 EXAMPLES = LINEAGE_DIR / 'examples'
-FILES = {'sample': 'projection-sample-authorities.json', 'real': 'projection-real-registry.json'}
+FILES = {'fixture': 'projection-fixture-authority.json', 'real': 'projection-real-registry.json'}
 CHANGE = fx.CHANGE
 CHANGE_DIR = f'openspec/changes/{CHANGE}'
 OUTCOME = '5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a'
@@ -281,13 +285,43 @@ def build_example(work):
     return repo, store, declared, fx.commit_all(repo, CITE_MESSAGE, date=CITED_DATE)
 
 
+def build_dispatched(work, repo, declared):
+    """The two tasks' attempts, dispatched (``fixture_attempts.FixtureAttempts``) in an integration store of their own
+    under WORK, each create answered by a fresh Agent Server fixture core; the design revision is the change at the
+    design commit (the declaring commit's parent). Return (the store's path, the attempt resolver over the core)."""
+    FA = _load('fixture_attempts', HERE / 'fixture_attempts.py')
+    design = fx.git(repo, 'rev-parse', f'{declared}^').strip()
+    path = Path(work) / 'st-dispatched' / 'integration.sqlite'
+    path.parent.mkdir(parents=True)
+    core = FA.AC.AgentServerCore()
+    attempts = FA.FixtureAttempts(Path(work) / 'fixture-root')
+    with store_module().open_store(path) as dispatched:
+        for task in ('TASK-1', 'TASK-2'):
+            attempts.attempt(dispatched, core, task, change=CHANGE, design_commit=design,
+                             outcome_ref=f'outcome:{OUTCOME}')
+    return path, R.AttemptResolver(path, core, attempts.read_artifact)
+
+
+def example_sources(work):
+    """(repo, the dispatched attempts' store, the attempt resolver, the traced outcome) of the example under WORK."""
+    repo, _store, declared, cited = build_example(work)
+    store, resolver = build_dispatched(work, repo, declared)
+    return repo, store, resolver, f'outcome:{OUTCOME}@{cited}'
+
+
+def trace_example(sources, name):
+    """The example's projection NAME (``fixture``: with the attempt resolver; ``real``: without it)."""
+    repo, store, resolver, outcome = sources
+    registry = R.build_registry(project=repo, backlog=FAKE_BACKLOG, conversations=conversations_path(repo),
+                                attempts=resolver if name == 'fixture' else None)
+    return run_trace(outcome, T.Authorities(registry), repo, store)
+
+
 def example(work):
-    """{'sample': projection, 'real': projection} of the example built under WORK (``build_example``), the
+    """{'fixture': projection, 'real': projection} of the example built under WORK (``example_sources``), the
     outcome traced pinned at the commit that cites the Owner conversation store."""
-    repo, store, _declared, cited = build_example(work)
-    outcome = f'outcome:{OUTCOME}@{cited}'
-    return {'sample': run_trace(outcome, authorities(repo, True), repo, store),
-            'real': run_trace(outcome, authorities(repo, False), repo, store)}
+    sources = example_sources(work)
+    return {name: trace_example(sources, name) for name in FILES}
 
 
 def dumps(data):

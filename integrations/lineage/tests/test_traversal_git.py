@@ -179,6 +179,8 @@ class ExampleCase(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-git-'))
         cls.addClassCleanup(fx.rmtree, cls.tmp)
         cls.repo, cls.store, cls.declared, cls.cited = E.build_example(cls.tmp)   # the committed example's sources
+        dispatched, resolver = E.build_dispatched(cls.tmp, cls.repo, cls.declared)   # its dispatched attempts
+        cls.sources = (cls.repo, dispatched, resolver, f'outcome:{E.OUTCOME}@{cls.cited}')
         cls.outcome = f'outcome:{E.OUTCOME}@{cls.declared}'
 
     def setUp(self):
@@ -189,11 +191,13 @@ class ExampleCase(unittest.TestCase):
 
     def trace(self, samples=True, repo=None):
         """The example's traversal (pinned at the commit that cites the Owner conversation store, as
-        lineage_example.example traces it), or, in another project REPO built by build_project, the outcome
-        pinned at its declaring commit."""
-        outcome = self.outcome if repo else f'outcome:{E.OUTCOME}@{self.cited}'
-        repo = repo or self.repo
-        return E.run_trace(outcome, E.authorities(repo, samples), repo, self.store)
+        lineage_example.example traces it: with SAMPLES the projection ``fixture``, the attempt resolver over the
+        Agent Server fixture's core, else ``real``; the name is kept from before E-01.5, when the attempt sample
+        answered), or, in another project REPO built by build_project, the outcome pinned at its declaring
+        commit."""
+        if repo is None:
+            return E.trace_example(self.sources, 'fixture' if samples else 'real')
+        return E.run_trace(self.outcome, E.authorities(repo, samples), repo, self.store)
 
     def assertEnded(self, sessions):
         self.assertTrue(sessions)
@@ -212,12 +216,12 @@ class OneTraversal(ExampleCase):
     def test_one_traversal_of_the_two_task_example(self):
         python = Path(sys.executable).name
         for backlog in ('in-process', 'launched'):
-            for name in ('sample', 'real'):
+            for name in ('fixture', 'real'):
                 with self.subTest(backlog=backlog, name=name):
                     patch = mock.patch.object(planning.Backlog, 'runner', None) if backlog == 'launched' \
                         else mock.patch.object(planning.Backlog, 'runner', planning.Backlog.runner)
                     with patch, Launches() as launches:
-                        projection = self.trace(samples=name == 'sample')
+                        projection = self.trace(samples=name == 'fixture')
                     self.assertEqual(E.dumps(projection).encode('utf-8'),
                                      (E.EXAMPLES / E.FILES[name]).read_bytes())
                     self.assertLessEqual(len(launches.argvs), MAX_LAUNCHES, launches.kinds())
@@ -231,7 +235,7 @@ class OneTraversal(ExampleCase):
 
     def check_against_the_git_oracle(self):
         with module_calls() as requests:
-            self.assertEqual(self.trace(), E.recorded()['sample'])
+            self.assertEqual(self.trace(), E.recorded()['fixture'])
         requests = list(requests)
         self.assertEqual(module_access(self.repo, requests), git_oracle(self.repo, requests))  # equal answers
         spent = {'oracle': 0.0, 'module': 0.0}
@@ -303,7 +307,7 @@ class SpacedChangeFolder(unittest.TestCase):
 class GitAccess(ExampleCase):
     def test_one_reader_serves_the_traversal_and_ends_with_it(self):
         projection = self.trace()
-        self.assertEqual(projection, E.recorded()['sample'])
+        self.assertEqual(projection, E.recorded()['fixture'])
         (session,) = Recorded.made
         self.assertEnded([session])
         self.assertIsNone(planning.current_operation())
