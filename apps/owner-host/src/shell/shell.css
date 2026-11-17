@@ -330,3 +330,30 @@ body {
   overflow: hidden;
   min-height: 6rem;
 }
+
+/* The acceptance cards (P-04.4): the recorder's summary as it was answered, then the Accept form and its preview. */
+.owner-chat__acceptance,
+.owner-chat__accepted {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  margin-top: 0.25rem;
+}
+
+.owner-chat__acceptance-summary,
+.owner-chat__accept-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+}
+
+.owner-chat__accept-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.owner-chat__accept-words {
+  font: inherit;
+  min-height: 3rem;
+}

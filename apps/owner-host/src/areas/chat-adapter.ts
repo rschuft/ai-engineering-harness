@@ -100,6 +100,155 @@ export type CaptureResult =
   | { captured: true; change: string; commit: string; created: boolean; receipt: string; workTree?: string }
   | { captured: false; code: string; text: string; detail: string | null };
 
+// ---------------------------------------------------------------------------
+// Objective acceptance (plan leaf P-04.4; integrations/ownerhost/acceptance.py).
+//
+// Two Owner messages in fixed layouts, each answered by the Integration
+// process from its store and the project repository, never from text the
+// shell sends: "Review acceptance: O<n> of <change>" asks for the acceptance
+// recorder's challenge, shown on the acceptance card (ACCEPTANCE_TOOL,
+// acceptance-card.tsx) in the assistant message being written, whose id the
+// request names; the card's Accept form then sends, as the Owner's own
+// message, exactly "Accept O<n> of <change>" and his optional words, and the
+// service records it (owner-ui channel, bound to this session) on the nonce
+// the card holds. The reply is the recorded card (ACCEPTANCE_RECORD_TOOL).
+
+/** The challenge card's tool name (never run by a model). */
+export const ACCEPTANCE_TOOL = "objective_acceptance";
+/** The recorded acceptance's card. */
+export const ACCEPTANCE_RECORD_TOOL = "objective_acceptance_recorded";
+
+const ITEM = "O[1-9][0-9]*";
+const CHANGE = "[a-z0-9]+(?:-[a-z0-9]+)*";
+const REVIEW = new RegExp(`^Review acceptance: (${ITEM}) of (${CHANGE})$`);
+const ACCEPT_LINE = new RegExp(`^Accept (${ITEM}) of (${CHANGE})$`);
+
+/** The review request for ITEM of CHANGE (acceptance.py's REVIEW_LAYOUT). */
+export function formatReview(change: string, item: string): string {
+  return `Review acceptance: ${item} of ${change}`;
+}
+
+/** {change, item} of a review request, or null. */
+export function reviewRequest(text: string): { change: string; item: string } | null {
+  const m = text.match(REVIEW);
+  return m ? { item: m[1], change: m[2] } : null;
+}
+
+/**
+ * The acceptance message exactly as it is sent and stored: "Accept <item> of
+ * <change>", and, when the Owner wrote any, a line break and his own words
+ * (line breaks LF, the ends trimmed).
+ */
+export function formatAcceptance(change: string, item: string, words: string): string {
+  const own = words.replace(/\r\n?/g, "\n").trim();
+  return `Accept ${item} of ${change}` + (own.length > 0 ? `\n${own}` : "");
+}
+
+/** {change, item} of an acceptance message (acceptance.py's ACCEPT_LAYOUT), or null. */
+export function acceptanceMessage(text: string): { change: string; item: string } | null {
+  const newline = text.indexOf("\n");
+  const first = newline < 0 ? text : text.slice(0, newline);
+  if (text.includes("\r") || (newline >= 0 && text.slice(newline + 1).trim().length === 0)) return null;
+  const m = first.match(ACCEPT_LINE);
+  return m ? { item: m[1], change: m[2] } : null;
+}
+
+export type AcceptanceChallenge =
+  | { prepared: true; nonce: string; change: string; item: string; summary: string; expiresAt: string; revision: string }
+  | { prepared: false; code: string; text: string; detail: string | null };
+
+export type AcceptanceRecord =
+  | {
+      recorded: true;
+      change: string;
+      item: string;
+      outcome: string;
+      minted: boolean;
+      commit: string;
+      statement: string;
+      created: boolean;
+      workTree?: string;
+    }
+  | { recorded: false; code: string; text: string; detail: string | null };
+
+function refused(error: unknown): { code: string; text: string; detail: string | null } {
+  const refusal = error instanceof SessionRefusal ? error : new SessionRefusal("UNREACHABLE");
+  return { code: refusal.code, text: REFUSAL_TEXT[refusal.code], detail: refusal.detail };
+}
+
+function challengeAnswer(answer: unknown): AcceptanceChallenge {
+  const a = answer as Record<string, unknown> | null;
+  if (
+    !a ||
+    typeof a.nonce !== "string" ||
+    !/^[0-9a-f]{32}$/.test(a.nonce) ||
+    typeof a.change !== "string" ||
+    typeof a.item !== "string" ||
+    typeof a.summary !== "string" ||
+    typeof a.expiresAt !== "string" ||
+    typeof a.revision !== "string"
+  ) {
+    throw new SessionRefusal("ANSWER_INVALID");
+  }
+  return { prepared: true, nonce: a.nonce, change: a.change, item: a.item, summary: a.summary, expiresAt: a.expiresAt, revision: a.revision };
+}
+
+function recordAnswer(answer: unknown): AcceptanceRecord {
+  const a = answer as Record<string, unknown> | null;
+  if (
+    !a ||
+    typeof a.change !== "string" ||
+    typeof a.item !== "string" ||
+    typeof a.outcome !== "string" ||
+    typeof a.minted !== "boolean" ||
+    typeof a.commit !== "string" ||
+    !/^[0-9a-f]{40}$/.test(a.commit) ||
+    typeof a.statement !== "string" ||
+    typeof a.created !== "boolean" ||
+    (a.workTree !== undefined && typeof a.workTree !== "string")
+  ) {
+    throw new SessionRefusal("ANSWER_INVALID");
+  }
+  const result: AcceptanceRecord = {
+    recorded: true,
+    change: a.change,
+    item: a.item,
+    outcome: a.outcome,
+    minted: a.minted,
+    commit: a.commit,
+    statement: a.statement,
+    created: a.created,
+  };
+  return typeof a.workTree === "string" ? { ...result, workTree: a.workTree } : result;
+}
+
+type RunMessage = { id: string; role: string; content: readonly unknown[] };
+
+/** The nonce of the nearest card before the acceptance (in its branch) that shows CHANGE's ITEM, or null. */
+export function cardNonce(messages: readonly RunMessage[], change: string, item: string): string | null {
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    for (const part of message.content as { type?: string; toolName?: string; result?: unknown }[]) {
+      if (part?.type !== "tool-call" || part.toolName !== ACCEPTANCE_TOOL) continue;
+      const r = part.result as Record<string, unknown> | undefined;
+      if (r?.prepared === true && r.change === change && r.item === item && typeof r.nonce === "string") return r.nonce;
+    }
+  }
+  return null;
+}
+
+function toolReply(toolCallId: string, toolName: string, args: Record<string, string>, result: unknown) {
+  return {
+    content: [{ type: "tool-call" as const, toolCallId, toolName, args, argsText: JSON.stringify(args), result }],
+    status: { type: "complete" as const, reason: "stop" as const },
+  };
+}
+
+function messagePath(remoteId: string, messageId: string, route: string): string {
+  return `/threads/${encodeURIComponent(remoteId)}/messages/${encodeURIComponent(messageId)}/${route}`;
+}
+
 type ThreadHandle = { initialize(): Promise<{ remoteId: string }> };
 
 function messageText(message: { content: readonly unknown[] } | undefined): string | null {
@@ -138,9 +287,47 @@ function captured(answer: unknown): CaptureResult {
  */
 export function createCapturingChatAdapter(client: IntegrationClient, thread: () => ThreadHandle): ChatModelAdapter {
   return {
-    async run({ messages }) {
+    async run({ messages, unstable_getMessage }) {
       const last = messages[messages.length - 1];
       const text = last?.role === "user" ? messageText(last) : null;
+      const review = text === null ? null : reviewRequest(text);
+      const acceptance = text === null ? null : acceptanceMessage(text);
+      if (last !== undefined && text !== null && review !== null) {
+        // P-04.4: the challenge, shown on the card this run writes (its message id is the card's).
+        const card = unstable_getMessage().id;
+        const args = { messageId: last.id, change: review.change, item: review.item };
+        let result: AcceptanceChallenge;
+        try {
+          await messageStored(client, last.id);
+          const { remoteId } = await thread().initialize();
+          result = challengeAnswer(
+            await client.request("POST", messagePath(remoteId, last.id, "acceptance-challenge"), { sha256: await sha256Hex(text), card }),
+          );
+        } catch (error) {
+          result = { prepared: false, ...refused(error) };
+        }
+        return toolReply(`acceptance-${last.id}`, ACCEPTANCE_TOOL, args, result);
+      }
+      if (last !== undefined && text !== null && acceptance !== null) {
+        // P-04.4: the Owner's acceptance on the nonce of the card before it.
+        const args = { messageId: last.id, change: acceptance.change, item: acceptance.item };
+        const nonce = cardNonce(messages as readonly RunMessage[], acceptance.change, acceptance.item);
+        let result: AcceptanceRecord;
+        if (nonce === null) {
+          result = { recorded: false, code: "ACCEPTANCE_NO_CARD", text: REFUSAL_TEXT.ACCEPTANCE_NO_CARD, detail: null };
+        } else {
+          try {
+            await messageStored(client, last.id);
+            const { remoteId } = await thread().initialize();
+            result = recordAnswer(
+              await client.request("POST", messagePath(remoteId, last.id, "acceptance"), { nonce, sha256: await sha256Hex(text) }),
+            );
+          } catch (error) {
+            result = { recorded: false, ...refused(error) };
+          }
+        }
+        return toolReply(`accepted-${last.id}`, ACCEPTANCE_RECORD_TOOL, args, result);
+      }
       if (last === undefined || text === null || !isCaptureRequest(text)) {
         return { content: [{ type: "text", text: ACKNOWLEDGEMENT }] };
       }

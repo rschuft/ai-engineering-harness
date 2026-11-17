@@ -14,8 +14,15 @@ import {
   type ChatModelAdapter,
 } from "@assistant-ui/react";
 import { EmptyState } from "./EmptyState";
-import { CAPTURE_TOOL, createCapturingChatAdapter, modelFreeChatAdapter } from "./chat-adapter";
+import {
+  ACCEPTANCE_RECORD_TOOL,
+  ACCEPTANCE_TOOL,
+  CAPTURE_TOOL,
+  createCapturingChatAdapter,
+  modelFreeChatAdapter,
+} from "./chat-adapter";
 import { CaptureCard } from "./capture-card";
+import { AcceptanceCard, AcceptanceRecordCard } from "./acceptance-card";
 import { RequestForm } from "./RequestForm";
 import { createThreadListAdapter } from "./conversation-adapters";
 import { HUMAN_TOOL_NAMES, TOOL_COMPONENTS } from "./decision-tool";
@@ -38,8 +45,19 @@ function UserMessage() {
   );
 }
 
-/** The tool UIs of the chat: a pending decision (U-02.2) and a captured request's card (P-01.3). */
-const CHAT_TOOLS = { ...TOOL_COMPONENTS, by_name: { ...TOOL_COMPONENTS.by_name, [CAPTURE_TOOL]: CaptureCard } };
+/**
+ * The tool UIs of the chat: a pending decision (U-02.2), a captured request's card (P-01.3), and the acceptance
+ * challenge and recorded acceptance cards (P-04.4).
+ */
+const CHAT_TOOLS = {
+  ...TOOL_COMPONENTS,
+  by_name: {
+    ...TOOL_COMPONENTS.by_name,
+    [CAPTURE_TOOL]: CaptureCard,
+    [ACCEPTANCE_TOOL]: AcceptanceCard,
+    [ACCEPTANCE_RECORD_TOOL]: AcceptanceRecordCard,
+  },
+};
 
 /** An assistant message: its text, and its tool calls through their tool UIs (a pending decision, U-02.2). */
 function AssistantMessage() {
@@ -118,7 +136,12 @@ function UnconnectedChat() {
  *
  * P-01.3: the request form sends a requested change as one message in the
  * fixed layout; the run's model adapter (no model) then asks the Integration
- * process to capture it and replies with the capture card. CHAT_MODEL is the
+ * process to capture it and replies with the capture card.
+ *
+ * P-04.4: a "Review acceptance: O<n> of <change>" message (the capture card's
+ * review button sends one) is answered with the acceptance card, whose Accept
+ * form sends the Owner's acceptance as his own message; the reply to that is
+ * the recorded acceptance's card. CHAT_MODEL is the
  * run's model adapter: unless one is given, the capturing adapter, which
  * answers any other message with the fixed acknowledgement.
  */

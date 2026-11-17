@@ -1,5 +1,5 @@
-import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
-import type { CaptureResult } from "./chat-adapter";
+import { useAui, type ToolCallMessagePartComponent, type ToolCallMessagePartProps } from "@assistant-ui/react";
+import { formatReview, type CaptureResult } from "./chat-adapter";
 
 // The acknowledgement card of a captured request (plan leaf P-01.3): the
 // reply to an Owner message in the request layout. It shows only what the
@@ -9,6 +9,21 @@ import type { CaptureResult } from "./chat-adapter";
 // the same message is captured again and the service answers the same commit.
 
 type CaptureArgs = { messageId: string };
+
+/** P-04.4: ask for the acceptance of the captured change's objective (O1), as the Owner's own review message. */
+function ReviewButton({ change }: { change: string }) {
+  const aui = useAui();
+  const text = formatReview(change, "O1");
+  return (
+    <button
+      type="button"
+      className="owner-chat__capture-review"
+      onClick={() => aui.thread().append({ role: "user", content: [{ type: "text", text }] })}
+    >
+      {text}
+    </button>
+  );
+}
 
 function isResult(value: unknown): value is CaptureResult {
   if (typeof value !== "object" || value === null) return false;
@@ -51,6 +66,7 @@ export const CaptureCard: ToolCallMessagePartComponent<CaptureArgs, CaptureResul
             Your objective and acceptance criteria are recorded in your own words; a suggestion is recorded as a
             hypothesis. Nothing was decided by a model.
           </p>
+          <ReviewButton change={result.change} />
         </>
       ) : (
         <>

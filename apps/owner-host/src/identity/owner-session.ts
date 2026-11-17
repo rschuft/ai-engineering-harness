@@ -67,10 +67,51 @@ export const CAPTURE_CODES = [
   "CAPTURE_GIT_FAILED",
   "CAPTURE_OUTCOME_UNKNOWN",
 ] as const;
+/**
+ * The refusals of the acceptance routes (plan leaf P-04.4; integrations/ownerhost/acceptance.py): its own, and the
+ * acceptance recorder's (P-04.1) that the service passes on. The configuration, identity and project refusals are
+ * the capture's (CAPTURE_CODES).
+ */
+export const ACCEPTANCE_CODES = [
+  "ACCEPTANCE_LAYOUT_INVALID",
+  "ACCEPTANCE_MESSAGE_MISMATCH",
+  "ACCEPTANCE_NOT_A_STATEMENT",
+  "ACCEPTANCE_MODEL_AUTHORED",
+  "STATEMENT_NOT_OWNER",
+  "ACCEPTANCE_SESSION_MISMATCH",
+  "ACCEPTANCE_CHALLENGE_UNKNOWN",
+  "ACCEPTANCE_CHALLENGE_MISMATCH",
+  "ACCEPTANCE_NOT_AFTER_CARD",
+  "CHALLENGE_CONSUMED",
+  "CHALLENGE_EXPIRED",
+  "CHALLENGE_STALE",
+  "CHALLENGE_INVALID",
+  "ACCEPTANCE_RECEIPT_CONFLICT",
+  "ACCEPTANCE_STORE_UNAVAILABLE",
+  "ACCEPTANCE_OUTCOME_UNKNOWN",
+  "PROJECT_UNAVAILABLE",
+  "GIT_FAILED",
+  "CHANGE_MISSING",
+  "ITEM_NOT_OBJECTIVE",
+  "INTENT_RECORD_INVALID",
+  "OUTCOME_METADATA_INVALID",
+  "OBJECT_NAME_INVALID",
+  "OUTCOME_ALREADY_MINTED",
+  "OUTCOME_NOT_MINTED",
+  "ACCEPTANCE_ALREADY_RECORDED",
+  "ACCEPTANCE_REFERENCE_INVALID",
+  "RESOLUTION_FAILED",
+  "HOOKS_UNSUPPORTED",
+  "COMMIT_REFUSED",
+  "SESSION_BINDING_REQUIRED",
+  "SESSION_BINDING_REFUSED",
+] as const;
 export type RefusalCode =
   | (typeof CREDENTIAL_CODES)[number]
   | (typeof CONVERSATION_CODES)[number]
   | (typeof CAPTURE_CODES)[number]
+  | (typeof ACCEPTANCE_CODES)[number]
+  | "ACCEPTANCE_NO_CARD"
   | "HOST_NOT_ALLOWED"
   | "ORIGIN_NOT_ALLOWED"
   | "NOT_SHAPED"
@@ -115,6 +156,39 @@ export const REFUSAL_TEXT: Record<RefusalCode, string> = {
   CAPTURE_COMMIT_UNREACHABLE: "This message's capture is on no branch of the project repository any more; nothing was written.",
   CAPTURE_GIT_FAILED: "The project repository could not be read or written; see the detail, repair it, and capture again.",
   CAPTURE_OUTCOME_UNKNOWN: "A commit may have been made; read the project repository before anything else.",
+  ACCEPTANCE_NO_CARD: "No acceptance card for this item comes before this message; review the item first.",
+  ACCEPTANCE_LAYOUT_INVALID: "Review with \"Review acceptance: O<n> of <change>\"; accept with \"Accept O<n> of <change>\".",
+  ACCEPTANCE_MESSAGE_MISMATCH: "The stored message is not the text sent, so nothing was recorded.",
+  ACCEPTANCE_NOT_A_STATEMENT: "A review is asked from your own message, not from a reply.",
+  ACCEPTANCE_MODEL_AUTHORED: "Only your own message can accept; a reply, a model or an agent cannot.",
+  STATEMENT_NOT_OWNER: "Only the Owner accepts an objective.",
+  ACCEPTANCE_SESSION_MISMATCH: "The acceptance or its card belongs to another session; review again in this session.",
+  ACCEPTANCE_CHALLENGE_UNKNOWN: "The Integration process no longer holds this card's challenge (it restarted); review again.",
+  ACCEPTANCE_CHALLENGE_MISMATCH: "The acceptance names another item or thread than the card shows.",
+  ACCEPTANCE_NOT_AFTER_CARD: "Accept after the card, from the card, in the branch that holds it.",
+  CHALLENGE_CONSUMED: "An acceptance was already recorded on this card; review again for a new one.",
+  CHALLENGE_EXPIRED: "The card has expired; review again.",
+  CHALLENGE_STALE: "The proposal changed after the card was shown; review again.",
+  CHALLENGE_INVALID: "The card's challenge is not what the acceptance recorder shows for this change.",
+  ACCEPTANCE_RECEIPT_CONFLICT: "This message was recorded for another card; accept with a new message.",
+  ACCEPTANCE_STORE_UNAVAILABLE: "The integration store is not available, so nothing was committed.",
+  ACCEPTANCE_OUTCOME_UNKNOWN: "A commit may have been made; read the project repository before anything else.",
+  PROJECT_UNAVAILABLE: "The project repository cannot be read.",
+  GIT_FAILED: "The project repository could not be read or written; see the detail.",
+  CHANGE_MISSING: "The project repository has no such change.",
+  ITEM_NOT_OBJECTIVE: "That item is not an Objective item of the change.",
+  INTENT_RECORD_INVALID: "The change's proposal is not a valid intent record.",
+  OUTCOME_METADATA_INVALID: "The change's outcome declarations (x-outcomes) are not valid.",
+  OBJECT_NAME_INVALID: "The change or the item is not named as OpenSpec and the intent record write them.",
+  OUTCOME_ALREADY_MINTED: "The item already has its outcome id.",
+  OUTCOME_NOT_MINTED: "The item has no outcome id yet.",
+  ACCEPTANCE_ALREADY_RECORDED: "This acceptance is already recorded; the outcome id stands.",
+  ACCEPTANCE_REFERENCE_INVALID: "The acceptance must be a message of its own, not the request.",
+  RESOLUTION_FAILED: "Nothing was committed: the recorder and the lineage resolver disagree.",
+  HOOKS_UNSUPPORTED: "The project repository has client hooks; the recorder commits only without them.",
+  COMMIT_REFUSED: "The project repository refused the commit; nothing was written. The receipt stays reserved: accept again once repaired.",
+  SESSION_BINDING_REQUIRED: "The acceptance must be bound to your Owner UI session.",
+  SESSION_BINDING_REFUSED: "The acceptance is not bound to the session that sent it.",
 };
 
 export interface OwnerSession {
