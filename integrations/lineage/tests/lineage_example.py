@@ -16,16 +16,21 @@
   thread: the qual-02 change cites the P-01.2 corpus's statements
   (``conversation:qual-02/...``), which are not Owner conversation store identities.
 
-``example`` traces the outcome, pinned at the declaring commit, twice, with the real
-registry, whose statement resolver reads that store (the statements are answered missing):
-once with the attempt sample (``lineage_samples.py``: the attempts resolve, and are marked
-sample) and once with the real registry only (the attempts are ``authority-unavailable``).
-Until U-02.2 a statement sample over the corpus stood in for the Owner conversation store;
-it is retired (I1 work design, R5).
+``build_conversations`` makes an Owner conversation store that holds the three corpus
+statements the tests quote, under store identities (``STATEMENTS``), and ``cite_store``
+points a throwaway project's intent record at them.
 
-``build_conversations`` makes, for the tests, an Owner conversation store that holds the
-three corpus statements the tests quote, under store identities (``STATEMENTS``), and
-``cite_store`` points a throwaway project's intent record at them.
+``example`` builds those sources, then fills the Owner conversation store with the statements
+(``build_conversations``) and, in a third commit after the declaring one, points the intent
+record at them (``cite_store``; never before the design commit, whose pointers the recorded
+Backlog.md output carries). It traces the outcome, pinned at that third commit, twice with the
+real registry, whose statement resolver reads that store: the statements resolve
+authoritatively and Q1's quote is verified against the store's bytes, and the recorded tasks'
+proposal pointer (pinned at the design commit) is superseded. Once with the attempt sample
+(``lineage_samples.py``: the attempts resolve, and are marked sample) and once with the real
+registry only (the attempts are ``authority-unavailable``). Until U-02.2 a statement sample
+over the corpus stood in for the Owner conversation store; it is retired (I1 work design, R5).
+``build`` itself, which the tests share, is unchanged.
 
 Record or refresh the committed example (offline):
 
@@ -261,10 +266,26 @@ def build(work):
     return repo, store, declared
 
 
-def example(work):
-    """{'sample': projection, 'real': projection} of the example built under WORK."""
+CITE_MESSAGE = 'the intent record cites the Owner conversation store'
+CITED_DATE = '2026-11-07T00:02:00Z'
+
+
+def build_example(work):
+    """The example's sources under WORK: ``build``, then the Owner conversation store's statements
+    (``build_conversations``) and, in its own commit after the declaring one, the intent record pointed at them
+    (``cite_store``). The recorded Backlog.md tasks keep their design pointers, pinned at the design commit.
+    Return (repo, store, declared commit, cited commit)."""
     repo, store, declared = build(work)
-    outcome = f'outcome:{OUTCOME}@{declared}'
+    build_conversations(conversations_path(repo))
+    cite_store(repo)
+    return repo, store, declared, fx.commit_all(repo, CITE_MESSAGE, date=CITED_DATE)
+
+
+def example(work):
+    """{'sample': projection, 'real': projection} of the example built under WORK (``build_example``), the
+    outcome traced pinned at the commit that cites the Owner conversation store."""
+    repo, store, _declared, cited = build_example(work)
+    outcome = f'outcome:{OUTCOME}@{cited}'
     return {'sample': run_trace(outcome, authorities(repo, True), repo, store),
             'real': run_trace(outcome, authorities(repo, False), repo, store)}
 

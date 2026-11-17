@@ -149,50 +149,61 @@ class Example(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsNone(fx.MACHINE_PATH.search(E.dumps(projection)))
 
+    @staticmethod
+    def recorded_proposal_pointer():
+        """The proposal pointer the recorded P-02.1 tasks carry, pinned at the design commit."""
+        view = json.loads((E.RECORDED_TASKS / 'task-view-TASK-1.json').read_text(encoding='utf-8'))
+        (pointer,) = [r for r in view['task']['references'] if '/proposal.md@' in r]
+        return pointer
+
     def test_sample_authorities_resolve_the_whole_chain_and_say_so(self):
-        # Since U-02.2 the attempt sample is the only one: the statements are asked of the real Owner conversation
-        # store, which holds no corpus thread (the qual-02 change cites corpus ids, not store ids), and say so.
+        # The example's statements are the Owner conversation store's (lineage_example.example: build_conversations
+        # and cite_store in a commit after the declaring one): they resolve authoritatively. The attempt sample is
+        # the only sample, and says so. The recorded tasks' proposal pointer, pinned at the design commit, is
+        # superseded by that later commit, and says so.
         projection = self.projections['sample']
         self.assertEqual(projection['format'], T.PROJECTION_FORMAT)
         roles = {node['role'] for node in projection['nodes']}
         self.assertEqual(roles, {'statement', 'objective', 'design', 'work', 'attempt'})
+        superseded = self.recorded_proposal_pointer()
         for node in projection['nodes']:
             with self.subTest(node=node['reference']):
-                if node['role'] == 'statement':
-                    self.assertEqual((node['authority_mode'], node['authority'], node['resolution']['outcome'],
-                                      node['resolution']['code']),
-                                     (T.AUTHORITATIVE, 'Owner conversation store', L.MISSING, 'CONVERSATION_MISSING'))
-                    continue
-                self.assertEqual((node['resolution']['outcome'], node['freshness']), (L.RESOLVED, T.CURRENT))
+                freshness = T.SUPERSEDED if node['reference'] == superseded else T.CURRENT
+                self.assertEqual((node['resolution']['outcome'], node['freshness']), (L.RESOLVED, freshness))
                 expected = T.SAMPLE if node['role'] == 'attempt' else T.AUTHORITATIVE
                 self.assertEqual(node['authority_mode'], expected)
                 if expected == T.SAMPLE:
                     self.assertTrue(node['authority'].startswith('SAMPLE'))
+                if node['role'] == 'statement':
+                    self.assertEqual((node['kind'], node['authority']), ('message', 'Owner conversation store'))
+        self.assertEqual(sorted(n['reference'] for n in projection['nodes'] if n['role'] == 'statement'), [M1, M2])
         self.assertEqual(projection['verdict'], 'incomplete')
-        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority', 'unresolved'})
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority', 'superseded'})
         self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'sample-authority'},
                          {n['reference'] for n in projection['nodes'] if n['authority_mode'] == T.SAMPLE})
-        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'unresolved'},
-                         {n['reference'] for n in projection['nodes'] if n['role'] == 'statement'})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'superseded'},
+                         {superseded})
 
     def test_the_chain_runs_from_the_original_message_to_the_attempts(self):
         projection = self.projections['sample']
         root = projection['root']
-        message1, message2 = 'conversation:qual-02/message-1', 'conversation:qual-02/message-2'
-        self.assertIn((message1, root, T.ORIGINATES), edges(projection))
-        self.assertIn((root, message2, T.ACCEPTED_BY), edges(projection))
+        self.assertIn((M1, root, T.ORIGINATES), edges(projection))
+        self.assertIn((root, M2, T.ACCEPTED_BY), edges(projection))
         self.assertEqual({t for _, t, _ in edges(projection, T.FULFILLED_BY)}, {'backlog:TASK-1', 'backlog:TASK-2'})
         attempts = {(f, t) for f, t, _ in edges(projection, T.EXECUTED_BY)}
         store_mod = E.store_module()
         self.assertEqual(attempts, {
             (f'backlog:{task}', f'openhands:conversation/{store_mod.conversation_id_for(E.operation_key(task))}')
             for task in ('TASK-1', 'TASK-2')})
-        self.assertEqual(len(edges(projection, T.SHAPED_BY)), 3)  # proposal, design, spec at the declaring commit
-        # The statement did not resolve (the store holds no corpus thread), so Q1's quote is not checked here; it is
-        # checked against the store's bytes in StoreStatements.test_the_whole_chain_resolves_against_the_store.
-        quote = by_reference(projection)[message1]['quotes'][0]
-        self.assertEqual((quote['item'], quote['outcome']), ('Q1', 'not-checked'))
-        self.assertNotIn('span', quote)
+        self.assertEqual(len(edges(projection, T.SHAPED_BY)), 3)  # proposal, design, spec at the traced commit
+        # D2: Q1's quote is located in the statement's durable bytes, read from the Owner conversation store, and
+        # its span verifies.
+        quote = by_reference(projection)[M1]['quotes'][0]
+        self.assertEqual((quote['item'], quote['outcome']), ('Q1', L.RESOLVED))
+        self.assertTrue(quote['span'].startswith(M1 + '#span:'))
+        span = L.parse(quote['span'])
+        content = QUAL02_MESSAGE1.read_bytes()
+        self.assertEqual(L.span_bytes(span, content), content.rstrip(b'\n'))
 
     def test_every_edge_carries_its_provenance(self):
         for projection in self.projections.values():
@@ -214,13 +225,16 @@ class Example(unittest.TestCase):
                     self.assertTrue(provenance['operation_key'].startswith('work-TASK-'))
 
     def test_the_real_registry_marks_statements_and_attempts_unavailable(self):
+        # (The name is recorded in evidence/test-profile/test-ids.json from before U-02.2, when no authority held the
+        # statements. Since U-02.2 the real registry resolves them from the Owner conversation store; only the
+        # attempts are unavailable.)
         projection = self.projections['real']
         for node in projection['nodes']:
             with self.subTest(node=node['reference']):
-                if node['role'] == 'statement':  # asked of the real store since U-02.2: missing there
+                if node['role'] == 'statement':  # asked of the real store since U-02.2: resolved there
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome'],
                                       node['resolution']['code']),
-                                     (T.AUTHORITATIVE, L.MISSING, 'CONVERSATION_MISSING'))
+                                     (T.AUTHORITATIVE, L.RESOLVED, None))
                 elif node['role'] == 'attempt':
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome'],
                                       node['resolution']['code']),
@@ -229,7 +243,13 @@ class Example(unittest.TestCase):
                 else:
                     self.assertEqual((node['authority_mode'], node['resolution']['outcome']),
                                      (T.AUTHORITATIVE, L.RESOLVED))
-        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'unresolved'})
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'unresolved', 'superseded'})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'unresolved'},
+                         {n['reference'] for n in projection['nodes'] if n['role'] == 'attempt'})
+        self.assertEqual({u['reference'] for u in projection['uncertainties'] if u['reason'] == 'superseded'},
+                         {self.recorded_proposal_pointer()})
+        quote = by_reference(projection)[M1]['quotes'][0]
+        self.assertEqual((quote['item'], quote['outcome']), ('Q1', L.RESOLVED))
         self.assertEqual(projection['authority_modes'], {'authoritative': 11, 'sample': 0, 'unavailable': 2})
         # The same edges as with the samples: the links are asserted by records, not by the authorities.
         self.assertEqual(edges(projection), edges(self.projections['sample']))
@@ -793,6 +813,40 @@ class StoreStatements(Case):
                 self.assertUncertain(projection, reference, 'unresolved', 'CONVERSATION_STORE_UNAVAILABLE')
         self.assertFalse(self.conversations.exists())
 
+    def test_a_thread_of_display_state_only_is_not_the_objectives_statement(self):
+        # B1 (I1 work design, R5): the objective's only source and its acceptance name a thread whose anchor is an
+        # assistant message (display state the shell wrote), or a thread with no message. Neither stands for an
+        # Owner statement: the node is an explicit unresolved statement, never a resolved one.
+        thread = '2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901'
+        cases = ((f'conversation:{thread}@A000001', 'CONVERSATION_NOT_A_STATEMENT', True),
+                 (f'conversation:{thread}', 'CONVERSATION_NOT_A_STATEMENT', True),
+                 (f'conversation:{thread}', 'CONVERSATION_EMPTY', False))
+        for reference, code, reply in cases:
+            with self.subTest(reference=reference, code=code):
+                self.setUp()
+                with E.conversation_module().open_store(self.conversations) as store:
+                    store.initialize_thread(session_id=E.SESSION, local_id='__LOCALID_display', at=E.STORE_AT,
+                                            mint=lambda: thread)
+                    if reply:
+                        store.append_message(thread, {'parentId': None, 'message': {
+                            'id': 'A000001', 'role': 'assistant', 'createdAt': '2026-11-07T00:00:01.000Z',
+                            'status': {'type': 'complete', 'reason': 'unknown'},
+                            'content': [{'type': 'text', 'text': 'I, the shell, say so.'}],
+                            'metadata': {'custom': {}}}}, session_id=E.SESSION, at=E.STORE_AT)
+                for path in (f'{CHANGE_DIR}/proposal.md', f'{CHANGE_DIR}/.openspec.yaml'):
+                    data = (self.repo / path).read_bytes()
+                    data = data.replace(b'conversation:qual-02/message-2', reference.encode())
+                    (self.repo / path).write_bytes(data.replace(b'- source: Q1, ', b'- source: '))
+                self.commit('the objective sourced and accepted by a thread that holds no Owner statement')
+                self.reserve_tasks('TASK-1', 'TASK-2')
+                projection = self.trace(f'outcome:{OUTCOME}')
+                node = by_reference(projection)[reference]
+                self.assertEqual((node['kind'], node['role'], node['authority_mode'], node['resolution']['outcome'],
+                                  node['resolution']['code']),
+                                 ('conversation', 'statement', T.AUTHORITATIVE, L.MISSING, code))
+                self.assertIn((reference, projection['root'], T.ORIGINATES), edges(projection))
+                self.assertUncertain(projection, reference, 'unresolved', code)
+
     def test_the_traversal_only_reads_the_store(self):
         E.cite_store(self.repo)
         self.commit('the intent record cites the Owner conversation store')
@@ -827,6 +881,32 @@ class Tasks(Case):
         self.assertEqual(via['backlog:TASK-2'], [f'outcome:{OUTCOME}@{self.declared}'])
         self.assertEqual({f for f, _, _ in edges(projection, T.CITES)}, {'backlog:TASK-5'})
         self.assertNotIn(other_change, by_reference(projection))
+
+    def test_a_task_backlog_does_not_list_is_reached_only_through_a_reservation_citing_the_outcome(self):
+        # What the lineage README states (Not yet verified) and the schema's work "open" text: a task task list --json
+        # omits (archived, gate G11) is reached only through an attempt reservation whose intent cites the outcome; with
+        # no such reservation it is omitted, and no uncertainty names it (a known gap of the traversal, not fixed here).
+        snapshot = self.tmp / 'unlisted'
+        shutil.copytree(E.RECORDED_TASKS, snapshot)
+        listing = json.loads((snapshot / 'task-list.json').read_text(encoding='utf-8'))
+        listing['tasks'] = [t for t in listing['tasks'] if t['id'] != 'TASK-1']
+        (snapshot / 'task-list.json').write_text(json.dumps(listing), encoding='utf-8')
+        intent = E.task_intent('TASK-1')
+        del intent['outcomeRef']
+        for name, intents in (('cites the outcome', [(E.operation_key('TASK-1'), E.task_intent('TASK-1'))]),
+                              ('no reservation', []), ('no outcomeRef', [(E.operation_key('TASK-1'), intent)])):
+            with self.subTest(reservation=name):
+                self.store = self.tmp / name.replace(' ', '-') / 'integration.sqlite'
+                self.reserve(*intents, (E.operation_key('TASK-2'), E.task_intent('TASK-2')))
+                projection = self.trace(snapshot=snapshot)
+                fulfilled = {t for _, t, _ in edges(projection, T.FULFILLED_BY)}
+                if name == 'cites the outcome':
+                    self.assertEqual(fulfilled, {'backlog:TASK-1', 'backlog:TASK-2'})
+                    self.assertEqual(by_reference(projection)['backlog:TASK-1']['resolution']['outcome'], L.RESOLVED)
+                else:
+                    self.assertEqual(fulfilled, {'backlog:TASK-2'})
+                    self.assertNotIn('backlog:TASK-1', by_reference(projection))
+                    self.assertFalse([u for u in projection['uncertainties'] if 'TASK-1' in u['reference']])
 
     def test_task_references_that_are_not_a_list(self):
         self.fake_backlog(('TASK-1', 'not a list'), ('TASK-2', [f'outcome:{OUTCOME}']))

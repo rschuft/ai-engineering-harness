@@ -51,12 +51,12 @@
         "anchor": "@<message>: the thread as it stood through that message (the branch of the thread that ends at it)",
         "pinning": "optional"
       },
-      "validation_rule": "Resolve a durable message or explicitly report missing source. (#authority, link 'Original statement') The thread is read from the Owner conversation store, opened read-only; unpinned it resolves at its last message (by the store's seq), pinned at @<message>, which must be one of its messages. observed_revision is that message's id and observed_digest the sha256 of its content (its latest revision); current answers at the last message, so a thread that went on after the pin is superseded.",
+      "validation_rule": "Resolve a durable message or explicitly report missing source. (#authority, link 'Original statement') The thread is read from the Owner conversation store, opened read-only. A conversation reference stands in the statement role, so it resolves only at an Owner statement (I1 work design, R5: an assistant row is display state the browser wrote, never a statement): its anchor is the pinned @<message>, which must be one of its messages, or, unpinned, its last message (by the store's seq); the anchor must be a user message, author owner, else missing (CONVERSATION_NOT_A_STATEMENT), and a thread with no message is missing (CONVERSATION_EMPTY). The anchor's content is checked by lineage.check_message_content as the message kind's is. observed_revision is the anchor's id and observed_digest the sha256 of its content. current answers at the last message: for an unpinned reference it is the anchor and held to the same rule; for a pinned one it is read for freshness only, so a thread that went on after the pin is superseded.",
       "status": "implemented",
       "resolver": "lineage_resolve.ConversationResolver (the Owner conversation store opened read-only: storecore.open_read_only, query_only, check_current and the store's own checks)",
       "outcomes": ["resolved", "missing", "revision-mismatch", "authority-unavailable"],
       "outcome_codes": {
-        "missing": "CONVERSATION_MISSING",
+        "missing": "CONVERSATION_MISSING, CONVERSATION_EMPTY (a thread with no message), CONVERSATION_NOT_A_STATEMENT (an anchor that is an assistant message)",
         "revision-mismatch": "CONVERSATION_MESSAGE_MISSING",
         "authority-unavailable": "CONVERSATION_STORE_UNAVAILABLE (absent, of another kind, needing a migration, altered, or a content that does not match its digest)"
       },
@@ -230,7 +230,7 @@
       "open": [
         "The Backlog.md task has no content digest anchor: its JSON output is the tool's, not an immutable record, so a digest-mismatch cannot arise for this kind.",
         "Backlog.md 1.55.3 refuses task list --json when two tasks share an id (P-02.2); the resolver then answers authority-unavailable with Backlog.md's message, not ambiguous.",
-        "An archived task resolves: Backlog.md 1.55.3's task view --json reads it (archived: true, its file under backlog/archive/tasks/), while task list --json omits it, so its id is shown unique among the listed tasks only; Backlog.md does not give an archived task's id to a new task (gate G11, observed live). The traversal enumerates tasks with task list --json, so it never reaches an archived task through the fulfilled_by link."
+        "An archived task resolves: Backlog.md 1.55.3's task view --json reads it (archived: true, its file under backlog/archive/tasks/), while task list --json omits it, so its id is shown unique among the listed tasks only; Backlog.md does not give an archived task's id to a new task (gate G11, observed live). The traversal enumerates tasks with task list --json, so it reaches an archived task only through an attempt reservation whose intent cites the outcome (outcomeRef) and the task (workRef); without one the task is omitted silently, with no node and no uncertainty naming it."
       ]
     },
     {

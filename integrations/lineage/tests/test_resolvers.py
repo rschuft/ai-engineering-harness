@@ -882,12 +882,14 @@ class ConversationResolution(TempDirCase):
 
     def test_a_thread_resolves_at_its_last_message_or_through_a_pinned_one(self):
         with self.cs.open_store(self.path, apply_migrations=False) as store:
-            last = store.messages(self.thread)[-1]
+            last = store.messages(self.other)[-1]
             first = store.message(self.thread, 'Q02msg1')
-        resolved, current = self.both(f'conversation:{self.thread}')
+        # Unpinned, at its last message, an Owner statement (a thread whose last message is a reply: see
+        # test_an_unpinned_thread_whose_last_message_is_a_reply_is_not_a_statement).
+        resolved, current = self.both(f'conversation:{self.other}')
         for result in (resolved, current):
             self.assertEqual((result.outcome, result.kind, result.observed_revision, result.observed_digest),
-                             (L.RESOLVED, 'conversation', 'A000001', last.sha256))
+                             (L.RESOLVED, 'conversation', 'Q08msg1', last.sha256))
         pinned, current = self.both(f'conversation:{self.thread}@Q02msg1')
         self.assertEqual((pinned.outcome, pinned.observed_revision, pinned.observed_digest),
                          (L.RESOLVED, 'Q02msg1', first.sha256))
@@ -900,7 +902,51 @@ class ConversationResolution(TempDirCase):
                 for result in self.both(text):
                     self.assertEqual((result.outcome, result.code), (L.MISSING, 'CONVERSATION_MISSING'))
         empty = self.registry.resolve(f'conversation:{self.empty}')
-        self.assertEqual((empty.outcome, empty.observed_revision, empty.observed_digest), (L.RESOLVED, None, None))
+        self.assertEqual((empty.outcome, empty.code, empty.observed_revision, empty.observed_digest),
+                         (L.MISSING, 'CONVERSATION_EMPTY', None, None))
+
+    # B1 (I1 work design, R5): a conversation reference stands in the statement role, so it resolves only at an
+    # Owner statement: its anchor (the pinned message, or unpinned the last message) is a user message, author owner.
+
+    def test_a_thread_pinned_at_an_owner_statement_resolves(self):
+        content = self.E.corpus_bytes('conversation:qual-02/message-2')
+        for message, corpus in (('Q02msg2', 'conversation:qual-02/message-2'),
+                                ('Q02msg1', 'conversation:qual-02/message-1')):
+            text = f'conversation:{self.thread}@{message}'
+            with self.subTest(text=text):
+                result = self.registry.resolve(text)
+                stored = self.E.corpus_bytes(corpus)
+                expected = L.check_message_content(L.MessageRef(self.thread, message), stored)
+                self.assertEqual((result.outcome, result.code, result.kind, result.authority, result.observed_revision,
+                                  result.observed_digest),
+                                 (L.RESOLVED, None, 'conversation', 'Owner conversation store', message,
+                                  expected.observed_digest))
+        self.assertEqual(self.registry.resolve(f'conversation:{self.thread}@Q02msg2').observed_digest,
+                         hashlib.sha256(content).hexdigest())
+        # The thread went on after the pin (a reply): current reads its last message for freshness only.
+        current = self.registry.current(f'conversation:{self.thread}@Q02msg2')
+        self.assertEqual((current.outcome, current.observed_revision), (L.RESOLVED, 'A000001'))
+
+    def test_an_unpinned_thread_whose_last_message_is_a_reply_is_not_a_statement(self):
+        text = f'conversation:{self.thread}'
+        for result in self.both(text):
+            with self.subTest(query=result.query):
+                self.assertEqual((result.outcome, result.code, result.kind), (L.MISSING, 'CONVERSATION_NOT_A_STATEMENT',
+                                                                              'conversation'))
+                self.assertFalse(result.resolved)
+                self.assertIn('A000001', result.detail)
+        # Pinned at the reply itself: the anchor is the assistant message, which is never a statement.
+        result = self.registry.resolve(f'{text}@A000001')
+        self.assertEqual((result.outcome, result.code), (L.MISSING, 'CONVERSATION_NOT_A_STATEMENT'))
+
+    def test_an_empty_thread_is_missing(self):
+        for result in self.both(f'conversation:{self.empty}'):
+            with self.subTest(query=result.query):
+                self.assertEqual((result.outcome, result.code, result.observed_revision),
+                                 (L.MISSING, 'CONVERSATION_EMPTY', None))
+        pinned = self.registry.resolve(f'conversation:{self.empty}@Q02msg1')
+        self.assertEqual((pinned.outcome, pinned.code), (L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING'))
+        self.assertEqual(self.registry.current(f'conversation:{self.empty}@Q02msg1').code, 'CONVERSATION_EMPTY')
 
     def test_an_unavailable_store_is_explicit_and_unchanged(self):
         def absent(path):
@@ -931,10 +977,19 @@ class ConversationResolution(TempDirCase):
             return target
 
         def content_changed(path):
-            target = altered(path)
+            # A same-account writer that keeps the schema (decision 0010 point 1): it lifts the trigger, changes the
+            # content without its digest and puts the trigger back as it was, so that the digest invariant, not an
+            # altered schema, is what refuses the store (as the conversation suite's
+            # test_a_changed_byte_without_its_digest_is_refused_at_open does).
+            target = path / 'conversation.sqlite'
+            shutil.copy(self.path, target)
             conn = sqlite3.connect(target)
+            trigger = conn.execute("SELECT sql FROM sqlite_schema WHERE name = 'message_revision_no_update'").fetchone()[0]
+            conn.executescript('DROP TRIGGER message_revision_no_update;')
             conn.execute("UPDATE message_revision SET content = CAST('x' AS BLOB) WHERE message_id = 'Q02msg1'")
+            conn.executescript(trigger + ';')
             conn.commit()
+            self.cs.check_schema(conn)                  # the schema is exactly as migrated
             conn.close()
             return target
 
@@ -962,7 +1017,8 @@ class ConversationResolution(TempDirCase):
             writer.append_message(self.thread, assistant_item('A000009', 'Q02msg2'), session_id=self.E.SESSION,
                                   at=self.E.STORE_AT)                           # in the WAL, not yet checkpointed
             database = hashlib.sha256(target.read_bytes()).hexdigest()
-            result = R.ConversationResolver(target).resolve(L.parse(f'conversation:{self.thread}'))
+            # The thread's head, read for freshness (current of a pinned reference): the reply only in the WAL file.
+            result = R.ConversationResolver(target).current(L.parse(f'conversation:{self.thread}@Q02msg1'))
             self.assertEqual((result.outcome, result.observed_revision), (L.RESOLVED, 'A000009'))
             self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), database)
             with R.ReadOnlyConversationStore(target) as view:

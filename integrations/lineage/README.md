@@ -28,14 +28,14 @@ status.
 | `lineage_resolve.py` | The seven read-only resolvers (design, objective, work, commit, effect-receipt, and since U-02.2 message and conversation over the Owner conversation store, with its read-only view `ReadOnlyConversationStore`) and the command line (`schema`, `parse`, `resolve`) |
 | `lineage_trace.py` | The read-only traversal from one outcome id and its projection (`lineage-projection/v1`), `Authorities` (a statement's content from the resolver that answered it) and the read-only integration-store view; the command line (`trace`) |
 | `lineage_samples.py` | The one **SAMPLE** authority used only by the example and the tests: attempt records shaped like F-04.2's conversation info. The statement sample over the P-01.2 corpus is retired at U-02.2 |
-| `examples/projection-sample-authorities.json` | The example projection with the attempt sample: the attempts resolve and are marked sample; the statements are asked of the real Owner conversation store, which does not hold the corpus ids the example cites |
+| `examples/projection-sample-authorities.json` | The example projection with the attempt sample: the attempts resolve and are marked sample; the statements resolve authoritatively from the example's Owner conversation store, and Q1's quote is verified against its bytes |
 | `examples/projection-real-registry.json` | The same example with the real registry only: the statements as above, the attempts `authority-unavailable` |
 | `tests/test_references.py` | Round trip of every kind, malformed references, the schema check (and the defects it catches), the span anchor, `Resolution` and `Registry` contracts |
 | `tests/test_resolvers.py` | Every outcome of each resolver, against throwaway git repositories, the P-02 fake Backlog.md and its recorded fixtures (and Backlog.md's own output for an archived task), F-05.2 effects-store fixtures and throwaway Owner conversation stores; read-only checks; the command line |
 | `tests/fixtures/archived-task/` | Backlog.md 1.55.3's own `task list --json` and `task view --json` output in a throwaway project where `TASK-1` was archived (gate G11, recorded 2026-11-16), replayed by the fake Backlog.md |
 | `tests/test_trace.py` | The traversal: the example (regenerated and compared), read-only proof, every negative resolution fixture, the sample authorities and the command line |
 | `tests/test_traversal_git.py` | The traversal's repository access (F-09.4, F-10.3): one opened repository per traversal, closed on a normal end, an exception and a damaged repository (`GIT_FAILED` at once), nothing kept between traversals, no git launched; a resolver call as its own operation; OpenSpec change folders whose names hold a space, resolved as before the batch reader; and the `performance` benchmark `OneTraversal`, whose result is the launch count of one traversal of the example (none with Backlog.md answered in the test process, its three reads with it launched; at most 10) with projections equal to `examples/` byte for byte, and its repository access against the git oracle, interleaved in the same run: git's answers equal, the traversal's access at least 4x faster and a one-shot resolve at least 8x faster (decision 0014) |
-| `tests/lineage_example.py` | Builds the example's throwaway sources (an Owner conversation store among them), traces them and (with `--record`) writes `examples/`; builds, for the tests, a store holding the corpus statements they quote under store identities (`build_conversations`, `cite_store`) |
+| `tests/lineage_example.py` | Builds the example's throwaway sources (`build_example`: among them an Owner conversation store holding the corpus statements the change cites, under store identities, and a commit that cites them), traces them and (with `--record`) writes `examples/`; the same store and citation for the tests (`build_conversations`, `cite_store`) |
 | `tests/fixtures/sample-attempts.json` | The sample attempt records (`lineage-sample-attempts/v1`, `"sample": true`) |
 | `tests/test_live_lineage.py` | Live, against the pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 (including the traversal over live tasks and after a real `openspec archive`, and a task archived by Backlog.md itself, then resolved); skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` are set |
 
@@ -140,7 +140,7 @@ outcomes or authority differ from the schema, and an answer outside the resolver
 | `commit` | `<commit>^{commit}` and, when that is no commit, the object's type, read through the P-02.1 repository access (the shared module over Dulwich, as `git rev-parse` and `git cat-file` answer) in the clone registered for the repository name | `missing` COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH; `authority-unavailable` REPOSITORY_NOT_REGISTERED, REPOSITORY_UNAVAILABLE, GIT_FAILED |
 | `effect-receipt` | the effects store opened by the caller's `open_store` (its location and custody checks apply), then only `verify_chain`, `get`, `events`, `open_epochs`, `high_water_mark` | `missing` EFFECT_RECEIPT_MISSING (never evidence that the effect did not happen, decision 0004 point 7); `revision-mismatch` EFFECT_EVENT_MISSING; `digest-mismatch` EFFECT_EVENT_DIGEST_MISMATCH; `authority-unavailable` EFFECTS_STORE_UNAVAILABLE, EFFECTS_CHAIN_INVALID |
 | `message` | the Owner conversation store opened read-only (`ReadOnlyConversationStore`, below) for each question: the user message's content (its one text part's UTF-8 bytes as received), checked by `lineage.check_message_content` unchanged; `current` applies the same anchors (a user message is immutable) | `missing` CONVERSATION_MISSING, MESSAGE_MISSING, MESSAGE_NOT_A_STATEMENT (an assistant message: display state the shell wrote, never a statement); `digest-mismatch` MESSAGE_DIGEST_MISMATCH, SPAN_DIGEST_MISMATCH, SPAN_OUT_OF_RANGE, SPAN_NOT_ON_CHARACTER_BOUNDARY; `authority-unavailable` CONVERSATION_STORE_UNAVAILABLE |
-| `conversation` | the same store: the thread at its last message (by `seq`), or pinned through `@<message>`; `observed_revision` that message's id, `observed_digest` its content's sha256 (latest revision); `current` at the last message | `missing` CONVERSATION_MISSING; `revision-mismatch` CONVERSATION_MESSAGE_MISSING; `authority-unavailable` CONVERSATION_STORE_UNAVAILABLE |
+| `conversation` | the same store: the thread at its anchor, the message pinned by `@<message>` or, unpinned, its last message (by `seq`); the anchor must be an Owner statement (a user message, author `owner`), whose content is checked by `lineage.check_message_content` as for `message`; `observed_revision` the anchor's id, `observed_digest` its content's sha256; `current` at the last message (held to the same rule when the reference is unpinned; for a pinned one read for freshness only) | `missing` CONVERSATION_MISSING, CONVERSATION_EMPTY (no message), CONVERSATION_NOT_A_STATEMENT (an anchor that is an assistant message); `revision-mismatch` CONVERSATION_MESSAGE_MISSING; `authority-unavailable` CONVERSATION_STORE_UNAVAILABLE |
 
 The work resolver never reads a status: Backlog.md's verdicts stay Backlog.md's (P-02.2).
 Backlog.md 1.55.3 refuses `task list --json` when two tasks share an id, so a live duplicate
@@ -176,7 +176,15 @@ authority for both. `build_registry(conversations=<path>)`, and `--conversations
   (it is read).
 - **A statement is an Owner's user message.** Its content is the durable source of every quote
   (decision 0025 point 6). An assistant message is display state the shell wrote: a `message`
-  reference to one answers `missing` (`MESSAGE_NOT_A_STATEMENT`), never resolved.
+  reference to one answers `missing` (`MESSAGE_NOT_A_STATEMENT`), never resolved. A
+  `conversation` reference stands in the statement role too, so it resolves only when its anchor
+  (the pinned message, or unpinned the thread's last message) is an Owner statement: an anchor
+  that is an assistant message answers `missing` (`CONVERSATION_NOT_A_STATEMENT`) and a thread
+  with no message `missing` (`CONVERSATION_EMPTY`) (I1 work design, R5). The trace still counts
+  such a node as the objective's statement node (`NO_SOURCE_STATEMENT` is unchanged); it is an
+  explicit `unresolved` uncertainty, so the projection is incomplete. A pinned thread whose last
+  message is a reply is current-checked at that reply for freshness only (superseded when the
+  thread went on).
 - **Identities.** A thread id is the store's (a UUID version 4); a message id is
   assistant-ui's (seven characters of `[0-9A-Za-z]`). The grammar takes any native segment, so a
   reference of another shape (the P-01.2 corpus's `conversation:qual-02/message-1`, for
@@ -375,28 +383,27 @@ uncertainty, so a projection that uses a sample is never `complete`.
 (its reproducible design commit `8eacfa8…`) and a second commit that declares outcome
 `5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a` for O1 (as the acceptance recorder would);
 Backlog.md's own recorded output for the two P-02.1 tasks, replayed by the fake Backlog.md;
-and an integration store with one reservation per task (`work-TASK-<n>/implement/revision-1`,
-intent `{workRef, outcomeRef}`); and an Owner conversation store holding no thread. It traces
-`outcome:<id>@<declaring commit>` twice:
+an integration store with one reservation per task (`work-TASK-<n>/implement/revision-1`,
+intent `{workRef, outcomeRef}`); and an Owner conversation store, made by its own API, that
+holds the P-01.2 corpus statements the change cites, as Owner statements under store
+identities (`build_conversations`). A third commit points the intent record at those store
+identities (`cite_store`; the design commit, whose pointers the recorded tasks carry, is left
+as it is). It traces `outcome:<id>@<third commit>` twice:
 
 | Node | Attempt sample | Real registry |
 |---|---|---|
-| `conversation:qual-02/message-1` (via Q1; its quote not checked: the statement did not resolve) | authoritative, missing (`CONVERSATION_MISSING`) | the same |
-| `conversation:qual-02/message-2` (source and acceptance) | authoritative, missing (`CONVERSATION_MISSING`) | the same |
+| `conversation:<thread>/Q02msg1` (via Q1; its quote verified against the store's bytes, `#span:0+198`) | authoritative, resolved, current | the same |
+| `conversation:<thread>/Q02msg2` (source and acceptance) | authoritative, resolved, current | the same |
 | the outcome (O1 of `qual-02-search-freshness`) | authoritative, resolved, current | the same |
-| six design pointers: proposal, design and spec at the design commit (cited by the tasks) and at the declaring commit (the change's files) | authoritative, resolved, current | the same |
+| six design pointers: proposal, design and spec at the design commit (cited by the tasks) and at the third commit (the change's files) | authoritative, resolved; current, but the tasks' proposal pointer is superseded (the third commit changed `proposal.md`) | the same |
 | `backlog:TASK-1`, `backlog:TASK-2` | authoritative, resolved | the same |
 | two `openhands:conversation/<reserved uuid>` | sample, resolved | unavailable (E-01.3.1, E-01.4.1) |
 
-Both verdicts are `incomplete`: with the attempt sample, two `sample-authority` and two
-`unresolved` (`CONVERSATION_MISSING`) uncertainties; with the real registry, four `unresolved`
-(two `CONVERSATION_MISSING`, two `AUTHORITY_NOT_YET_AVAILABLE`). The edges are identical in
-both: they are asserted by records, not by the authorities. Until U-02.2 the statement sample
-resolved both statements and verified Q1's quote (`#span:0+198`); the example's intent record
-cites P-01.2 corpus ids, which the Owner conversation store never holds, so the statements are
-now answered missing by the real store, and the whole chain, the quote included, is shown
-resolving against a store that holds them in `test_trace.py` (`StoreStatements`, and
-`Contract`'s complete projection).
+Both verdicts are `incomplete`: with the attempt sample, two `sample-authority` uncertainties
+and one `superseded` (the tasks' proposal pointer); with the real registry, two `unresolved`
+(`AUTHORITY_NOT_YET_AVAILABLE`) and the same `superseded`. The edges are identical in both:
+they are asserted by records, not by the authorities. Until U-02.2 a statement sample resolved
+the corpus ids themselves; since then the statements are the Owner conversation store's.
 
 ## Not yet verified
 
@@ -424,8 +431,12 @@ resolving against a store that holds them in `test_trace.py` (`StoreStatements`,
 - The attempt reservation's intent keys `workRef` and `outcomeRef`: they follow the
   blueprint's illustrative correlation receipt; no accepted record fixes the intent's shape,
   and no dispatcher writes reservations yet (E-01.x).
-- Tasks Backlog.md does not list with `task list --json` are not enumerated by the
-  traversal: an archived task (gate G11) resolves by its reference, but the traversal never
-  reaches one through `fulfilled_by`, and whether other tasks are omitted was not examined.
+- Tasks Backlog.md does not list with `task list --json` (an archived task, gate G11) are not
+  enumerated by the traversal. Such a task resolves by its reference, and the traversal
+  reaches it only through an attempt reservation whose intent cites the outcome
+  (`outcomeRef`) and the task (`workRef`). Without one (no reservation, or one without
+  `outcomeRef`) the task is omitted silently: no node and no uncertainty names it
+  (`test_trace.Tasks.test_a_task_backlog_does_not_list_is_reached_only_through_a_reservation_citing_the_outcome`).
+  The traversal is not changed here. Whether other tasks go unlisted was not examined.
 - A live integration store at its trusted-host location: only fixture stores in throwaway
   directories were read.

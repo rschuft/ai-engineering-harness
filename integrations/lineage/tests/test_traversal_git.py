@@ -178,7 +178,7 @@ class ExampleCase(unittest.TestCase):
         fx.require_repository_access()  # without Dulwich: REPOSITORY_NEEDS_DULWICH, never a skip
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-git-'))
         cls.addClassCleanup(fx.rmtree, cls.tmp)
-        cls.repo, cls.store, cls.declared = E.build(cls.tmp)
+        cls.repo, cls.store, cls.declared, cls.cited = E.build_example(cls.tmp)   # the committed example's sources
         cls.outcome = f'outcome:{E.OUTCOME}@{cls.declared}'
 
     def setUp(self):
@@ -188,8 +188,12 @@ class ExampleCase(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def trace(self, samples=True, repo=None):
+        """The example's traversal (pinned at the commit that cites the Owner conversation store, as
+        lineage_example.example traces it), or, in another project REPO built by build_project, the outcome
+        pinned at its declaring commit."""
+        outcome = self.outcome if repo else f'outcome:{E.OUTCOME}@{self.cited}'
         repo = repo or self.repo
-        return E.run_trace(self.outcome, E.authorities(repo, samples), repo, self.store)
+        return E.run_trace(outcome, E.authorities(repo, samples), repo, self.store)
 
     def assertEnded(self, sessions):
         self.assertTrue(sessions)

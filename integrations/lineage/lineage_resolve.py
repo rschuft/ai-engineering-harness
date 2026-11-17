@@ -703,12 +703,19 @@ class MessageResolver(_ConversationStoreResolver):
 
 
 class ConversationResolver(_ConversationStoreResolver):
-    """Owner conversation threads, read-only. Unpinned, a thread resolves at its last message (by the
-    store's ``seq``); pinned ``@<message>``, the thread as it stood through that message, which must be one of
-    its messages (else revision-mismatch, CONVERSATION_MESSAGE_MISSING). The answer reports that message's
-    id as ``observed_revision`` and the sha256 of its content (its latest revision) as ``observed_digest``;
-    ``current`` answers at the thread's last message, so a thread that went on after the pin shows as
-    superseded."""
+    """Owner conversation threads, read-only. A ``conversation`` reference stands in the statement role, so
+    it resolves only at an Owner statement (I1 work design, R5: an assistant row is display state the
+    browser wrote, never a statement). Its **anchor** is the pinned ``@<message>``, which must be one of
+    the thread's messages (else revision-mismatch, CONVERSATION_MESSAGE_MISSING), or, unpinned, the
+    thread's last message (by the store's ``seq``). The anchor must be a user message, author ``owner``
+    (else missing, CONVERSATION_NOT_A_STATEMENT), and a thread with no message is missing
+    (CONVERSATION_EMPTY). The anchor's content is checked by ``lineage.check_message_content`` as the
+    message resolver checks a statement's. The answer reports the anchor's id as ``observed_revision`` and
+    the sha256 of its content as ``observed_digest``.
+
+    ``current`` answers at the thread's last message. For an unpinned reference that message is the
+    anchor, so it is held to the same rule; for a pinned one it is read for freshness only, so a thread
+    that went on after the pin (with a reply or another statement) shows as superseded."""
     kind = 'conversation'
     outcomes = frozenset({L.RESOLVED, L.MISSING, L.REVISION_MISMATCH, L.AUTHORITY_UNAVAILABLE})
 
@@ -729,12 +736,22 @@ class ConversationResolver(_ConversationStoreResolver):
                 return say(L.REVISION_MISMATCH, 'CONVERSATION_MESSAGE_MISSING',
                            f'thread {reference.thread} has no message {reference.through_message!r}')
             at = through[0]
+        elif messages:
+            at = messages[-1]
         else:
-            at = messages[-1] if messages else None
-        if at is None:
-            return say(L.RESOLVED, detail=f'thread {reference.thread} (no message yet)')
-        return say(L.RESOLVED, detail=f'thread {reference.thread} through message {at.message_id} (seq {at.seq} '
-                   f'of {len(messages)})', observed_revision=at.message_id, observed_digest=at.sha256)
+            return say(L.MISSING, 'CONVERSATION_EMPTY',
+                       f'thread {reference.thread} has no message, so no Owner statement')
+        where = (f'thread {reference.thread} through message {at.message_id} (seq {at.seq} of {len(messages)})')
+        if not pinned and reference.through_message is not None:
+            # current of a pinned reference: the thread's last message, for freshness only (not its anchor)
+            return say(L.RESOLVED, detail=where, observed_revision=at.message_id, observed_digest=at.sha256)
+        if (at.role, at.author) != (STATEMENT_ROLE, 'owner'):
+            return say(L.MISSING, 'CONVERSATION_NOT_A_STATEMENT',
+                       f'{where} is an {at.role} message (display state the Owner UI shell wrote), not an Owner '
+                       'statement')
+        result = L.check_message_content(L.MessageRef(reference.thread, at.message_id), at.content, self.authority)
+        return say(result.outcome, result.code, result.detail or where, observed_revision=at.message_id,
+                   observed_digest=result.observed_digest)
 
 
 # ---------------------------------------------------------------------------

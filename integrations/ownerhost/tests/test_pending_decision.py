@@ -263,7 +263,9 @@ class PendingDecisionAcrossRestarts(unittest.TestCase):
             L.message_reference(self.thread, 'U000001', content).text: (L.RESOLVED, None, TR.AUTHORITATIVE),
             L.span_reference(self.thread, 'U000001', content, 0, len(b'Start')).text:
                 (L.RESOLVED, None, TR.AUTHORITATIVE),
-            f'conversation:{self.thread}': (L.RESOLVED, None, TR.AUTHORITATIVE),
+            # The thread's last message is the decision's reply, never a statement (I1 work design, R5): unpinned, the
+            # thread does not stand for an Owner statement; pinned at the Owner's statement, it does.
+            f'conversation:{self.thread}': (L.MISSING, 'CONVERSATION_NOT_A_STATEMENT', TR.AUTHORITATIVE),
             f'conversation:{self.thread}@U000001': (L.RESOLVED, None, TR.AUTHORITATIVE),
             f'conversation:{self.thread}/A000001': (L.MISSING, 'MESSAGE_NOT_A_STATEMENT', TR.AUTHORITATIVE),
             f'conversation:{self.thread}/U000009': (L.MISSING, 'MESSAGE_MISSING', TR.AUTHORITATIVE),
@@ -276,7 +278,7 @@ class PendingDecisionAcrossRestarts(unittest.TestCase):
                 self.assertEqual((result.outcome, result.code, mode), expected)
                 self.assertEqual(result.authority, 'Owner conversation store')
         self.assertEqual(authorities.content(L.parse(statement)), 'Start the change.'.encode('utf-8'))
-        head, _ = authorities.ask(L.parse(f'conversation:{self.thread}'), 'resolve')
+        head, _ = authorities.ask(L.parse(f'conversation:{self.thread}@U000001'), 'current')   # freshness: the head
         self.assertEqual(head.observed_revision, 'A000001')
         self.assertEqual(self.store.canonical_dump(), before)
 
