@@ -116,16 +116,16 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 337,
+   "tests": 340,
    "launches": 1472,
-   "mkdtemp": 501,
-   "wall_s": 99.0
+   "mkdtemp": 507,
+   "wall_s": 97.4
   },
   "agentfixture": {
-   "tests": 104,
-   "launches": 55,
-   "mkdtemp": 59,
-   "wall_s": 28.4
+   "tests": 112,
+   "launches": 64,
+   "mkdtemp": 63,
+   "wall_s": 38.5
   }
  },
  "categories": {
@@ -340,6 +340,18 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at 45b90ba (U-01.2 part 2: the projection's session-detail action and its tests) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture",
+    "ownerhost"
+   ],
+   "revision": "6563ff56d36f654f3195b80b5995c73b8e95dd13",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 6563ff5 (U-01.2's review fix round: the fixture's Host rule and header record, the driver's backstop and failure paths, the session action's create rule) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
