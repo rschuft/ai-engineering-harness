@@ -1873,6 +1873,20 @@
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
+      "id": "op-intent-capture",
+      "name": "Capture an Owner request as an OpenSpec intent change",
+      "mechanism": "On the Owner's request in the Owner host, authenticated by the Owner UI session credential: one Owner message in the request form's fixed layout, whose stored bytes match the request's sha256, becomes one intent-record/v1 change (openspec/changes/<change>/) committed in the project repository behind a write-ahead receipt (owner-ui/intent-capture/v1/<thread>/<message>) in the integration store; idempotent by message id; no model is called",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-owner-ui-session"],
+      "assets": ["store-owner-conversation", "store-integration", "repo-owner-local"],
+      "planned_performer": "integration-service",
+      "performed_via": "Built (P-01.3, 2026-11-16; its verdict pending; decision 0025 point 8; integrations/ownerhost/capture.py): the Integration process performs it on the Owner's authenticated request, reading the statement from the Owner conversation store, never from the request. The commit's author and committer are the commissioning user's own git identity, configured explicitly per principal (components.owner_host.git_identities) and refused when absent, malformed or a placeholder; no agent or component is a git author. Not performed live: throwaway stores and repositories only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-01.3", "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md", "evidence/I1-integration-design-2026-11-16.md", "integrations/ownerhost/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "op-model-selection",
       "name": "Select the models inside a provider envelope",
       "mechanism": "Record the exact model identifiers the broker may serve inside the Owner's provider-envelope authorization (select-models), resting on the governing provider-envelope receipt, as a write-ahead receipt at the next position of the one series model-selection/v1/<n> in the integration store; the broker starts and admits only the selected models",

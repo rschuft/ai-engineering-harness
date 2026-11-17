@@ -131,7 +131,7 @@ which each operation they perform today moves to its planned principal.
 
 | Role | Principal | Agent-controlled | Operations | Capabilities | Credentials | Status |
 |---|---|---|---|---|---|---|
-| `owner` The Owner | `owner` | no | `op-guest-boundary-change`, `op-host-privileged-change`, `op-git-push-public`, `op-policy-change`, `op-protected-merge`, `op-design-acceptance`, `op-manifest-promotion`, `op-model-selection`, `op-effect-store-custody` | `cap-code-merge-integration` | `cred-uac-consent`, `cred-gitea-owner-account`, `cred-owner-ui-session`, `cred-conversation-runtime-access` | planned |
+| `owner` The Owner | `owner` | no | `op-guest-boundary-change`, `op-host-privileged-change`, `op-git-push-public`, `op-policy-change`, `op-protected-merge`, `op-design-acceptance`, `op-manifest-promotion`, `op-model-selection`, `op-effect-store-custody`, `op-intent-capture` | `cap-code-merge-integration` | `cred-uac-consent`, `cred-gitea-owner-account`, `cred-owner-ui-session`, `cred-conversation-runtime-access` | planned |
 | `owner-os-account` The Owner's host account | `owner-os-account` | no | `op-guest-lifecycle`, `op-guest-exec`, `op-exchange`, `op-session-key-export`, `op-provision-fetch` | - | `cred-guest-ssh-key`, `cred-owner-github`, `cred-owner-provider-login`, `cred-native-claude-code-token` | observed |
 | `gitea-site-admin` Gitea site administrator | `gitea-site-admin` | no | `op-gitea-administration`, `op-ci-administration` | - | `cred-gitea-admin` | planned |
 | `planner` Planning agent | `engineering-agent` | yes | - | `cap-read-repositories`, `cap-push-proposal-branch`, `cap-open-pr` | `cred-gitea-bot-planner`, `cred-conversation-keys`, `cred-inference-attempt-token` | planned |

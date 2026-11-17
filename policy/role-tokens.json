@@ -164,7 +164,8 @@
           "op-design-acceptance",
           "op-manifest-promotion",
           "op-model-selection",
-          "op-effect-store-custody"
+          "op-effect-store-custody",
+          "op-intent-capture"
         ],
         "capabilities": [
           "cap-code-merge-integration"
