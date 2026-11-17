@@ -146,6 +146,7 @@ class LiveBytes(TA.Bound):
         self.assertEqual(authority_keys(record), [])
         self.assertUnlabelled()
 
+
 class NotLaunchedLabel(TA.Bound):
     """U-04.1's review (rv12, ruling 4): a launch receipt written ``not-launched`` because the gate could not read the
     admitted values still carries the bound authority, from the pinned route allowlist (``bound_label``'s source); a
@@ -178,6 +179,18 @@ class NotLaunchedLabel(TA.Bound):
         record = LG.launch_record(self.store, result.attempt_id)
         self.assertEqual(record['verdict'], LG.NOT_LAUNCHED)
         self.assertNotIn('authority', record)
+
+    def test_a_defect_reading_the_bound_authority_is_a_visible_problem(self):
+        """The review's re-check, ruling 4: the gate still writes its receipt (unlabelled), and the defect is named
+        among its problems, never swallowed."""
+        result = self.fixture_attempt()
+        with mock.patch.object(di, 'bound_label', side_effect=TypeError('a defect')):
+            problems = self.gate(result)(result.conversation_id)
+        self.assertIn('the bound authority could not be read (TypeError)', problems)
+        record = LG.launch_record(self.store, result.attempt_id)
+        self.assertEqual(record['verdict'], LG.NOT_LAUNCHED)
+        self.assertNotIn('authority', record)
+        self.assertIn('the bound authority could not be read (TypeError)', record['problems'])
 
 
 if __name__ == '__main__':

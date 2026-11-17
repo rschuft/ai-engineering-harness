@@ -257,8 +257,9 @@ def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str
             # cannot be read either there is none to copy and the receipt stays unlabelled (a live one: nothing)
             try:
                 label = di.bound_label(integration_store, operation_key, read_artifact)
-            except Exception:  # noqa: BLE001 - the receipt is written whatever the label's read meets
+            except Exception as exc:  # noqa: BLE001 - the receipt is written whatever the label's read meets
                 label = {}
+                problems.append(f'the bound authority could not be read ({type(exc).__name__})')
         if conversation_id != reserved_conversation:
             problems.append('the inspect was asked for another conversation than the attempt\'s')
         else:
