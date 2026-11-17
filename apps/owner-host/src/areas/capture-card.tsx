@@ -41,6 +41,12 @@ export const CaptureCard: ToolCallMessagePartComponent<CaptureArgs, CaptureResul
           <p className="owner-chat__capture-commit">
             Commit <code data-testid="capture-commit">{result.commit}</code> in the project repository.
           </p>
+          {result.workTree ? (
+            <p className="owner-chat__capture-work-tree" data-testid="capture-work-tree">
+              The branch holds this commit, but the project&apos;s work tree or index does not hold its files
+              ({result.workTree}): run git status in the project repository before you edit it.
+            </p>
+          ) : null}
           <p className="owner-chat__capture-note">
             Your objective and acceptance criteria are recorded in your own words; a suggestion is recorded as a
             hypothesis. Nothing was decided by a model.

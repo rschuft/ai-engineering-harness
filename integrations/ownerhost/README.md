@@ -32,7 +32,7 @@ endpoint.
 | `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
 | `tests/test_history_listener.py` | U-02.1's proof against the real service: a reload after a restart, repeats, the refusals, a quote cut from a received statement and a changed source byte (integration, Windows) |
 | `tests/test_pending_decision.py` | U-02.2's proof against a real Integration process the test starts (`app.serve` through `serve_on_port.py`) on a free loopback port and a throwaway state directory, stopped by its stop request and started again twice: the shell's recorded pending-decision requests replayed, the thread and its pending call back once, a reconnect adding nothing, the answer an update of the same id; the lineage resolvers reading the store it wrote (integration) |
-| `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals; the crash windows; the commit identity and its refusals; no socket, no process, no model (integration) |
+| `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals (bidirectional controls included); the crash windows, the commit id recorded before the branch moves, and settlement through every branch and parent (a branch switch, a merge without fast-forward, packed references, a rewritten history); a confirmed receipt under another configuration; the work-tree flag; the store's refusals; the commit identity, its placeholder classes and the session's principal; the harness checkout refused as the project; no socket, no process, no model (integration) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
@@ -126,7 +126,7 @@ their summary.
 
 | Route | Answer |
 |---|---|
-| `POST /threads/{thread_id}/messages/{message_id}/capture` `{sha256}` | `{change, commit, created, receipt, state, quote, files, project}`; `created` is false when the message was captured already |
+| `POST /threads/{thread_id}/messages/{message_id}/capture` `{sha256}` | `{change, commit, created, receipt, state, quote, files, project}`, and `workTree` when the branch holds the commit and the work tree or the index does not hold its files; `created` is false when the message was captured already |
 
 **No model is called.** The structure of a requested change comes from the Owner: the shell's request form
 (`apps/owner-host/src/areas/RequestForm.tsx`) sends **one** message in a fixed layout, and the capture parses that
@@ -140,22 +140,40 @@ Acceptance criteria:
 Suggestion: <one line>  (zero or more)
 ```
 
-LF between lines, no final line break, every value one non-empty line with no surrounding whitespace and no control or
-separator character but a tab. Anything else is `CAPTURE_LAYOUT_INVALID` (422) naming the line: nothing is guessed,
-trimmed or reordered. The shell's model-free chat adapter asks for the capture of a message that begins `Change: `,
-once the history adapter has stored it, and replies with a card built only from the answer or the refusal.
+LF between lines, no final line break, every value one non-empty line with no surrounding whitespace, no control or
+separator character but a tab, and no bidirectional control character (U+202A to U+202E, U+2066 to U+2069: they make
+the text shown differ from the bytes recorded). Zero-width characters (U+200B to U+200D, U+2060) are accepted and
+recorded as they are. Anything else is `CAPTURE_LAYOUT_INVALID` (422) naming the line: nothing is guessed, trimmed or
+reordered. The shell's model-free chat adapter asks for the capture of a message that begins `Change: `, once the
+history adapter has stored it, and replies with a card built only from the answer or the refusal.
 
-**In order, each refusal changing nothing:** the project configuration (`CAPTURE_PROJECT_UNCONFIGURED`,
-`CAPTURE_CONFIG_INVALID`); the message: an Owner statement (`CAPTURE_NOT_A_STATEMENT`) whose **stored bytes** have the
-request's sha256 (`CAPTURE_MESSAGE_MISMATCH`, 409); the layout; the commit identity (below); the project repository
-(`CAPTURE_PROJECT_UNAVAILABLE`: the configured path must be the root of a work tree with a commit on a branch; nothing
-above it is searched) and a new change name (`CAPTURE_CHANGE_EXISTS`). The store's own codes (`THREAD_NOT_FOUND`,
-`MESSAGE_NOT_FOUND`) and `REQUEST_INVALID` keep their meaning.
+**In order, each refusal changing nothing:**
+
+| Code | Status | When |
+|---|---|---|
+| `REQUEST_INVALID` | 400 | the body is not `{sha256}` with 64 lower-case hex digits |
+| `CAPTURE_PROJECT_UNCONFIGURED`, `CAPTURE_CONFIG_INVALID` | 503 | `components.owner_host` is absent, or malformed |
+| `THREAD_NOT_FOUND`, `MESSAGE_NOT_FOUND` | 404 | the store's own codes |
+| `CAPTURE_NOT_A_STATEMENT` | 409 | the message is not an Owner statement |
+| `CAPTURE_MESSAGE_MISMATCH` | 409 | the request's sha256 is not the **stored bytes'** |
+| `CAPTURE_LAYOUT_INVALID` | 422 | the layout, naming the line; or a record the layout admits that does not pass `tools/check_intent_record.py` |
+| `CAPTURE_SESSION_UNRECOGNIZED` | 403 | the authenticated session is not decision 0025's one-Owner session (`session_principal`) |
+| `COMMIT_IDENTITY_UNAVAILABLE`, `COMMIT_IDENTITY_INVALID`, `COMMIT_IDENTITY_PLACEHOLDER` | 503 | the commit identity (below) |
+| `CAPTURE_STORE_UNAVAILABLE` | 503 | no integration store is named, or the store refuses (it does not open, a restore epoch is open, a transition is refused) before anything is on the branch |
+| `CAPTURE_PROJECT_UNAVAILABLE` | 503 | the configured path is not the root of a work tree with a commit on a branch (nothing above it is searched) |
+| `CAPTURE_PROJECT_IS_HARNESS` | 503 | the configured path is the harness checkout the Integration process runs from, or shares its git common directory (a worktree of it), checked before any receipt |
+| `CAPTURE_CHANGE_EXISTS` | 409 | the change name is taken |
+| `CAPTURE_RECEIPT_CONFLICT` | 409 | the message's receipt holds another intent: another project (id or path), change or message digest |
+| `CAPTURE_COMMIT_REFUSED` | 409 | the repository refuses the commit before anything is written (a client hook, local changes, a moved branch three times) |
+| `CAPTURE_COMMIT_UNREACHABLE` | 409 | the receipt recorded a commit no local branch reaches (a rewritten history), and no branch holds one with its trailer |
+| `CAPTURE_GIT_FAILED` | 500 | the repository cannot be read or written |
+| `CAPTURE_OUTCOME_UNKNOWN` | 500 | the store refuses once a commit may be on the branch (the detail names it), or a receipt is `dispatched` with no recorded commit |
 
 **The change.** One commit through `repository_access.Repository.write_commit` (a compare-and-swap of the branch) adds
-exactly `openspec/changes/<change>/proposal.md` and `.openspec.yaml` (schema `intent-driven`, the message's creation
-date). Its intent record (`intent-record/v1`, `normalized_by: agent:owner-host-capture@1.0.0`): Q1 is the whole message
-under its span anchor (`conversation:<thread>/<message>#span:0+<n>:sha256:<digest>`, cut with
+exactly `openspec/changes/<change>/proposal.md` and `.openspec.yaml` (schema `intent-driven`, and `created:` the date of
+the message's `createdAt`, which is the **client's** clock as the shell stated it when it appended the message, not
+the server's). Its intent record (`intent-record/v1`, `normalized_by: agent:owner-host-capture@1.0.0`): Q1 is the whole
+message under its span anchor (`conversation:<thread>/<message>#span:0+<n>:sha256:<digest>`, cut with
 `lineage.span_reference` from the stored bytes); O1, each ACn and each Mn are exact byte spans of it, `attributed_to:
 owner`, `source: Q1`; a suggestion is a Proposed Method with `claim_type: hypothesis` and its Hypothesis, never the
 objective; the Hypotheses' one sentence is the only statement the capture wrote. The record passes
@@ -163,26 +181,57 @@ objective; the Hypotheses' one sentence is the only statement the capture wrote.
 trailer `Intent-Capture: owner-ui/intent-capture/v1/<thread>/<message>`.
 
 **One change per message.** The write-ahead receipt `owner-ui/intent-capture/v1/<thread>/<message>` (format
-`aieh-owner-ui-intent-capture/1`) is reserved in the managed integration store before the commit, and goes to
-`dispatched` and `confirmed` with the commit once the branch has moved (the capturing session in the detail; the
-message, its sha256 and its session in the intent). A confirmed receipt answers its commit. A receipt left `reserved`
-or `dispatched` (a process that ended between the receipt and the confirmation) is settled **by reading the project
-repository first**: the commit carrying its trailer on HEAD's first-parent history confirms it, and nothing is written
-again; only when no such commit is there is the commit made. A refused commit (`CAPTURE_COMMIT_REFUSED`,
-`CAPTURE_GIT_FAILED`) writes nothing and leaves the receipt `reserved`, so the same message is captured once the
-repository is repaired; a branch that moves under the capture is read again (at most three times).
+`aieh-owner-ui-intent-capture/1`) is reserved in the managed integration store before the commit (the message, its
+sha256 and its session, the project's id and path, the change and the files' digests in the intent). When the commit's
+objects are written and **before the branch moves**, it goes to `dispatched` with the commit id (`write_commit`'s
+`check`); once the branch has moved, to `confirmed` (the capturing session in each detail).
+
+- A confirmed receipt answers its commit, built from the receipt's own intent, never from the current configuration,
+  and only for the request it was made for: another project (id or path), change or message digest is
+  `CAPTURE_RECEIPT_CONFLICT`.
+- A receipt left `reserved` or `dispatched` (a process that ended between the receipt and the confirmation) is
+  settled **by reading the project repository first**, through every local branch (`refs/heads/*`, loose and
+  packed) and every parent, not the first parent only: the recorded commit when a branch reaches it, else a commit
+  carrying the trailer. When one is there the receipt is confirmed with it and nothing is written again, whichever
+  branch is checked out (a branch switch, a merge without fast-forward and a deleted branch included). When the
+  branch checked out holds the captured files and the work tree or the index does not (a process that ended between
+  the branch's move and the work tree), the answer says so in `workTree`, and the shell's card tells the Owner.
+- A recorded commit that no branch reaches (a rewritten history) is `CAPTURE_COMMIT_UNREACHABLE`, and nothing is
+  written: putting the commit back on a branch has it answered; otherwise the request is sent again as a new message.
+- A refused commit (`CAPTURE_COMMIT_REFUSED`, `CAPTURE_GIT_FAILED`) before its objects are recorded writes nothing and
+  leaves the receipt `reserved`, so the same message is captured once the repository is repaired. A branch that moves
+  under the capture is read again (at most three times); when it moves between the recording and the update, the
+  receipt keeps the first commit id and the later attempt's commit is found by its trailer. A refusal after the
+  recording leaves the receipt `dispatched`, and the next capture settles it as above.
+- Captures are serialized: the route runs the capture on the server's one event loop, so **a capture blocks the
+  process's other routes** (the thread and history routes included) while it runs; a capture reads and writes one
+  local repository and the store, with no network.
+
+The branch names come from the files reference backend (the only one the repository-access module opens), read in
+`capture.py` from the git common directory; each name is resolved, and each commit read, through the repository-access
+module.
 
 **Who commits.** The commissioning user is the author and the committer of the commits the harness makes on that
 user's behalf: the commit is made under the user's own git identity, and the harness is the user's mechanism. In I1
-the user is the one enrolled Owner, the principal `owner` (every Owner UI session is his; the conversation store
-records his statements with that author). Agents and components get no git identity: provenance lives in the intent
-record (`normalized_by`), the lineage (the message's bytes, sha256 and session) and the evidence and receipts, and
-authorship grants nothing. The identity is set explicitly, per principal, under `components.owner_host.git_identities`
-(below); it is never read from git configuration or the environment and never inferred, and there is no shared default
-or fallback. Refused, with nothing written and no receipt: `COMMIT_IDENTITY_UNAVAILABLE` (none for the principal;
-another principal's is never used), `COMMIT_IDENTITY_INVALID` (not `Name <email>`, a line break, `<` or `>` in the
-name), `COMMIT_IDENTITY_PLACEHOLDER` (an invented placeholder domain: `localhost`, or under `.invalid`, `.localhost`,
-`.example` or `.test`). A GitHub no-reply address is accepted, and so is any other real address the user configured.
+the user is the one enrolled Owner: `session_principal` maps decision 0025's one-Owner session (every Owner UI session
+is his; the conversation store records his statements with author `owner`) to the principal `owner`, and is the only
+place a session becomes a principal. Agents and components get no git identity: provenance lives in the intent record
+(`normalized_by`), the lineage (the message's bytes, sha256 and session) and the evidence and receipts, and authorship
+grants nothing. The identity is set explicitly, per principal, under `components.owner_host.git_identities` (below); it
+is never read from git configuration or the environment and never inferred, and there is no shared default or
+fallback. Refused, with nothing written and no receipt:
+
+- `COMMIT_IDENTITY_UNAVAILABLE`: none for the principal; another principal's is never used.
+- `COMMIT_IDENTITY_INVALID`: not `Name <email>` (a line break, `<` or `>` in the name); a name with no visible
+  character, or with a control or format (Unicode Cf) character, such as a zero-width space or a bidirectional
+  control; an email that is not ASCII (a full-width or ideographic dot is not a dot).
+- `COMMIT_IDENTITY_PLACEHOLDER` (decision 0028 point 5, its list extended by the engineering manager on 2026-11-16):
+  `localhost`, or under `.invalid`, `.localhost`, `.example` or `.test`; `example.com`, `example.net`,
+  `example.org` (RFC 2606) or below them; under `.local`, `.internal`, `.home.arpa` or `.lan`; an IP literal,
+  bracketed (`[192.0.2.1]`) or bare (`192.0.2.1`, `127.1`, `::1`); a single label (`user@host`, git's own fallback
+  shape).
+
+A GitHub no-reply address is accepted, and so is any other real address the user configured; `.onion` is accepted.
 This is not decision 0025's undecided "separate host identity for the service", which is an operating-system account.
 
 **Configuration.** service.py, never the server, reads `components.owner_host` of `config.yml` and passes it to the
@@ -201,6 +250,10 @@ components:
 The `git_identities` value shown is a placeholder that `COMMIT_IDENTITY_INVALID` refuses until the user replaces it with
 his own identity. Absent, the capture answers `CAPTURE_PROJECT_UNCONFIGURED`; malformed, `CAPTURE_CONFIG_INVALID`; the service itself
 starts either way. A change of the configuration takes effect at the next start.
+
+The configured identity is not a secret and is not kept as one: `components.owner_host`, `git_identities` included,
+is passed on the server process's command line (`--owner-host-config`), which any process of the same user can read,
+and written to the run record (`<state>/owner-host/run.json`, its configuration snapshot).
 
 ## Pending decisions across a restart (U-02.2)
 

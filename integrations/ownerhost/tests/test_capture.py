@@ -25,7 +25,8 @@ Each proof clause of P-01.3, and slice 8's additions, with its falsifier:
   absent, another principal's, a placeholder domain or a malformed identity is refused with nothing written, and the
   same message is captured once the identity is configured.
 
-Every identity here is synthetic in a reserved form (a GitHub no-reply address with a made-up id and login).
+Every identity here is synthetic (a GitHub no-reply address with a made-up id and login, or a placeholder the capture
+refuses), and every commit is made in a throwaway repository.
 """
 from __future__ import annotations
 
@@ -104,6 +105,10 @@ class Rig(unittest.TestCase):
     def build(self, config=None):
         self.capturer = C.Capture(self.config if config is None else config, self.receipts)
         self.app = A.create_app(lambda: self.store, clock=lambda: T.stamp(NOW), capturer=self.capturer)
+
+    def session(self):
+        """The authenticated session as app.py hands it to the capture (Session.public())."""
+        return self.record.public()
 
     def append(self, message_id, text, parent=None):
         self.store.append_message(self.thread_id, user_item(message_id, text, parent),
@@ -505,7 +510,7 @@ class CrashWindows(Rig):
 
     def test_a_crash_between_the_receipt_and_the_commit_yields_one_change(self):
         with self.crash_once(C.ra.Repository, 'write_commit'), self.assertRaises(Crash):
-            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), {'sessionId': 's'})
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
         reservation, _ = self.receipt()
         self.assertEqual(reservation.state, 'reserved')
         self.assertEqual(self.commits(), [self.base])
@@ -516,9 +521,9 @@ class CrashWindows(Rig):
 
     def test_a_crash_after_the_branch_moved_before_the_receipt_is_confirmed_yields_one_change(self):
         with self.crash_once(C.Capture, '_confirm'), self.assertRaises(Crash):
-            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), {'sessionId': 's'})
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
         reservation, _ = self.receipt()
-        self.assertEqual(reservation.state, 'reserved')
+        self.assertEqual(reservation.state, 'dispatched')      # the commit id was recorded before the branch moved
         commits = self.commits()
         self.assertEqual(len(commits), 2)
         answer = self.captured()      # settled by reading the project repository, never written again
@@ -526,12 +531,13 @@ class CrashWindows(Rig):
         self.assertEqual(self.commits(), commits)
         _, events = self.receipt()
         self.assertEqual([(e.to_state, e.reason) for e in events][1:],
-                         [('dispatched', 'settled by reading the project repository'),
+                         [('dispatched', 'the commit is written; the branch moves next'),
                           ('confirmed', 'settled by reading the project repository')])
+        self.assertEqual(json.loads(events[1].detail_json)['commit'], commits[0])
 
     def test_a_receipt_left_reserved_is_settled_from_history_below_later_commits(self):
         with self.crash_once(C.Capture, '_confirm'), self.assertRaises(Crash):
-            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), {'sessionId': 's'})
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
         captured = self.commits()[0]
         fx.write(self.project, {'later.txt': b'later\n'})
         later = fx.commit_all(self.project, 'a later commit on top of the capture')
@@ -549,7 +555,7 @@ class CrashWindows(Rig):
                 raise Crash()
             return original(store, key, to_state, **kwargs)
         with mock.patch.object(store_class, 'transition', transition), self.assertRaises(Crash):
-            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), {'sessionId': 's'})
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
         self.assertEqual(self.receipt()[0].state, 'dispatched')
         commits = self.commits()
         answer = self.captured()
@@ -584,6 +590,375 @@ class CrashWindows(Rig):
         self.assertEqual(answer['commit'], commits[0])
 
 
+class Settlement(Rig):
+    """Review fix S1: the commit id is recorded before the branch moves, and a receipt is settled through every local
+    branch and every parent; a capture reachable from any branch is answered and never written again."""
+
+    def crash_after_the_branch_moved(self):
+        """A process that ends after the branch moved to the capture, before the receipt is confirmed."""
+        def crash(*_args, **_kwargs):
+            raise Crash()
+        with mock.patch.object(C.Capture, '_confirm', crash), self.assertRaises(Crash):
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
+        commit = self.head()
+        self.assertNotEqual(commit, self.base)
+        return commit
+
+    def trailer_commits(self):
+        return fx.git(self.project, 'log', '--all', '--format=%H', '--grep', 'Intent-Capture:').split()
+
+    def side_branch(self):
+        fx.git(self.project, 'checkout', '--quiet', '-b', 'side', self.base)
+        fx.write(self.project, {'side.txt': b'side\n'})
+        return fx.commit_all(self.project, 'side work')
+
+    def test_the_commit_id_is_recorded_in_the_receipt_before_the_branch_moves(self):
+        seen = []
+        original = getattr(C.Capture, '_record', None)
+
+        def record(receipts, key, commit, session_id):
+            original(receipts, key, commit, session_id)
+            reservation = receipts.get(key)
+            dispatched = [e for e in receipts.events(key) if e.to_state == 'dispatched']
+            seen.append((reservation.state, json.loads(dispatched[-1].detail_json)['commit'], commit, self.head()))
+        with mock.patch.object(C.Capture, '_record', staticmethod(record), create=True):
+            answer = self.captured()
+        self.assertEqual(seen, [('dispatched', answer['commit'], answer['commit'], self.base)])
+
+    def test_a_second_change_is_not_made_after_a_branch_switch(self):
+        first = self.crash_after_the_branch_moved()
+        side = self.side_branch()
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+        self.assertTrue('workTree' not in answer, answer)    # the side branch is checked out: nothing to say
+        self.assertEqual(self.head(), side)
+        self.assertEqual(self.trailer_commits(), [first])
+        self.assertEqual(self.receipt()[0].state, 'confirmed')
+
+    def test_a_capture_merged_without_fast_forward_and_its_branch_deleted_is_answered(self):
+        first = self.crash_after_the_branch_moved()
+        self.side_branch()
+        fx.git(self.project, 'merge', '--quiet', '--no-ff', '-m', 'merge main', 'main')
+        fx.git(self.project, 'branch', '-D', 'main')
+        merged = self.head()
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+        self.assertEqual(self.head(), merged)
+        self.assertEqual(self.trailer_commits(), [first])
+
+    def test_a_receipt_without_a_recorded_commit_is_settled_through_every_parent(self):
+        def skip(*_args, **_kwargs):
+            return None
+        with mock.patch.object(C.Capture, '_record', skip, create=True):
+            first = self.crash_after_the_branch_moved()
+        self.assertEqual(self.receipt()[0].state, 'reserved')
+        self.side_branch()
+        fx.git(self.project, 'merge', '--quiet', '--no-ff', '-m', 'merge main', 'main')
+        fx.git(self.project, 'branch', '-D', 'main')
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+        self.assertEqual(self.trailer_commits(), [first])
+
+    def test_the_recorded_commit_is_answered_before_a_copy_carrying_the_trailer(self):
+        first = self.crash_after_the_branch_moved()
+        fx.git(self.project, 'checkout', '--quiet', '-b', 'a-copy', self.base)   # read before main
+        fx.git(self.project, 'cherry-pick', first)
+        copy = self.head()
+        self.assertNotEqual(copy, first)
+        self.assertEqual(sorted(self.trailer_commits()), sorted([first, copy]))
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+
+    def test_a_branch_held_only_in_packed_refs_is_searched(self):
+        first = self.crash_after_the_branch_moved()
+        fx.git(self.project, 'checkout', '--quiet', '-b', 'side', self.base)
+        fx.git(self.project, 'pack-refs', '--all')
+        self.assertFalse((self.project / '.git' / 'refs' / 'heads' / 'main').exists())
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+
+    def test_a_recorded_commit_rewritten_away_is_refused_and_nothing_is_written(self):
+        first = self.crash_after_the_branch_moved()
+        fx.git(self.project, 'reset', '--quiet', '--hard', self.base)
+        answer = self.refused('CAPTURE_COMMIT_UNREACHABLE', 409)
+        self.assertTrue(first in answer['detail'], answer['detail'])
+        self.assertEqual(self.trailer_commits(), [])
+        fx.git(self.project, 'branch', 'restored', first)       # the remedy: put the commit back on a branch
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created']), (first, False))
+        self.assertEqual(self.commits(), [self.base])
+
+
+class SameIntent(Rig):
+    """Review fix S2: a confirmed receipt answers only the request it was made for, from its own intent."""
+
+    def other_project(self):
+        other = self.work / 'other'
+        other.mkdir()
+        fx.git(other, 'init', '--quiet', '-b', 'main')
+        fx.write(other, {'README.md': b'another throwaway project\n'})
+        return other, fx.commit_all(other, 'base')
+
+    def test_a_confirmed_receipt_under_another_project_configuration_is_a_conflict(self):
+        self.captured()
+        other, base = self.other_project()
+        for config in ({**self.config, 'project_repository': str(other), 'project_repository_id': 'other'},
+                       {**self.config, 'project_repository': str(other)},
+                       {**self.config, 'project_repository_id': 'renamed-project'}):
+            with self.subTest(config=config):
+                self.build(config)
+                answer = self.refused('CAPTURE_RECEIPT_CONFLICT', 409)
+                self.assertTrue('commit' not in answer, answer)
+                self.assertEqual(fx.git(other, 'rev-list', 'HEAD').split(), [base])
+
+    def test_the_answer_is_built_from_the_receipt_s_own_intent(self):
+        first = self.captured()
+        later = b'schema: intent-driven\ncreated: 2026-11-17\n'     # what a later version might write
+        with mock.patch.object(C, 'openspec_metadata', lambda _created: later):
+            self.assertEqual(self.captured(), {**first, 'created': False})
+
+
+class IdentityClasses(Rig):
+    """Review fix S3: decision 0028 point 5's placeholder list as extended on 2026-11-16, and the name and email
+    rules."""
+
+    def code(self, identity):
+        try:
+            C.check_git_identity(identity)
+        except C.CaptureRefused as exc:
+            return exc.code
+        return 'ACCEPTED'
+
+    def test_look_alike_and_non_ascii_identities_are_invalid(self):
+        for identity in ('A <a@foo.ｔｅｓｔ>', 'A <a@foo．test>', 'A <a@foo。invalid>',
+                         'A <ä@b.org>', 'A <a@bä.org>', '​ <a@b.org>', 'A​ <a@b.org>',
+                         '‮A <a@b.org>', 'A⁦B <a@b.org>', '́ <a@b.org>', 'A\x07 <a@b.org>',
+                         'A\tB <a@b.org>'):
+            with self.subTest(identity=ascii(identity)):
+                self.assertEqual(self.code(identity), 'COMMIT_IDENTITY_INVALID')
+
+    def test_each_new_placeholder_class_is_refused(self):
+        for identity in ('A <a@example.com>', 'A <a@example.net>', 'A <a@EXAMPLE.org>', 'A <a@mail.example.org>',
+                         'A <a@example.com.>', 'A <a@b.local>', 'A <a@b.internal>', 'A <a@b.home.arpa>',
+                         'A <a@home.arpa>', 'A <a@b.lan>', 'A <a@[127.0.0.1]>', 'A <a@[IPv6:::1]>',
+                         'A <a@127.0.0.1>', 'A <a@10.1.2.3>', 'A <a@127.1>', 'A <a@::1>', 'A <a@mymachine>',
+                         'A <a@xn--test>', 'A <a@localhost.>'):
+            with self.subTest(identity=identity):
+                self.assertEqual(self.code(identity), 'COMMIT_IDENTITY_PLACEHOLDER')
+
+    def test_onion_and_real_addresses_that_only_resemble_a_placeholder_are_accepted(self):
+        for identity in ('A <a@b.onion>', 'A <a@notexample.com>', 'A <a@example.company.org>',
+                         'A <a@b.localnet.org>', 'A <a@lan.party.org>', 'A <a@b.arpa.org>', IDENTITY,
+                         'Ana Émile <a@b.org>', 'A.B. <a.b+c@d-e.org>'):
+            with self.subTest(identity=ascii(identity)):
+                self.assertEqual(self.code(identity), 'ACCEPTED')
+
+    def test_a_new_class_is_refused_through_the_route_with_nothing_written(self):
+        for identity in ('Test Owner <test-owner@example.com>', 'Test Owner <test-owner@[192.0.2.1]>'):
+            with self.subTest(identity=identity):
+                self.build({**self.config, 'git_identities': {'owner': identity}})
+                self.refused('COMMIT_IDENTITY_PLACEHOLDER', 503)
+        self.build({**self.config, 'git_identities': {'owner': 'Test Owner <tést@b.org>'}})
+        self.refused('COMMIT_IDENTITY_INVALID', 503)
+        self.assertFalse(self.receipts.exists())
+
+
+class TheHarnessIsNotTheProject(Rig):
+    """Review fix S4: the configured project repository is never the harness checkout the process runs from, nor a
+    repository sharing its git common directory. The 'harness' here is a throwaway repository put in its place."""
+
+    def setUp(self):
+        super().setUp()
+        self.harness = self.work / 'harness'
+        self.harness.mkdir()
+        fx.git(self.harness, 'init', '--quiet', '-b', 'main')
+        fx.write(self.harness, {'README.md': b'a throwaway stand-in for the harness checkout\n'})
+        self.harness_base = fx.commit_all(self.harness, 'base')
+        patch = mock.patch.object(C, 'HARNESS', self.harness, create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_harness_checkout_is_refused_before_any_receipt(self):
+        self.build({**self.config, 'project_repository': str(self.harness)})
+        self.refused('CAPTURE_PROJECT_IS_HARNESS', 503)
+        self.assertEqual(fx.git(self.harness, 'rev-list', 'HEAD').split(), [self.harness_base])
+        self.assertFalse(self.receipts.exists())
+
+    def test_a_worktree_sharing_the_harness_s_common_directory_is_refused(self):
+        tree = self.work / 'harness-tree'
+        fx.git(self.harness, 'worktree', 'add', '--quiet', '-b', 'tree', str(tree))
+        self.build({**self.config, 'project_repository': str(tree)})
+        self.refused('CAPTURE_PROJECT_IS_HARNESS', 503)
+        self.assertEqual(fx.git(tree, 'rev-list', 'HEAD').split(), [self.harness_base])
+        self.assertFalse(self.receipts.exists())
+
+    def test_the_harness_checkout_is_refused_when_its_git_directory_cannot_be_read(self):
+        self.build({**self.config, 'project_repository': str(self.harness)})
+        with mock.patch.object(C, 'harness_common_dir', lambda: None, create=True):
+            self.refused('CAPTURE_PROJECT_IS_HARNESS', 503)
+        self.assertEqual(fx.git(self.harness, 'rev-list', 'HEAD').split(), [self.harness_base])
+
+    def test_a_separate_clone_is_another_repository(self):
+        clone = self.work / 'clone'
+        fx.git(self.work, 'clone', '--quiet', str(self.harness), str(clone))
+        self.build({**self.config, 'project_repository': str(clone)})
+        self.assertTrue(self.captured()['created'])
+
+
+class HarnessDefault(unittest.TestCase):
+    def test_the_harness_is_the_checkout_the_capture_runs_from(self):
+        self.assertIs(getattr(C, 'HARNESS', None), C.REPO)
+        self.assertTrue(C._same_path(C.HARNESS, T.REPO))
+
+
+class Principal(Rig):
+    """Review fix S5: one function makes the authenticated session a principal, and refuses a shape it does not
+    know."""
+
+    def test_an_unrecognized_session_shape_is_refused_and_nothing_is_written(self):
+        public = self.session()
+        shapes = (None, {}, [public], {'sessionId': public['sessionId']}, {**public, 'principal': 'someone-else'},
+                  {**public, 'current': False}, {**public, 'current': 1}, {**public, 'sessionId': ''},
+                  {**public, 'supersedes': 7}, {k: v for k, v in public.items() if k != 'expiresAt'})
+        for shape in shapes:
+            with self.subTest(shape=shape):
+                before = self.state()
+                with self.assertRaises(C.CaptureRefused) as caught:
+                    self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), shape)
+                self.assertEqual(caught.exception.code, 'CAPTURE_SESSION_UNRECOGNIZED')
+                self.assertEqual(self.state(), before)
+        self.assertEqual(self.commits(), [self.base])
+
+    def test_decision_0025_s_one_owner_session_is_the_owner(self):
+        self.assertEqual(C.session_principal(self.session()), 'owner')
+        superseding, _ = self.scratch.enroll(at=NOW)
+        record = self.store.session_by_verifier(S.verifier(superseding))
+        self.assertEqual(C.session_principal(record.public()), 'owner')
+
+    def test_the_principal_comes_only_from_session_principal(self):
+        import ast
+        tree = ast.parse((T.PACKAGE / 'capture.py').read_text(encoding='utf-8'))
+        users = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                 and any(isinstance(n, ast.Name) and n.id == 'OWNER_PRINCIPAL' for n in ast.walk(node))}
+        self.assertEqual(users, {'session_principal'})
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'capture_identities']
+        self.assertEqual([ast.unparse(node.args[1]) for node in calls], ['principal'])
+
+
+class WorkTreeAfterACrash(Rig):
+    """Review fix N1: an answer that settles a capture says when the branch holds the captured files and the work
+    tree or the index does not."""
+
+    def test_a_crash_after_the_branch_moved_before_the_work_tree_is_written_is_flagged(self):
+        real = os.makedirs
+
+        def makedirs(path, *args, **kwargs):
+            if 'openspec' in str(path):
+                raise Crash()
+            return real(path, *args, **kwargs)
+        with mock.patch.object(C.ra.os, 'makedirs', makedirs), self.assertRaises(Crash):
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
+        commit = self.head()
+        answer = self.captured()
+        self.assertEqual((answer['commit'], answer['created'], answer.get('workTree')),
+                         (commit, False, 'not brought to the commit'))
+        self.assertEqual(self.commits()[0], commit)
+
+    def test_a_settled_capture_whose_work_tree_holds_the_files_is_not_flagged(self):
+        def crash(*_args, **_kwargs):
+            raise Crash()
+        with mock.patch.object(C.Capture, '_confirm', crash), self.assertRaises(Crash):
+            self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST), self.session())
+        answer = self.captured()
+        self.assertEqual(answer['created'], False)
+        self.assertTrue('workTree' not in answer, answer)
+
+
+class StoreAndRecordRefusals(Rig):
+    """Review fixes N2: every refusal of the integration store, and a record the layout admits but cannot carry,
+    has a stable code."""
+
+    def open_receipts(self):
+        self.receipts.parent.mkdir(exist_ok=True)
+        with C.integration_store.open_store(self.receipts):
+            pass
+
+    def test_an_open_restore_epoch_at_the_reservation_is_store_unavailable(self):
+        self.open_receipts()
+
+        def reserve(*_args, **_kwargs):
+            raise C.integration_store.RestoreEpochOpen('restore epoch 1 is open')
+        with mock.patch.object(C.integration_store.IntegrationStore, 'reserve', reserve):
+            answer = self.refused('CAPTURE_STORE_UNAVAILABLE', 503)
+        self.assertTrue('nothing was written' in answer['detail'], answer['detail'])
+
+    def test_a_store_that_does_not_open_is_store_unavailable(self):
+        def open_store(*_args, **_kwargs):
+            raise C.integration_store.StoreError('the store refused to open')
+        with mock.patch.object(C.integration_store, 'open_store', open_store):
+            self.refused('CAPTURE_STORE_UNAVAILABLE', 503)
+
+    def test_a_store_refusal_before_the_branch_moves_is_store_unavailable(self):
+        original = C.integration_store.IntegrationStore.transition
+
+        def transition(store, key, to_state, **kwargs):
+            if to_state == 'dispatched':
+                raise C.integration_store.IllegalTransition('a concurrent transition')
+            return original(store, key, to_state, **kwargs)
+        with mock.patch.object(C.integration_store.IntegrationStore, 'transition', transition):
+            status, answer = self.capture()
+        self.assertEqual((status, answer.get('code')), (503, 'CAPTURE_STORE_UNAVAILABLE'))
+        self.assertEqual(self.commits(), [self.base])
+        self.assertTrue(self.captured()['created'])
+        self.assertEqual(len(self.commits()), 2)
+
+    def test_a_store_refusal_after_the_branch_moved_is_outcome_unknown(self):
+        original = C.integration_store.IntegrationStore.transition
+
+        def transition(store, key, to_state, **kwargs):
+            if to_state == 'confirmed':
+                raise C.integration_store.IllegalTransition('a concurrent transition')
+            return original(store, key, to_state, **kwargs)
+        with mock.patch.object(C.integration_store.IntegrationStore, 'transition', transition):
+            status, answer = self.capture()
+        commit = self.head()
+        self.assertEqual((status, answer.get('code')), (500, 'CAPTURE_OUTCOME_UNKNOWN'))
+        self.assertTrue(commit in answer['detail'], answer['detail'])
+        settled = self.captured()
+        self.assertEqual((settled['commit'], settled['created']), (commit, False))
+
+    def test_a_record_the_layout_admits_but_cannot_carry_is_layout_invalid(self):
+        with mock.patch.object(C.intent, 'check', lambda *_args: ['a problem the checker found']):
+            answer = self.refused('CAPTURE_LAYOUT_INVALID', 422)
+        self.assertTrue('a problem the checker found' in answer['detail'], answer['detail'])
+        self.assertFalse(self.receipts.exists())
+
+
+class BidiControls(Rig):
+    """Review fix N5: a bidirectional control character in a value is refused, naming the line; zero-width characters
+    are accepted."""
+
+    def test_a_bidi_control_is_refused_naming_its_line(self):
+        controls = [chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A))]
+        self.assertEqual(len(controls), 9)
+        for n, char in enumerate(controls):
+            for line, text in ((2, REQUEST.replace('café', f'caf{char}é')),
+                               (4, REQUEST.replace(CRITERIA[0], f'{char}{CRITERIA[0]}')),
+                               (6, REQUEST.replace(SUGGESTION, f'{SUGGESTION}{char}x'))):
+                with self.subTest(char=f'U+{ord(char):04X}', line=line):
+                    message_id = f'Bd{n:02d}{line:03d}'
+                    self.append(message_id, text)
+                    answer = self.refused('CAPTURE_LAYOUT_INVALID', 422, message_id=message_id)
+                    self.assertTrue(answer['detail'].startswith(f'line {line}: '), answer['detail'])
+                    self.assertTrue(f'U+{ord(char):04X}' in answer['detail'], answer['detail'])
+        self.assertEqual(self.commits(), [self.base])
+
+    def test_zero_width_characters_are_accepted(self):
+        self.append('Zw00001', REQUEST.replace('café', 'caf​‌‍⁠é'))
+        self.assertTrue(self.captured('Zw00001')['created'])
+
+
 class NoModelNoSocket(Rig):
     """No model is called: the capture opens no socket and starts no process (an audit hook), and capture.py imports
     no model, inference or network client module."""
@@ -601,7 +976,7 @@ class NoModelNoSocket(Rig):
         armed.append(True)
         try:
             answer = self.capturer.capture(self.store, self.thread_id, 'Req0001', sha(REQUEST),
-                                           {'sessionId': self.record.session_id})
+                                           self.session())
         finally:
             armed.clear()
         self.assertTrue(answer['created'])
@@ -632,7 +1007,7 @@ class NoModelNoSocket(Rig):
         called = {node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
                   and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                   and node.func.value.id == 'repo'}
-        self.assertEqual(called, {'head', 'read', 'object_kind', 'write_commit', 'close'})
+        self.assertEqual(called, {'head', 'read', 'object_kind', 'status', 'write_commit', 'close'})
         self.assertEqual({node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
                           and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                           and node.func.value.id == 'ra'}, {'open_repository'})

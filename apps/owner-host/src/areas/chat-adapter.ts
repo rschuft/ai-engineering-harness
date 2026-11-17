@@ -97,7 +97,7 @@ export async function sha256Hex(text: string): Promise<string> {
 }
 
 export type CaptureResult =
-  | { captured: true; change: string; commit: string; created: boolean; receipt: string }
+  | { captured: true; change: string; commit: string; created: boolean; receipt: string; workTree?: string }
   | { captured: false; code: string; text: string; detail: string | null };
 
 type ThreadHandle = { initialize(): Promise<{ remoteId: string }> };
@@ -117,11 +117,15 @@ function captured(answer: unknown): CaptureResult {
     typeof a.commit !== "string" ||
     !/^[0-9a-f]{40}$/.test(a.commit) ||
     typeof a.created !== "boolean" ||
-    typeof a.receipt !== "string"
+    typeof a.receipt !== "string" ||
+    (a.workTree !== undefined && typeof a.workTree !== "string")
   ) {
     throw new SessionRefusal("ANSWER_INVALID");
   }
-  return { captured: true, change: a.change, commit: a.commit, created: a.created, receipt: a.receipt };
+  const result: CaptureResult = { captured: true, change: a.change, commit: a.commit, created: a.created, receipt: a.receipt };
+  // The commit is on the branch, and the work tree or the index does not hold its files (a process that ended
+  // between the two): the card tells the Owner before he edits the project repository.
+  return typeof a.workTree === "string" ? { ...result, workTree: a.workTree } : result;
 }
 
 /**

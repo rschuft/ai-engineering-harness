@@ -39,6 +39,7 @@ class FakeIntegration {
   seen: Seen[] = [];
   refusal: { status: number; code: string; detail: string } | null = null;
   hold: ((method: string, path: string, body: any) => Promise<void> | undefined) | null = null;
+  workTree: string | null = null;
 
   constructor(readonly credential: string) {}
 
@@ -75,7 +76,8 @@ class FakeIntegration {
       if ((await sha256Hex(stored.message.content[0].text)) !== body.sha256) return [409, { code: "CAPTURE_MESSAGE_MISMATCH" }];
       const created = !this.captured.has(stored.message.id);
       this.captured.set(stored.message.id, COMMIT);
-      return [200, { change: "add-slugify", commit: COMMIT, created, receipt: `owner-ui/intent-capture/v1/x/${stored.message.id}` }];
+      const answer = { change: "add-slugify", commit: COMMIT, created, receipt: `owner-ui/intent-capture/v1/x/${stored.message.id}` };
+      return [200, this.workTree === null ? answer : { ...answer, workTree: this.workTree }];
     }
     if ((m = path.match(/^\/threads\/([^/]+)\/messages$/)) && method === "POST") {
       this.threads.get(decodeURIComponent(m[1]))!.messages.push({ parentId: body.parentId, message: body.message });
@@ -191,6 +193,27 @@ describe("the request form and the capture (P-01.3)", () => {
     expect(fake.captures()).toHaveLength(1);
   });
 
+  it("tells the Owner when the work tree does not hold the captured commit's files", async () => {
+    const fake = new FakeIntegration(throwawayCredential());
+    fake.workTree = "not brought to the commit";
+    renderChat(fake);
+    await sendRequest(await fillForm());
+    const card = await screen.findByTestId("capture-card");
+    await waitFor(() => expect(card.getAttribute("data-state")).toBe("captured"));
+    expect(within(card).getByTestId("capture-work-tree").textContent).toContain("not brought to the commit");
+    await waitFor(() => expect(fake.stored()).toHaveLength(2));
+    expect(fake.stored()[1].content[0].result.workTree).toBe("not brought to the commit");
+  });
+
+  it("shows no work-tree note when the answer has none", async () => {
+    const fake = new FakeIntegration(throwawayCredential());
+    renderChat(fake);
+    await sendRequest(await fillForm());
+    const card = await screen.findByTestId("capture-card");
+    await waitFor(() => expect(card.getAttribute("data-state")).toBe("captured"));
+    expect(within(card).queryByTestId("capture-work-tree")).toBeNull();
+  });
+
   it("answers an ordinary message with the fixed acknowledgement and asks for no capture", async () => {
     const fake = new FakeIntegration(throwawayCredential());
     renderChat(fake);
@@ -232,6 +255,7 @@ describe("the request form and the capture (P-01.3)", () => {
         "CAPTURE_LAYOUT_INVALID", "CAPTURE_MESSAGE_MISMATCH", "CAPTURE_NOT_A_STATEMENT", "CAPTURE_OUTCOME_UNKNOWN",
         "CAPTURE_PROJECT_UNAVAILABLE", "CAPTURE_PROJECT_UNCONFIGURED", "CAPTURE_RECEIPT_CONFLICT",
         "CAPTURE_STORE_UNAVAILABLE", "COMMIT_IDENTITY_INVALID", "COMMIT_IDENTITY_PLACEHOLDER", "COMMIT_IDENTITY_UNAVAILABLE",
+        "CAPTURE_COMMIT_UNREACHABLE", "CAPTURE_PROJECT_IS_HARNESS", "CAPTURE_SESSION_UNRECOGNIZED",
       ].sort(),
     );
   });

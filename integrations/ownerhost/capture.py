@@ -11,8 +11,9 @@ message in a fixed layout, and the capture parses that layout only (``parse_requ
     Suggestion: <one line>  (zero or more)
 
 Lines are separated by LF only, with no trailing line break; every value is one non-empty line with no leading or
-trailing whitespace and no control or separator character other than a tab. Anything else is
-``CAPTURE_LAYOUT_INVALID``, naming the line: nothing is guessed, trimmed or reordered.
+trailing whitespace, no control or separator character other than a tab, and no bidirectional control character
+(U+202A to U+202E, U+2066 to U+2069: they make the text shown differ from the bytes recorded; zero-width characters
+are accepted). Anything else is ``CAPTURE_LAYOUT_INVALID``, naming the line: nothing is guessed, trimmed or reordered.
 
 The request names a thread and a message (server-held ids) and carries the sha256 the browser computed of the
 message's text. In order, each refusal with a stable code and nothing written:
@@ -24,35 +25,52 @@ message's text. In order, each refusal with a stable code and nothing written:
    ``owner``: ``CAPTURE_NOT_A_STATEMENT``), and the sha256 of its **stored bytes** must equal the request's
    (``CAPTURE_MESSAGE_MISMATCH``);
 3. the layout (``CAPTURE_LAYOUT_INVALID``); the record is then built and checked with ``tools/check_intent_record.py``
-   against the stored bytes before anything is written;
-4. the commit's author and committer (``capture_identities``): both are the **commissioning user's** git identity, set
-   explicitly per principal under ``components.owner_host.git_identities`` and looked up by the principal of the
-   authenticated session (in I1 the one enrolled Owner, ``owner``: every Owner UI session is his, and the store
-   records his statements with author ``owner``). The commit is made under the user's identity, on the user's
-   behalf; the harness is the user's mechanism, and no agent or component gets a git identity. It is never read
-   from git configuration or the environment and never inferred; there is no shared default and no fallback.
-   Absent: ``COMMIT_IDENTITY_UNAVAILABLE``; not ``Name <email>`` (no line break, no ``<`` or ``>`` in the name):
-   ``COMMIT_IDENTITY_INVALID``; an invented placeholder domain (``localhost``, or under ``.invalid``,
-   ``.localhost``, ``.example`` or ``.test``): ``COMMIT_IDENTITY_PLACEHOLDER``. A GitHub no-reply address, and any
+   against the stored bytes before anything is written (a record that does not pass is ``CAPTURE_LAYOUT_INVALID``
+   too);
+4. the principal of the authenticated session (``session_principal``, the one place a session becomes a principal):
+   decision 0025's one-Owner session is ``owner``; any other shape is ``CAPTURE_SESSION_UNRECOGNIZED``;
+5. the commit's author and committer (``capture_identities``): both are the **commissioning user's** git identity, set
+   explicitly per principal under ``components.owner_host.git_identities`` and looked up by that principal (in I1
+   the one enrolled Owner, ``owner``: every Owner UI session is his, and the store records his statements with
+   author ``owner``). The commit is made under the user's identity, on the user's behalf; the harness is the user's
+   mechanism, and no agent or component gets a git identity. It is never read from git configuration or the
+   environment and never inferred; there is no shared default and no fallback. Absent:
+   ``COMMIT_IDENTITY_UNAVAILABLE``; not ``Name <email>`` (no line break, no ``<`` or ``>`` in the name), a name with
+   no visible character or with a control or format character, or an email that is not ASCII:
+   ``COMMIT_IDENTITY_INVALID``; a placeholder domain (``check_git_identity``: ``localhost``, or under ``.invalid``,
+   ``.localhost``, ``.example``, ``.test``, ``.local``, ``.internal``, ``.lan`` or ``.home.arpa``; ``example.com``,
+   ``example.net`` or ``example.org`` or below them; an IP literal, bracketed or bare; a single label, git's own
+   ``user@host`` fallback shape): ``COMMIT_IDENTITY_PLACEHOLDER``. A GitHub no-reply address, ``.onion``, and any
    other real address the user configured, is accepted. Provenance is not git metadata: the component that wrote
    the record (``normalized_by``), the message's bytes, sha256 and session, and the receipt are in the intent
    record, the lineage and the integration store; authorship grants nothing;
-5. the project repository (``CAPTURE_PROJECT_UNAVAILABLE``) and the change name, which must be new
-   (``CAPTURE_CHANGE_EXISTS``).
+6. the project repository (``CAPTURE_PROJECT_UNAVAILABLE``), which is never the harness checkout this process runs
+   from nor a repository sharing its git common directory (``CAPTURE_PROJECT_IS_HARNESS``), and the change name,
+   which must be new (``CAPTURE_CHANGE_EXISTS``).
 
 Then the write-ahead receipt ``owner-ui/intent-capture/v1/<thread>/<message>`` is reserved in the integration store,
 and one commit through ``repository_access.Repository.write_commit`` (head compare-and-swap) adds exactly
 ``openspec/changes/<change>/proposal.md`` and ``.openspec.yaml``. Its message carries the trailer
-``Intent-Capture: <receipt key>``. Once the branch has moved the receipt goes to ``dispatched`` and ``confirmed``
-with the commit id.
+``Intent-Capture: <receipt key>``. When the commit's objects are written and **before the branch moves**
+(``write_commit``'s ``check``), the receipt goes to ``dispatched`` with the commit id; once the branch has moved, to
+``confirmed``. A refusal of the integration store is ``CAPTURE_STORE_UNAVAILABLE`` while nothing is on the branch,
+``CAPTURE_OUTCOME_UNKNOWN`` once a commit may be.
 
-Idempotency, by message id. A confirmed receipt answers its commit and writes nothing. A receipt left ``reserved``
-or ``dispatched`` (a process that ended between the receipt and its confirmation, or a refusal the Owner then
-repaired) is settled **by reading the repository first**: the first-parent history from HEAD is searched for the
-commit carrying the receipt's trailer; when it is there the receipt is confirmed with it and nothing is written
-again; only when it is not there is the commit made. A refusal of the commit itself (``CAPTURE_COMMIT_REFUSED``,
-``CAPTURE_GIT_FAILED``) leaves the receipt ``reserved``: nothing was written, and the same message may be captured
-once the repository is repaired. A branch that moves under the capture is read again (at most ``HEAD_ATTEMPTS``).
+Idempotency, by message id. A confirmed receipt answers its commit and writes nothing, and only for the request it
+was made for: its stored project (id and path), change and message digest must be the request's
+(``CAPTURE_RECEIPT_CONFLICT`` otherwise); the answer is built from the receipt's own intent, never from the current
+configuration. A receipt left ``reserved`` or ``dispatched`` (a process that ended between the receipt and its
+confirmation, or a refusal the Owner then repaired) is settled **by reading the repository first**, through every
+local branch (``refs/heads/*``) and every parent: the recorded commit when a branch reaches it, else a commit
+carrying the receipt's trailer. When one is there the receipt is confirmed with it and nothing is written again (the
+answer says ``workTree`` when the branch checked out holds the captured files and the work tree or the index does
+not); when a recorded commit is on no branch (a rewritten history) the capture is ``CAPTURE_COMMIT_UNREACHABLE`` and
+nothing is written; only when nothing was recorded or found is the commit made. A refusal of the commit before its
+objects are recorded (``CAPTURE_COMMIT_REFUSED``, ``CAPTURE_GIT_FAILED``) leaves the receipt ``reserved``: nothing
+was written, and the same message may be captured once the repository is repaired. A branch that moves under the
+capture is read again (at most ``HEAD_ATTEMPTS``); when it moves between the recording and the update, the receipt
+keeps the first commit id and the later attempt's commit is found by its trailer. Captures are serialized: the route
+runs the capture on the event loop, so a capture blocks the process's other routes while it runs.
 
 The record (``build_proposal``): Q1 is the whole message, its ``source`` the message's span anchor
 (``lineage.span_reference``, sha256 of the stored bytes); O1, each ACn and each Mn are exact byte spans of the message,
@@ -63,15 +81,20 @@ the ``intent-driven`` schema and the message's creation date.
 
 What it never does: it opens no client socket, starts no process, and calls no model (the structural and audit tests
 of tests/test_capture.py); it reads no configuration file (service.py reads ``config.yml``); it reads no credential.
+The configured identity is not secret: it is in ``components.owner_host``, which service.py passes on the server's
+command line and records in its run record.
 """
 from __future__ import annotations
 
+import collections
 import dataclasses
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import re
+import sqlite3
 import sys
 import unicodedata
 from pathlib import Path, PureWindowsPath, PurePosixPath
@@ -108,15 +131,27 @@ TRAILER = 'Intent-Capture'
 CHANGES_DIR = 'openspec/changes'
 CONFIG_POLICY = 'repository'           # the project's own git configuration only (decision 0014 section 5)
 HEAD_ATTEMPTS = 3                      # a branch that moves under the capture is read again, at most this often
-HISTORY_CEILING = 100_000              # first-parent commits read to settle a receipt; bounds a pathological walk
+HISTORY_CEILING = 100_000              # commits read to settle a receipt; bounds a pathological walk
+HARNESS = REPO                         # the harness checkout this process runs from: never the project repository
 
 CONFIG_KEYS = ('project_repository', 'project_repository_id', 'backlog_command')
 IDENTITIES_KEY = 'git_identities'      # optional: {principal: "Name <email>"}; absent, every capture is refused
 # The principal of an authenticated Owner UI session: in I1 every enrolled session is the Owner's (decision 0025
-# point 3), and the conversation store records his statements with this author.
+# point 3), and the conversation store records his statements with this author. session_principal is the one place
+# a session becomes a principal.
 OWNER_PRINCIPAL = 'owner'
+# The authenticated session as app.py hands it over: conversation_store.Session.public() of a session that
+# session.check accepted (decision 0025 points 3 to 5).
+OWNER_SESSION_KEYS = frozenset({'sessionId', 'issuedAt', 'expiresAt', 'supersedes', 'current'})
 GIT_IDENTITY = re.compile(r'(?P<name>[^<>\n\r\x00]+) <(?P<email>[^<>\s\x00@]+@(?P<domain>[^<>\s\x00@]+))>')
-PLACEHOLDER_TLDS = ('invalid', 'localhost', 'example', 'test')
+# Placeholder domains (decision 0028 point 5, as the engineering manager extended its list on 2026-11-16): the
+# invented top-level names, RFC 2606's example second-level names, local-network names, IP literals and single
+# labels (git's own user@host fallback shape). .onion is a real special-use name and stays accepted.
+PLACEHOLDER_TLDS = ('invalid', 'localhost', 'example', 'test', 'local', 'internal', 'lan')
+PLACEHOLDER_DOMAINS = ('example.com', 'example.net', 'example.org', 'home.arpa')
+# Bidirectional control characters (embeddings, overrides and isolates): refused in a captured value, because they
+# make the text shown differ from the bytes recorded. Zero-width characters are accepted.
+BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A)))
 REPOSITORY_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}')
 CHANGE_ID = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
 MAX_CHANGE_CHARS = 128
@@ -127,39 +162,52 @@ CRITERION_LABEL, SUGGESTION_LABEL = b'- ', b'Suggestion: '
 
 STATUS = {'REQUEST_INVALID': 400, 'CAPTURE_PROJECT_UNCONFIGURED': 503, 'CAPTURE_CONFIG_INVALID': 503,
           'CAPTURE_STORE_UNAVAILABLE': 503, 'CAPTURE_NOT_A_STATEMENT': 409, 'CAPTURE_MESSAGE_MISMATCH': 409,
-          'CAPTURE_LAYOUT_INVALID': 422, 'COMMIT_IDENTITY_UNAVAILABLE': 503,
+          'CAPTURE_LAYOUT_INVALID': 422, 'CAPTURE_SESSION_UNRECOGNIZED': 403, 'COMMIT_IDENTITY_UNAVAILABLE': 503,
           'COMMIT_IDENTITY_INVALID': 503, 'COMMIT_IDENTITY_PLACEHOLDER': 503, 'CAPTURE_PROJECT_UNAVAILABLE': 503,
-          'CAPTURE_CHANGE_EXISTS': 409, 'CAPTURE_RECEIPT_CONFLICT': 409, 'CAPTURE_COMMIT_REFUSED': 409,
-          'CAPTURE_GIT_FAILED': 500, 'CAPTURE_OUTCOME_UNKNOWN': 500}
+          'CAPTURE_PROJECT_IS_HARNESS': 503, 'CAPTURE_CHANGE_EXISTS': 409, 'CAPTURE_RECEIPT_CONFLICT': 409,
+          'CAPTURE_COMMIT_REFUSED': 409, 'CAPTURE_COMMIT_UNREACHABLE': 409, 'CAPTURE_GIT_FAILED': 500,
+          'CAPTURE_OUTCOME_UNKNOWN': 500}
 REMEDIES = {
     'REQUEST_INVALID': 'send {sha256}: the sha256 of the message text\'s UTF-8 bytes, 64 lower-case hex digits',
     'CAPTURE_PROJECT_UNCONFIGURED': 'set components.owner_host (project_repository, project_repository_id, '
                                     'backlog_command, git_identities) in config.yml and restart the Integration '
                                     'process',
     'CAPTURE_CONFIG_INVALID': 'correct components.owner_host as example_config.yml describes it, then restart',
-    'CAPTURE_STORE_UNAVAILABLE': 'start the Integration process through service.py up, which names the integration '
-                                 'store',
+    'CAPTURE_STORE_UNAVAILABLE': 'nothing was written: start the Integration process through service.py up, which '
+                                 'names the integration store, and make sure the store opens (no restore epoch '
+                                 'open), then capture the same message again',
     'CAPTURE_NOT_A_STATEMENT': 'capture an Owner message (a user message of the thread), not a reply',
     'CAPTURE_MESSAGE_MISMATCH': 'the message stored under this id is not the text sent; reload the thread and '
                                 'capture the stored message',
     'CAPTURE_LAYOUT_INVALID': 'send the request through the request form: Change, Objective, Acceptance criteria '
-                              '(one or more "- " lines) and optional Suggestion lines, one line each',
+                              '(one or more "- " lines) and optional Suggestion lines, one line each, with no '
+                              'bidirectional control character',
+    'CAPTURE_SESSION_UNRECOGNIZED': 'nothing was written: the authenticated session is not of a shape whose '
+                                    'principal this version knows (decision 0025\'s one-Owner session); sign in '
+                                    'with a credential the enroll command showed',
     'COMMIT_IDENTITY_UNAVAILABLE': 'set your git identity under components.owner_host.git_identities (your '
                                    'principal: "Name <email>"), restart the Integration process, then capture the '
                                    'same message again',
     'COMMIT_IDENTITY_INVALID': 'give components.owner_host.git_identities.<principal> as "Name <email>": one line, '
-                               'no < or > in the name',
+                               'a visible name with no < or > and no control or format character, an ASCII email',
     'COMMIT_IDENTITY_PLACEHOLDER': 'configure a real address you publish under (a GitHub no-reply address is one), '
-                                   'not a placeholder domain (localhost, .invalid, .localhost, .example, .test)',
+                                   'not a placeholder domain (localhost, .invalid, .localhost, .example, .test, '
+                                   'example.com, example.net, example.org, .local, .internal, .home.arpa, .lan, an IP '
+                                   'address or a name without a dot)',
     'CAPTURE_PROJECT_UNAVAILABLE': 'make project_repository the root of a git work tree with a commit on a branch',
+    'CAPTURE_PROJECT_IS_HARNESS': 'make project_repository the project\'s own repository: never the harness checkout '
+                                  'the Integration process runs from, nor a worktree of it',
     'CAPTURE_CHANGE_EXISTS': 'choose another change name: the project repository already has this change',
     'CAPTURE_RECEIPT_CONFLICT': 'this message was captured under another configuration; capture it with that one '
                                 'or send the request again as a new message',
     'CAPTURE_COMMIT_REFUSED': 'repair the project repository as the detail says (nothing was written), then capture '
                               'the same message again',
+    'CAPTURE_COMMIT_UNREACHABLE': 'the receipt recorded a commit that no local branch reaches (a rewritten history?); '
+                                  'nothing was written: put that commit back on a branch (git branch <name> '
+                                  '<commit>) to have it answered, or send the request again as a new message',
     'CAPTURE_GIT_FAILED': 'repair the project repository (git fsck), then capture the same message again',
-    'CAPTURE_OUTCOME_UNKNOWN': 'the receipt names a commit the branch does not hold; read the project repository '
-                               'before anything else',
+    'CAPTURE_OUTCOME_UNKNOWN': 'a commit may have been made and the receipt does not say so; read the project '
+                               'repository before anything else, then capture the same message again',
 }
 
 
@@ -217,19 +265,65 @@ def project_config(raw) -> ProjectConfig:
                          dict(identities))
 
 
+def _visible(char: str) -> bool:
+    return unicodedata.category(char)[0] in 'LNPS'
+
+
 def check_git_identity(value) -> str:
-    """VALUE as a capture commit's identity: ``Name <email>`` (COMMIT_IDENTITY_INVALID) whose domain is not an
-    invented placeholder (COMMIT_IDENTITY_PLACEHOLDER)."""
+    """VALUE as a capture commit's identity: ``Name <email>`` with a name holding a visible character and no control
+    or format (Cf) character, and an ASCII email (COMMIT_IDENTITY_INVALID), whose domain is not a placeholder
+    (COMMIT_IDENTITY_PLACEHOLDER: ``PLACEHOLDER_TLDS``, ``PLACEHOLDER_DOMAINS`` and their subdomains, an IP literal,
+    bracketed or bare, or a single label)."""
     match = GIT_IDENTITY.fullmatch(value) if isinstance(value, str) else None
     if match is None or match['name'] != match['name'].strip() or not ra.IDENTITY.fullmatch(value):
         raise CaptureRefused('COMMIT_IDENTITY_INVALID', 'the configured git identity is not "Name <email>"')
-    labels = match['domain'].lower().rstrip('.').split('.')
+    name, email = match['name'], match['email']
+    if not any(_visible(char) for char in name) \
+            or any(unicodedata.category(char) in ('Cc', 'Cf') for char in name):
+        raise CaptureRefused('COMMIT_IDENTITY_INVALID', 'the configured git identity\'s name has no visible '
+                                                        'character, or a control or format character')
+    if not email.isascii():
+        raise CaptureRefused('COMMIT_IDENTITY_INVALID', 'the configured git identity\'s email is not ASCII')
+    domain = match['domain'].lower()
+    if domain.startswith('[') and domain.endswith(']'):
+        raise CaptureRefused('COMMIT_IDENTITY_PLACEHOLDER', 'the configured git identity\'s domain is an IP literal')
+    labels = domain.rstrip('.').split('.')
     if not all(labels):
         raise CaptureRefused('COMMIT_IDENTITY_INVALID', 'the configured git identity\'s domain is malformed')
+    bare = '.'.join(labels)
+    try:
+        ipaddress.ip_address(bare)
+        literal = True
+    except ValueError:
+        literal = labels[-1].isdigit()     # no top-level name is numeric: 127.1 and the like are addresses
+    if literal:
+        raise CaptureRefused('COMMIT_IDENTITY_PLACEHOLDER', 'the configured git identity\'s domain is an IP address')
+    if len(labels) == 1:
+        raise CaptureRefused('COMMIT_IDENTITY_PLACEHOLDER', 'the configured git identity\'s domain is a single label '
+                                                            f'({bare}), git\'s user@host fallback shape')
     if labels[-1] in PLACEHOLDER_TLDS:
         raise CaptureRefused('COMMIT_IDENTITY_PLACEHOLDER', 'the configured git identity\'s domain is a placeholder '
                                                             f'(.{labels[-1]})')
+    for placeholder in PLACEHOLDER_DOMAINS:
+        if bare == placeholder or bare.endswith('.' + placeholder):
+            raise CaptureRefused('COMMIT_IDENTITY_PLACEHOLDER', 'the configured git identity\'s domain is a '
+                                                                f'placeholder ({placeholder})')
     return value
+
+
+def session_principal(session) -> str:
+    """The principal of the authenticated SESSION (what app.py passes: ``Session.public()`` of the session
+    ``session.check`` accepted). Decision 0025 point 3: every enrolled Owner UI session is the one Owner's, so that
+    shape is ``owner``; any shape this version does not recognize is CAPTURE_SESSION_UNRECOGNIZED, and nothing is
+    written. The one place a session becomes a principal: there is no constant elsewhere."""
+    if not isinstance(session, dict) or set(session) != OWNER_SESSION_KEYS \
+            or not isinstance(session['sessionId'], str) or not session['sessionId'] \
+            or not isinstance(session['issuedAt'], str) or not isinstance(session['expiresAt'], str) \
+            or not (session['supersedes'] is None or isinstance(session['supersedes'], str)) \
+            or session['current'] is not True:
+        raise CaptureRefused('CAPTURE_SESSION_UNRECOGNIZED', 'the authenticated session is not of a shape whose '
+                                                             'principal is known; nothing was written')
+    return OWNER_PRINCIPAL
 
 
 def capture_identities(config: ProjectConfig, principal: str) -> tuple[str, str]:
@@ -275,6 +369,8 @@ def _value(content: bytes, start: int, end: int, line_number: int, label: str) -
         category = unicodedata.category(char)
         if (category == 'Cc' and char != '\t') or category in ('Zl', 'Zp'):
             _layout(line_number, f'{label} holds a control or separator character (U+{ord(char):04X})')
+        if char in BIDI_CONTROLS:
+            _layout(line_number, f'{label} holds a bidirectional control character (U+{ord(char):04X})')
     return Span(start, end, text)
 
 
@@ -406,16 +502,36 @@ def commit_message(change: str, key: str, thread_id: str, message_id: str, diges
 # ---------------------------------------------------------------------------- the repository
 
 
+def _same_path(a, b) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def harness_common_dir():
+    """The git common directory of the harness checkout this process runs from (``git rev-parse
+    --git-common-dir``), or None when it is no repository (an archive copy)."""
+    try:
+        with ra.open_repository(HARNESS, config='none', ceilings=[str(Path(HARNESS).parent)]) as harness:
+            return harness.commondir
+    except (ra.CannotRun, ra.RepositoryError):
+        return None
+
+
 def open_project(config: ProjectConfig):
-    """The project repository: CONFIG's path must be its work tree's root (no search above it)."""
+    """The project repository: CONFIG's path must be its work tree's root (no search above it), and neither the
+    harness checkout this process runs from nor a repository sharing its git common directory (a worktree of it)."""
     path = config.project_repository
     try:
         repo = ra.open_repository(path, config=CONFIG_POLICY, ceilings=[str(path.parent)])
     except (ra.CannotRun, ra.RepositoryError) as exc:
         raise CaptureRefused('CAPTURE_PROJECT_UNAVAILABLE', f'{exc}') from None
     try:
-        if os.path.normcase(os.path.realpath(repo.root)) != os.path.normcase(os.path.realpath(path)):
+        if not _same_path(repo.root, path):
             raise CaptureRefused('CAPTURE_PROJECT_UNAVAILABLE', 'project_repository is not its work tree\'s root')
+        harness = harness_common_dir()
+        if _same_path(repo.root, HARNESS) or (harness is not None and _same_path(repo.commondir, harness)):
+            raise CaptureRefused('CAPTURE_PROJECT_IS_HARNESS', 'project_repository is the harness checkout the '
+                                                               'Integration process runs from, or shares its git '
+                                                               'common directory; nothing was written')
         head = repo.head()
         if head.ref is None or not head.ref.startswith('refs/heads/') or head.commit is None:
             raise CaptureRefused('CAPTURE_PROJECT_UNAVAILABLE', 'HEAD does not name a branch with a commit')
@@ -431,25 +547,92 @@ def _parse_commit(data: bytes) -> tuple[list, bytes]:
     return parents, message
 
 
-def find_capture(repo, key: str) -> str | None:
-    """The commit on HEAD's first-parent history whose message carries ``Intent-Capture: KEY``, or None."""
+def branch_tips(repo) -> list:
+    """The commit of every local branch (``refs/heads/*``), by branch name. The names are listed from the files
+    reference backend, the only one repository_access opens (loose references under the common directory, then
+    packed-refs); each is read through repository_access (``repo.read``), which resolves it as git does. A name
+    git would not read as a reference, or one that names no commit, is no branch."""
+    common = repo.commondir
+    names = set()
+    base = os.path.join(common, 'refs', 'heads')
+    for top, _dirs, files in os.walk(base):
+        for name in files:
+            names.add('/'.join(['refs', 'heads', *os.path.relpath(os.path.join(top, name), base).split(os.sep)]))
+    try:
+        with open(os.path.join(common, 'packed-refs'), 'rb') as handle:
+            packed = handle.read()
+    except FileNotFoundError:
+        packed = b''
+    except OSError as exc:
+        raise CaptureRefused('CAPTURE_GIT_FAILED', f'packed-refs cannot be read: {exc}') from None
+    for line in packed.splitlines():
+        if line and line[:1] not in (b'#', b'^'):
+            name = line.partition(b' ')[2].decode('utf-8', 'surrogateescape')
+            if name.startswith('refs/heads/'):
+                names.add(name)
+    tips = []
+    for name in sorted(names):
+        try:
+            found = repo.read(name)
+        except ra.RepositoryError as exc:
+            if exc.code in ('OBJECT_NAME_INVALID', 'REVISION_INVALID'):
+                continue
+            raise CaptureRefused('CAPTURE_GIT_FAILED', f'{name}: {exc}') from None
+        if found is not None and found[1] == 'commit':
+            tips.append(found[0])
+    return tips
+
+
+def find_capture(repo, key: str, recorded: str | None = None) -> str | None:
+    """The capture of KEY that a local branch reaches: RECORDED (the commit id the receipt recorded before the
+    branch moved) when any ``refs/heads/*`` reaches it, else a commit whose message carries ``Intent-Capture: KEY``,
+    searched through every parent (not the first parent only) of every local branch; None when neither is there."""
     wanted = f'{TRAILER}: {key}'.encode('utf-8')
-    oid = repo.head().commit
-    for _ in range(HISTORY_CEILING):
-        if oid is None:
-            return None
+    queue = collections.deque(dict.fromkeys(branch_tips(repo)))
+    seen = set(queue)
+    carrying = None
+    read = 0
+    while queue:
+        oid = queue.popleft()
+        if oid == recorded:
+            return oid
+        read += 1
+        if read > HISTORY_CEILING:
+            raise CaptureRefused('CAPTURE_OUTCOME_UNKNOWN', f'the branches hold more than {HISTORY_CEILING} commits')
         found = repo.read(oid)
         if found is None or found[1] != 'commit':
             raise CaptureRefused('CAPTURE_GIT_FAILED', f'commit {oid} cannot be read')
         parents, message = _parse_commit(found[2])
-        if wanted in message.split(b'\n'):
-            return oid
-        oid = parents[0] if parents else None
-    raise CaptureRefused('CAPTURE_OUTCOME_UNKNOWN', f'the history is longer than {HISTORY_CEILING} commits')
+        if carrying is None and wanted in message.split(b'\n'):
+            if recorded is None:
+                return oid
+            carrying = oid
+        for parent in parents:
+            if parent not in seen:
+                seen.add(parent)
+                queue.append(parent)
+    return carrying
 
 
 def change_present(repo, commit: str, change: str) -> bool:
     return repo.object_kind(f'{commit}:{CHANGES_DIR}/{change}') is not None
+
+
+def work_tree_state(repo, commit: str, paths) -> str | None:
+    """Whether the work tree and the index hold the captured files (PATHS) of COMMIT: None when they do, or when
+    HEAD does not hold those files as COMMIT has them (another branch, or a later change: there is nothing to say);
+    ``not brought to the commit`` when HEAD holds them and the index or the work tree does not; ``not read`` when the
+    repository cannot answer."""
+    try:
+        head = repo.head().commit
+        for path in paths:
+            captured = repo.read(f'{commit}:{path}')
+            current = repo.read(f'{head}:{path}') if head else None
+            if captured is None or current is None or captured[0] != current[0]:
+                return None
+        return 'not brought to the commit' if repo.status(paths=sorted(paths), untracked='no') else None
+    except (ra.RepositoryError, ra.CannotRun):
+        return 'not read'
 
 
 # ---------------------------------------------------------------------------- the capture
@@ -473,8 +656,12 @@ class Capture:
         if digest != sha256:
             raise CaptureRefused('CAPTURE_MESSAGE_MISMATCH', 'the request\'s sha256 is not the stored message\'s')
         request = parse_request(stored.content)
-        q1, files = build_files(thread_id, message_id, stored, request)
-        author, committer = capture_identities(config, OWNER_PRINCIPAL)
+        try:
+            q1, files = build_files(thread_id, message_id, stored, request)
+        except ValueError as exc:   # text the layout admits that the record cannot carry: never written
+            raise CaptureRefused('CAPTURE_LAYOUT_INVALID', f'the request cannot be recorded: {exc}') from None
+        principal = session_principal(session)
+        author, committer = capture_identities(config, principal)
         if self.integration_store_path is None:
             raise CaptureRefused('CAPTURE_STORE_UNAVAILABLE', 'no integration store is named')
         key = receipt_key(thread_id, message_id)
@@ -484,24 +671,35 @@ class Capture:
             'project': {'id': config.project_repository_id, 'path': str(config.project_repository)},
             'files': {path: hashlib.sha256(data).hexdigest() for path, data in sorted(files.items())}}
         repo = open_project(config)
+        progress = _Progress()
         try:
             path = Path(self.integration_store_path)
             if not path.exists():     # no receipt can exist: refuse a taken name before the store is created
                 if change_present(repo, repo.head().commit, request.change):
                     raise CaptureRefused('CAPTURE_CHANGE_EXISTS', f'{CHANGES_DIR}/{request.change} exists at HEAD')
                 path.parent.mkdir(exist_ok=True)
-            with integration_store.open_store(path) as receipts:
-                return self._capture(repo, receipts, key, intent_record, files, request,
-                                     commit_message(request.change, key, thread_id, message_id, digest),
-                                     author, committer, (session or {}).get('sessionId'))
+            try:
+                with integration_store.open_store(path) as receipts:
+                    return self._capture(repo, receipts, key, intent_record, files, request,
+                                         commit_message(request.change, key, thread_id, message_id, digest),
+                                         author, committer, session['sessionId'], progress)
+            except (integration_store.StoreError, sqlite3.Error) as exc:
+                # IllegalTransition, RestoreEpochOpen and every other refusal of the store: where a commit may
+                # exist the outcome is unknown; before that nothing was written.
+                code = 'CAPTURE_OUTCOME_UNKNOWN' if progress.commit else 'CAPTURE_STORE_UNAVAILABLE'
+                written = (f'the commit {progress.commit} is on the branch' if progress.commit
+                           else 'nothing was written')
+                raise CaptureRefused(code, f'the integration store refused: {type(exc).__name__}: {exc}; '
+                                           f'{written}') from None
         finally:
             repo.close()
 
     def _capture(self, repo, receipts, key, intent_record, files, request, message, author, committer,
-                 session_id):
+                 session_id, progress):
         existing = receipts.get(key)
         if existing is not None and existing.state == 'confirmed':
-            return self._answer(receipts, key, intent_record, created=False)
+            same_intent(existing, intent_record, key)
+            return self._answer(receipts, key, created=False)
         if existing is None and change_present(repo, repo.head().commit, request.change):
             raise CaptureRefused('CAPTURE_CHANGE_EXISTS', f'{CHANGES_DIR}/{request.change} exists at HEAD')
         try:
@@ -512,40 +710,64 @@ class Capture:
         if state not in ('reserved', 'dispatched', 'confirmed'):
             raise CaptureRefused('CAPTURE_RECEIPT_CONFLICT', f'{key} is {state}')
         if state == 'confirmed':
-            return self._answer(receipts, key, intent_record, created=False)
+            same_intent(reserved.reservation, intent_record, key)
+            return self._answer(receipts, key, created=False)
         if not reserved.created:    # an earlier request reserved it: read before writing anything again
-            found = find_capture(repo, key)
+            recorded = recorded_commit(receipts, key)
+            found = find_capture(repo, key, recorded)
             if found is not None:
+                progress.commit = found
                 self._confirm(receipts, key, found, 'settled by reading the project repository', session_id)
-                return self._answer(receipts, key, intent_record, created=False)
+                return self._answer(receipts, key, created=False,
+                                    work_tree=work_tree_state(repo, found, intent_record['files']))
+            if recorded is not None:
+                raise CaptureRefused('CAPTURE_COMMIT_UNREACHABLE', f'{key} recorded the commit {recorded}, which no '
+                                                                   'local branch reaches, and no branch holds a '
+                                                                   'commit with its trailer; nothing was written')
             if state == 'dispatched':
-                raise CaptureRefused('CAPTURE_OUTCOME_UNKNOWN', f'{key} is dispatched, and the branch does not hold '
-                                                                'its commit')
+                raise CaptureRefused('CAPTURE_OUTCOME_UNKNOWN', f'{key} is dispatched without a recorded commit, '
+                                                                'and no branch holds a commit with its trailer')
+
+        def record(commit):          # write_commit's check: the objects are written, the branch has not moved
+            self._record(receipts, key, commit, session_id)
+
         for attempt in range(HEAD_ATTEMPTS):
             head = repo.head()
             if change_present(repo, head.commit, request.change):
                 raise CaptureRefused('CAPTURE_CHANGE_EXISTS', f'{CHANGES_DIR}/{request.change} exists at HEAD')
             try:
                 commit = repo.write_commit(files, message, identity=committer, author=author,
-                                           expected_head=head.commit)
+                                           expected_head=head.commit, check=record)
             except ra.RepositoryError as exc:
                 if exc.code == 'COMMIT_REFUSED' and exc.details.get('reason') == 'head-moved' \
                         and attempt + 1 < HEAD_ATTEMPTS:
                     continue
                 committed = exc.details.get('committed')
                 if exc.code == 'GIT_FAILED' and committed:
+                    progress.commit = committed
                     self._confirm(receipts, key, committed, 'committed; the work tree was not brought to it',
                                   session_id)
-                    return self._answer(receipts, key, intent_record, created=True, work_tree=False)
+                    return self._answer(receipts, key, created=True, work_tree='not brought to the commit')
                 code = 'CAPTURE_COMMIT_REFUSED' if exc.code in ('COMMIT_REFUSED', 'HOOKS_UNSUPPORTED',
                                                                 'OBJECT_NAME_INVALID') else 'CAPTURE_GIT_FAILED'
                 raise CaptureRefused(code, f'{exc.code} {exc.details.get("reason") or ""}: {exc.message}'.strip()) \
                     from None
             except ra.CannotRun as exc:
                 raise CaptureRefused('CAPTURE_PROJECT_UNAVAILABLE', str(exc)) from None
+            progress.commit = commit
             self._confirm(receipts, key, commit, 'committed', session_id)
-            return self._answer(receipts, key, intent_record, created=True)
+            return self._answer(receipts, key, created=True)
         raise AssertionError('unreachable')   # the last attempt returns or raises
+
+    @staticmethod
+    def _record(receipts, key, commit, session_id):
+        """Record COMMIT in the receipt before the branch moves (``dispatched``, with the commit id), so that a
+        process ending after the branch moved leaves the receipt naming its commit. A later attempt of the same
+        request (the branch moved under the first) finds the receipt dispatched already and leaves it: its commit
+        carries the trailer, which settlement searches for."""
+        if receipts.get(key).state == 'reserved':
+            receipts.transition(key, 'dispatched', actor=ACTOR, reason=RECORDED_REASON,
+                                detail={'commit': commit, 'capturedBySession': session_id}, expected_from='reserved')
 
     @staticmethod
     def _confirm(receipts, key, commit, reason, session_id):
@@ -556,13 +778,47 @@ class Capture:
         receipts.transition(key, 'confirmed', actor=ACTOR, reason=reason, detail=detail, expected_from='dispatched')
 
     @staticmethod
-    def _answer(receipts, key, intent_record, *, created, work_tree=True):
+    def _answer(receipts, key, *, created, work_tree=None):
+        """The answer, built from the receipt alone: its own intent and its confirmed commit, never the current
+        configuration. WORK_TREE, when given, says that the work tree or the index does not hold the commit's
+        files."""
+        intent_record = json.loads(receipts.get(key).intent_json)
         events = receipts.events(key)
         confirmed = [e for e in events if e.to_state == 'confirmed']
         commit = json.loads(confirmed[-1].detail_json)['commit']
         answer = {'change': intent_record['change'], 'commit': commit, 'created': created, 'receipt': key,
                   'state': 'confirmed', 'quote': intent_record['quote'], 'files': intent_record['files'],
                   'project': intent_record['project']['id']}
-        if not work_tree:
-            answer['workTree'] = 'not brought to the commit'
+        if work_tree is not None:
+            answer['workTree'] = work_tree
         return answer
+
+
+RECORDED_REASON = 'the commit is written; the branch moves next'
+
+
+class _Progress:
+    """What one capture has established: the commit on the branch, once there is one (for the store's refusals)."""
+    commit = None
+
+
+def recorded_commit(receipts, key: str) -> str | None:
+    """The commit id the receipt recorded when it went to ``dispatched`` (before the branch moved), or None."""
+    for event in reversed(receipts.events(key)):
+        if event.to_state == 'dispatched' and event.detail_json:
+            commit = json.loads(event.detail_json).get('commit')
+            if isinstance(commit, str) and re.fullmatch(r'[0-9a-f]{40}', commit):
+                return commit
+    return None
+
+
+def same_intent(reservation, intent_record: dict, key: str) -> None:
+    """A confirmed receipt answers only the request it was made for: its stored intent's project (id and path),
+    change and message digest must be the request's; else CAPTURE_RECEIPT_CONFLICT, nothing written."""
+    stored = json.loads(reservation.intent_json)
+    fields = (('project id', lambda i: i['project']['id']), ('project path', lambda i: i['project']['path']),
+              ('change', lambda i: i['change']), ('message digest', lambda i: i['messageSha256']))
+    for name, field in fields:
+        if field(stored) != field(intent_record):
+            raise CaptureRefused('CAPTURE_RECEIPT_CONFLICT', f'{key} was captured with another {name}; nothing was '
+                                                             'written')
