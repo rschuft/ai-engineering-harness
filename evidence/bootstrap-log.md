@@ -6111,6 +6111,88 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - a pull request closed or a branch rewritten after publication (the projection does not re-read Gitea);
     - Linux and macOS.
 
+- <a id="u-04-2-verdict-2026-11-17"></a>**2026-11-17: U-04.2 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline, in jsdom and over HTTP; not in a real browser. Judged against:
+  - TASK-15's criterion;
+  - U-04's group proof, which the criterion includes;
+  - the plan's action and artifact;
+  - the I1 design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R4, R6, R11, slice 14).
+  - **Commits, all pushed by this entry:**
+    - **the slice:** `eeba87e`, `8710379`, `5c7163b`, `c5e23f9`;
+    - **the review's fixes:** `4e7d12d`, `cf3b015`.
+  - **The card.** `apps/owner-host/src/areas/outcome-card.tsx` and `outcome-projection.ts`: an assistant-ui tool card over the Integration process's `GET /outcomes/{outcome_id}` (U-04.1).
+    - **When it appears:** once an acceptance is recorded, the reply carries an `outcome_card` tool call holding only the outcome id.
+    - **How it reads:** on every mount, and on "Read again", the card asks the projection with the session header. That GET is its only request: it writes nothing and never sets Work status.
+    - **What it shows:**
+      - why, the approach and the linked Work;
+      - each attempt's stage and its status in plain words;
+      - blockers and missing sources;
+      - what the host verified, apart from what the attempt reported;
+      - the references as copyable text;
+      - a disabled "Session detail: not available yet" placeholder, because the session view is U-01.2's and is blocked.
+  - **The criteria** (tests in `apps/owner-host/src/areas/` unless named):
+    - **"Work is not marked done on agent exit" / "never marks Work complete on agent exit":**
+      - a published result is worded "result published, verified at publication", with the line that the Work item's own status is not changed;
+      - unknown stays unknown;
+      - the card's only request is the projection's GET (`outcome-card.test.tsx`, `outcome-reconnect.test.tsx`).
+    - **"Distinguishes pending/running/failed/unknown":** one test per status, with its code and meaning.
+      - `*_UNPROVEN` says why (a restore).
+      - `disclosed` records are listed.
+      - A status and code that disagree are shown with a visible warning.
+    - **"Missing sources remain visible":**
+      - a failed lineage with each unresolved reference;
+      - every lineage uncertainty, counted in "Blockers and missing sources" as well, so the section never says "none" while one exists;
+      - the always-present `coverage` note;
+      - an unreadable store;
+      - a refused projection with its code;
+      - an answer that is not a projection.
+    - **"Survives reconnect":** the reconnect acceptance fixture (`outcome-reconnect.test.tsx`) shows:
+      - the same card from a fresh read after the shell is torn down and recreated, with nothing written;
+      - a projection that changed while the shell was closed, shown as its new state;
+      - the newest read kept;
+      - an unreachable Integration process, then the projection once it answers.
+    - **The fixture label (R11, slice 14):** the card and each fixture-bound attempt carry FIXTURE; live is shown as live; an unknown or unbound authority says so.
+    - **End to end:** `integrations/ownerhost/tests/test_outcome_card_http.py` with `outcome-card.http.test.mjs`. The Integration process application runs in process on an ephemeral loopback port, serving the real projection of a published fixture attempt. The shell's own card renders it twice, with a teardown between, and the server sees exactly two `GET /outcomes/{id}` requests.
+  - **The fixtures.** `apps/owner-host/src/areas/fixtures/outcome-projection/`: 15 scenarios and `schema.json`.
+    - They are exported by `integrations/ownerhost/tests/outcome_card_fixtures.py` from records the dispatcher's own writers made, through the route and its guards. None is hand-written.
+    - `test_outcome_card_fixtures.py` re-derives them and compares their shape and decisive values, including every evidence and result entry's basis and the authority's reason and detail. `schema.json` must equal the projection's constants.
+  - **The engineering manager's rulings** (decision 0018 point 3.1):
+    1. **The card is read-only** and only reads the projection.
+    2. **Its wording never makes a success of the Work.**
+    3. **Missing sources are never hidden.**
+    4. **Agent-authored text in the shell's origin: S4.** The shell README's precondition, "no agent-authored or fixture-served content may be rendered in the shell's origin", restated design R4 more strictly than R4. R4's reason is that a script running in that origin would hold the session's authority, so Agent Canvas, which interprets agent content richly, must not share it. The plan places this card in the shell as an assistant-ui card.
+       - **The precondition now reads:** such content may appear in the shell's origin only as inert text. That means no markup, no link or URL the browser follows, no HTML or markdown interpretation, and no `dangerouslySetInnerHTML`, `href` or `src` built from it. Agent Canvas and any rich rendering stay on their own origin, and the shell's CSP still applies.
+       - **Enforced by:** a test placing a hostile string in every string field and key of four projections, which finds no `a`, `img`, `script`, `iframe`, `object`, `embed`, `[href]` or `[src]` and no non-text attribute carrying it; and a static test of the card's sources.
+    5. **The outcome id.** It must be a lower-case UUID, checked in the tool path and in the exported card, and the path is encoded. An argument that is not an id (`../threads`, a URL, `//host`) makes no request. A request the shell's client refuses is shown as `not-sent`.
+  - **Review.** One fresh read-only review (dispatch 34) found no blocker, 4 should-fix findings and 13 notes:
+    - S1: the fixture pin missed the evidence basis;
+    - S2: a false "none" among the blockers;
+    - S3: the id check untested;
+    - S4: the precondition, ruled above.
+
+    All four are fixed in `4e7d12d`, with notes 1, 2, 3, 5, 6 and 12: own-property code lookups, the status/code warning, a refused acceptance getting no card, the disclaimer pinned, lists rendered element by element, and the end-to-end test requiring Node.js 24. The review confirmed inert rendering, the credential's single destination, reconnect, the fixtures and the records.
+  - **Validation:**
+    - **Mutants:**
+      - the engineer's 34 card and 8 schema mutants, all killed;
+      - the reviewer's 13 re-run after the fixes: 11 killed, and `observed_all` and `fixture_unc` survive, equivalent on the current fixtures (accepted).
+    - **owner-host:** `typecheck`, `test` (163 passed; the HTTP file skipped unless the Python test drives it) and `build`.
+    - **The full `tools/run_tests.py` in a clean clone:** 16 suites passed at `5c7163b` with and without the locked document, and at `cf3b015` without it.
+    - **Checkers:** `verify_seed` and the gate PASS.
+    - **The engineering manager's re-run at `cf3b015`:** the ownerhost `test_outcome_card_*` tests (8, including the end-to-end test on Node.js 24) and the owner-host outcome Vitest files (52 passed, 1 skipped): OK.
+  - **Process deviations, disclosed:**
+    - **Unscoped `git status`.** Both the engineer and the engineering manager ran an unscoped `git status` in the checkout, which walks untracked paths where a protected file may sit. No protected path appeared in any output.
+      - Corrected: every status check and every dispatch now uses `--untracked-files=no`.
+    - **The reviewer's junction.** It reached the checkout's git-ignored `apps/owner-host/node_modules/.vite-temp/` through a junction from its scratch clone. Vite writes transient files there, and nothing tracked changed.
+    - **The engineering manager's own `cd`.** One `cd` into `apps/owner-host` moved the session's working directory for one step; it was moved back.
+  - **Detected, not defects of this leaf:**
+    - the suite's dispatch tests leave `aieh-*` temp directories behind, because read-only git pack files survive `rmtree(..., ignore_errors=True)`;
+    - `ResourceWarning`s from `test_listener` and `test_history_listener`.
+
+    Both are discovered work for planning.
+  - **Not verified:**
+    - the card in a real browser (its CSS layout and the clipboard; U-06.1);
+    - the end-to-end test in a clean clone, where it skips for lack of `node_modules`;
+    - a live projection.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

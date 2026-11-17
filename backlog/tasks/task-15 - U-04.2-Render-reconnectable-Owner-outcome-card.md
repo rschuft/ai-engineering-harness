@@ -1,9 +1,10 @@
 ---
 id: TASK-15
 title: 'U-04.2: Render reconnectable Owner outcome card'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-16T03:53:00Z'
+updated_date: '2026-11-17T18:24:00Z'
 labels: []
 milestone: m-0
 dependencies:
@@ -22,5 +23,11 @@ Plan contract: leaf U-04.2 of AI_Engineering_Implementation_Project_Plan_Oversee
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Work is not marked done on agent exit and missing sources remain visible; original U-04 proof satisfied.
+- [x] #1 Work is not marked done on agent exit and missing sources remain visible; original U-04 proof satisfied.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PASS by the engineering manager's verdict, 2026-11-17: evidence/bootstrap-log.md#u-04-2-verdict-2026-11-17
+<!-- SECTION:FINAL_SUMMARY:END -->
