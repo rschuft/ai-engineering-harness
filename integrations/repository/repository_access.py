@@ -2127,13 +2127,15 @@ class Repository:
 
     # -- writes (decision 0014 sections 6 and 8: the commit, first needed by plan leaf P-04.1)
 
-    def write_commit(self, files, message, *, identity, expected_head, when=None, check=None):
+    def write_commit(self, files, message, *, identity, expected_head, when=None, check=None, author=None):
         """Commit FILES ({repository-relative path: bytes}: regular, non-executable files, each
         added or replaced) on the branch HEAD names, as writing them into the work tree and running
-        ``git commit --only -- <paths>`` would, with author and committer IDENTITY (``Name
-        <email>``) at WHEN ((seconds since the epoch, offset east of UTC in seconds); now and the
-        local offset when None) and MESSAGE. Returns the new commit id. This is decision 0014's
-        ``commit`` write; it is named apart from ``commit(revision)``, the read.
+        ``git commit --only -- <paths>`` would, with committer IDENTITY (``Name <email>``) and
+        author AUTHOR (``Name <email>``; IDENTITY when None, so that author and committer are one)
+        at WHEN ((seconds since the epoch, offset east of UTC in seconds); now and the local offset
+        when None) and MESSAGE. The reflog lines name the committer, as git writes them. Returns the
+        new commit id. This is decision 0014's ``commit`` write; it is named apart from
+        ``commit(revision)``, the read.
 
         Built as objects plus a compare-and-set update of the branch, never through a porcelain
         (section 6): the blobs, trees and the commit are written first; then CHECK(commit id), when
@@ -2176,6 +2178,8 @@ class Repository:
             raise ValueError('message must be non-empty text')
         if not isinstance(identity, str) or not IDENTITY.fullmatch(identity):
             raise ValueError('identity must be "Name <email>"')
+        if author is not None and (not isinstance(author, str) or not IDENTITY.fullmatch(author)):
+            raise ValueError('author must be "Name <email>"')
         if not isinstance(expected_head, str) or not re.fullmatch(r'[0-9a-f]{40}', expected_head):
             raise ValueError('expected_head must be a full commit id')
         self._require_work_tree()
@@ -2224,11 +2228,12 @@ class Repository:
         if tree == head_tree:
             raise refuse('nothing-to-commit', 'every file already has this content in HEAD')
         timestamp, offset = when if when is not None else _now_and_offset()
-        author = identity.encode('utf-8')
+        committer = identity.encode('utf-8')
         commit = d.objects.Commit()
         commit.tree = tree.encode('ascii')
         commit.parents = [head.commit.encode('ascii')]
-        commit.author = commit.committer = author
+        commit.committer = committer
+        commit.author = committer if author is None else author.encode('utf-8')
         commit.author_time = commit.commit_time = int(timestamp)
         commit.author_timezone = commit.commit_timezone = int(offset)
         commit.message = (message if message.endswith('\n') else message + '\n').encode('utf-8')
@@ -2247,7 +2252,7 @@ class Repository:
         failure = None
         try:
             moved = self._dul.refs.set_if_equals(head.ref.encode('utf-8'), expected_head.encode('ascii'),
-                                                 oid.encode('ascii'), committer=author, timestamp=int(timestamp),
+                                                 oid.encode('ascii'), committer=committer, timestamp=int(timestamp),
                                                  timezone=int(offset), message=reflog)
         except Exception as exc:
             failure = f'{type(exc).__name__}: {exc}'
@@ -2258,7 +2263,7 @@ class Repository:
             raise refuse('head-moved', f'{head.ref} moved before the update', ref=head.ref)
         try:
             with open(os.path.join(self.controldir, 'logs', 'HEAD'), 'ab') as handle:
-                handle.write(d.reflog.format_reflog_line(expected_head.encode('ascii'), oid.encode('ascii'), author,
+                handle.write(d.reflog.format_reflog_line(expected_head.encode('ascii'), oid.encode('ascii'), committer,
                                                          int(timestamp), int(offset), reflog) + b'\n')
             for path, data in changes.items():
                 full = os.path.join(root, *path.split('/'))

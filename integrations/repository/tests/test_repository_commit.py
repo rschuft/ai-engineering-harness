@@ -209,6 +209,26 @@ class WriteCommit(unittest.TestCase):
                 self.commit(files, **kwargs)
         self.assertEqual(self.loose_head(), self.head)
 
+    def test_a_separate_author_is_written_and_git_reads_both_roles(self):
+        """AUTHOR (plan leaf P-01.3) is the commit's author; IDENTITY stays its committer and names the reflog
+        lines. git itself reads the two roles back."""
+        author = 'Synthetic Author <synthetic-author@example.invalid>'
+        oid = self.commit({'top.txt': b'authored\n'}, author=author)
+        self.assertEqual(rc.out(self.repo, 'log', '-1', '--format=%an <%ae>%n%cn <%ce>', oid).splitlines(),
+                         [author, IDENTITY])
+        with self.open() as repo:
+            commit = repo._object(oid)
+            self.assertEqual((commit.author, commit.committer), (author.encode(), IDENTITY.encode()))
+        for log in (self.repo / '.git' / 'logs' / 'HEAD', self.repo / '.git' / 'logs' / 'refs' / 'heads' / 'main'):
+            self.assertIn(f' {IDENTITY} 1794312000 +0100\t'.encode(), log.read_bytes().splitlines()[-1])
+        rc.git(self.repo, 'fsck', '--strict', '--no-progress')
+
+    def test_an_author_outside_the_grammar_is_refused_before_anything_is_written(self):
+        for author in ('no email', 'A <b>\n', '<b@c>', b'A <b@c>'):
+            with self.subTest(author=author), self.assertRaises(ValueError):
+                self.commit({'top.txt': b'x'}, author=author)
+        self.assertEqual(self.loose_head(), self.head)
+
 
 if __name__ == '__main__':
     unittest.main()
