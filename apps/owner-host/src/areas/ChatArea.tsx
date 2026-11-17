@@ -10,10 +10,12 @@ import {
   ThreadPrimitive,
   useLocalRuntime,
   useRemoteThreadListRuntime,
+  type ChatModelAdapter,
 } from "@assistant-ui/react";
 import { EmptyState } from "./EmptyState";
 import { acknowledgingChatAdapter, modelFreeChatAdapter } from "./chat-adapter";
 import { createThreadListAdapter } from "./conversation-adapters";
+import { HUMAN_TOOL_NAMES, TOOL_COMPONENTS } from "./decision-tool";
 import { useOwnerSession } from "../identity/OwnerSessionContext";
 import type { IntegrationClient } from "../identity/owner-session";
 
@@ -33,10 +35,11 @@ function UserMessage() {
   );
 }
 
+/** An assistant message: its text, and its tool calls through their tool UIs (a pending decision, U-02.2). */
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="owner-chat__message owner-chat__message--assistant">
-      <MessagePrimitive.Parts />
+      <MessagePrimitive.Parts components={{ tools: TOOL_COMPONENTS }} />
     </MessagePrimitive.Root>
   );
 }
@@ -95,19 +98,35 @@ function UnconnectedChat() {
   );
 }
 
-function useAcknowledgingRuntime() {
-  return useLocalRuntime(acknowledgingChatAdapter);
-}
-
 /**
  * Signed in (U-02.1): assistant-ui's LocalRuntime under its RemoteThreadList
  * runtime, both kept in the Owner conversation store through the Integration
  * process. Messages survive a reload in the store's order; replies are the
  * fixed acknowledgement, never a model's text.
+ *
+ * U-02.2: a run that pauses on a human tool (owner_decision, HUMAN_TOOL_NAMES)
+ * is kept as the paused assistant message, and after a browser or service
+ * restart the history load brings it back with its call still pending; the
+ * Owner answers it in the decision card and the completed message is an
+ * update of the same id. CHAT_MODEL is the run's model adapter: the fixed
+ * acknowledgement unless one is given (no chat model is connected yet).
  */
-export function StoredChat({ client }: { client: IntegrationClient }) {
+export function StoredChat({
+  client,
+  chatModel = acknowledgingChatAdapter,
+}: {
+  client: IntegrationClient;
+  chatModel?: ChatModelAdapter;
+}) {
   const adapter = useMemo(() => createThreadListAdapter(client), [client]);
-  const runtime = useRemoteThreadListRuntime({ runtimeHook: useAcknowledgingRuntime, adapter });
+  const runtimeHook = useMemo(
+    () =>
+      function useStoredThreadRuntime() {
+        return useLocalRuntime(chatModel, { unstable_humanToolNames: HUMAN_TOOL_NAMES });
+      },
+    [chatModel],
+  );
+  const runtime = useRemoteThreadListRuntime({ runtimeHook, adapter });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="owner-chat__layout" data-testid="chat-stored">

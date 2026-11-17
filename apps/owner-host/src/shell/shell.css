@@ -299,6 +299,31 @@ body {
   font-size: 0.875rem;
 }
 
+/* A decision the Owner is asked (U-02.2): the question, then one button per option while it is pending. */
+.owner-chat__decision,
+.owner-chat__tool {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  margin-top: 0.25rem;
+}
+
+.owner-chat__decision-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.owner-chat__decision-option {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  font: inherit;
+  background: var(--owner-surface);
+  color: inherit;
+}
+
 .owner-canvas-frame {
   border: 1px solid var(--owner-border);
   border-radius: 8px;

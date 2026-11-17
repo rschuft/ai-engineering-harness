@@ -1,0 +1,119 @@
+{
+  "format": "aieh-owner-host-wire/v1",
+  "description": "The requests the Owner host shell sent to the Integration process for one pending decision (plan leaf U-02.2): the thread initialized, the Owner statement appended, the run paused on the owner_decision human tool and appended as requires-action, then, after the browser was closed and reopened, the decision answered and the completed message sent as an update of the same id. Recorded by apps/owner-host/src/areas/pending-decision.test.tsx, which checks it on every run; message ids, times, the thread id ({thread}) and the local thread id are normalized. Replayed by integrations/ownerhost/tests/test_pending_decision.py against a real Integration process.",
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/threads",
+      "body": {
+        "localId": "__LOCALID_fixture"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/threads/{thread}/messages",
+      "body": {
+        "parentId": null,
+        "message": {
+          "id": "U000001",
+          "createdAt": "2026-11-16T12:00:00.000Z",
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Start the change."
+            }
+          ],
+          "attachments": [],
+          "metadata": {
+            "custom": {}
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/threads/{thread}/messages",
+      "body": {
+        "parentId": "U000001",
+        "message": {
+          "id": "A000001",
+          "role": "assistant",
+          "status": {
+            "type": "requires-action",
+            "reason": "tool-calls"
+          },
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call-1",
+              "toolName": "owner_decision",
+              "args": {
+                "question": "Proceed with the change as stated?",
+                "options": [
+                  "Approve",
+                  "Revise"
+                ]
+              },
+              "argsText": "{\"question\":\"Proceed with the change as stated?\",\"options\":[\"Approve\",\"Revise\"]}"
+            }
+          ],
+          "metadata": {
+            "unstable_state": null,
+            "unstable_annotations": [],
+            "unstable_data": [],
+            "steps": [],
+            "custom": {}
+          },
+          "createdAt": "2026-11-16T12:00:01.000Z"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/threads/{thread}/messages/A000001",
+      "body": {
+        "parentId": "U000001",
+        "message": {
+          "id": "A000001",
+          "role": "assistant",
+          "status": {
+            "type": "complete",
+            "reason": "unknown"
+          },
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call-1",
+              "toolName": "owner_decision",
+              "args": {
+                "question": "Proceed with the change as stated?",
+                "options": [
+                  "Approve",
+                  "Revise"
+                ]
+              },
+              "argsText": "{\"question\":\"Proceed with the change as stated?\",\"options\":[\"Approve\",\"Revise\"]}",
+              "result": {
+                "choice": "Approve"
+              },
+              "isError": false
+            },
+            {
+              "type": "text",
+              "text": "Recorded in the Owner conversation store. No chat model is connected: this is the Owner host's fixed acknowledgement, not a model's reply."
+            }
+          ],
+          "metadata": {
+            "unstable_state": null,
+            "unstable_annotations": [],
+            "unstable_data": [],
+            "steps": [],
+            "custom": {}
+          },
+          "createdAt": "2026-11-16T12:00:01.000Z"
+        }
+      }
+    }
+  ]
+}
