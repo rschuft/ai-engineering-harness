@@ -5841,6 +5841,86 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - **U-06.1 under ruling 1:** the outcome card's "running" lasts only for the dispatcher's RESULT and intake, and the fixture gives no deterministic execution window for item (7)'s close and reopen. This is carried to E-01.8 and U-06.1 as an engineering question before planning.
   - **Not verified:** Agent Canvas against the UI face (G5, U-01.2); the delivery seam and the labels on dispatcher records (E-01.8); every source-derived field live (U-03.2; E-01.6 for `message-event`); Linux and macOS.
 
+- <a id="p-04-4-verdict-2026-11-17"></a>**2026-11-17: P-04.4 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline. Judged against:
+  - TASK-7's criterion;
+  - the I1 design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R2, R3, R6, slice 10, section 5 N2);
+  - decisions 0012, 0025 and 0028.
+  - **Commits, all pushed by this entry:**
+    - **the records first:** `92722ab` (`op-objective-acceptance` in the inventory, the Owner role's grant, the re-rendered tables);
+    - **the slice:** `f5f8899`, `064d3f8`, `be82fb9`, `15c0aa6`, `590f856`, `02d33be`;
+    - **the review's fixes:** `7585cb2`, `37cfd83`, `e9c7393`, `104b494`, `4e8ddd8`, `4317675`, `fe4cc84`.
+  - **The acceptance.** The Integration process's acceptance (`integrations/ownerhost/acceptance.py`) works behind the session, Host and Origin guards.
+    - The Owner's "Review acceptance" message gets a challenge, shown as an assistant-ui tool card.
+    - His "Accept" message is sent by that card's own form, with exactly the text its preview shows, and is stored after the challenge, under that card. The acceptance recorder, running in process, records it as:
+      - channel `owner-ui`;
+      - `reference: conversation:<thread>/<message>#sha256:<digest>`;
+      - `recordedBy: owner`.
+    - **The recorder's one new rule** (`064d3f8`): `owner-ui` is admitted only with the session-binding verifier that the Integration process passes.
+      - Without it, the answer is `SESSION_BINDING_REQUIRED`, from the command line too.
+      - Only `acceptance.py` passes the verifier, which a census test checks.
+  - **The criterion** (`integrations/ownerhost/tests/test_acceptance.py` unless named):
+    - **Mints the outcome once:** `MintOnce`, one commit.
+    - **Resolves through the objective resolver, and the statement resolves to the Owner's message:** `test_the_outcome_resolves_and_the_statement_resolves_to_the_owner_s_message`.
+    - **Re-recording keeps the outcome id:** `test_re_recording_keeps_the_outcome_id`.
+    - **Refusals, each changing nothing.** The tests compare before and after: the project's HEAD, refs, index bytes, objects and status, the conversation store and the integration store.
+      - **Expired, consumed or stale challenge:** `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED`, `CHALLENGE_STALE`; after a restart, `ACCEPTANCE_CHALLENGE_UNKNOWN` (fail-closed).
+      - **Missing or foreign session:** `SESSION_CREDENTIAL_MISSING`, `SESSION_CREDENTIAL_FOREIGN`.
+      - **Not made in the Owner's session:** `ACCEPTANCE_SESSION_MISMATCH`, `SESSION_CREDENTIAL_REVOKED`.
+      - **Authored by a model or an agent:** `ACCEPTANCE_MODEL_AUTHORED`, `ACCEPTANCE_NOT_A_STATEMENT`.
+      - **The card checks** (`CardChecks`: another session, another role, not the reply to the review, another thread, stored before the challenge): `ACCEPTANCE_NOT_AFTER_CARD`, `ACCEPTANCE_CHALLENGE_MISMATCH`.
+    - **P-04.1's and E-05.12's suites unchanged:** the existing files in `integrations/owner/tests/` are byte-identical. The only new file there is `test_owner_ui_channel.py`.
+  - **Write-ahead and settlement (decision 0025 point 8).** All of these run before the receipt `owner-ui/objective-acceptance/v1/<thread>/<message>` is reserved:
+    - every refusal the criterion lists;
+    - the repository's own state: hooks, signing, HEAD on a branch, the index, local changes, the decision-record directory;
+    - the content checks, through `repository_access`'s and the recorder's own functions.
+
+    `docs/development.md` names what can still reach the recorder's backstop after the reservation:
+    - a race;
+    - the lineage check of the new commit, and the recorder's own invariant;
+    - a failure inside the commit.
+
+    In each case the receipt stays `reserved` (receipts are never deleted), and nothing is written to the project. The same message records once after repair, settling by reading the repository first. Once a commit may exist, a failure is `ACCEPTANCE_OUTCOME_UNKNOWN` (`OutcomeUnknown`).
+  - **Attribution under decision 0028.**
+    - The recorder makes exactly one local commit per acceptance, with no separate author.
+    - The identity passed is the session principal's configured identity (`components.owner_host.git_identities`), so author and committer are one. It is read back with `git log` in `test_author_and_committer_are_the_session_principal_s_configured_identity`.
+    - An absent or placeholder identity is refused; the same message records once the identity is configured.
+    - No `aieh-owner` operation is on this path.
+  - **The census (design R2).** Before building, the engineer found that running the recorder in process made the Integration process's static census reach the dispatcher: `lineage_resolve.py` had named `dispatch_inputs.py` since E-01.5. The engineering manager's rulings:
+    - **The attempt resolver moves.** `AttemptResolver` moved to `integrations/lineage/lineage_attempt.py` with its body unchanged.
+      - `build_registry` checks a base class, raising the same TypeError.
+      - The lineage tests changed only the resolver's references and imports.
+      - `test_resolve_census.py` shows that `lineage_resolve` names no dispatch file.
+    - **An exact allowlist.** The forbidden prefix `integrations/owner/` is replaced by an exact allowlist: `acceptance_recorder.py`, `owner_decision.py`, `delegated_decision.py`. The authorization recorder stays forbidden, as R2 says.
+    - **`urllib.parse`** is pinned to the recorder's two functions.
+    - **The effects modules.** `effects_store.py` and `effects_custody.py` are admitted by exact name.
+      - R2 forbids only credential, Gitea, authorization-recorder and dispatch-transport modules.
+      - The census shows that neither has a network import, a connector or a credential module.
+    - **The ownerhost pins** (`test_structure`, `test_app`, `test_listener`) were only extended, and narrowed as above.
+  - **Review.** One fresh read-only review (dispatch 27) found no blocker, 4 should-fix findings and 6 notes. Its re-check found S2 only partly closed, and 2 new should-fix findings: the outcome after a possible commit, and the docs on the detached HEAD and the backstop. All were fixed. Among the fixes:
+    - a preflight before the reservation;
+    - the older card's form now carries its own challenge;
+    - the card checks and the challenge's sequence bound gained falsifiers.
+  - **Validation:**
+    - **Mutants:** every mutant and probe of the review and the re-check is killed or refused, plus the engineer's own (recorder, service, census, verifier, shell, preflight, outcome rule).
+    - **The full `tools/run_tests.py`** in a clean clone: 16 suites passed at `02d33be`, `104b494` and `fe4cc84`.
+    - **The shell:** 97 tests and the typecheck.
+    - **Checkers:** `verify_seed`, the gate, `check_network_matrix`, `check_security_inventory` and `check_role_tokens` PASS.
+    - **The engineering manager's re-run:** the ownerhost suite at `fe4cc84`, 242 tests OK.
+  - **Fix-forward of an earlier slice.** `evidence/test-profile/test-ids.json` held 31 ids ending in a carriage return, introduced by `d4a9e7a` (E-01.5's records). `104b494` strips it: the same keys, and no id removed. Discovered and recorded ids now agree.
+  - **Delegated decisions:**
+    - the rulings above;
+    - the preflight works through `write_commit`'s own refusals, and writes nothing (shown byte for byte);
+    - a pre-existing unconfirmed receipt counts as "a commit may exist";
+    - challenges are held in process, for 60 minutes, at most 64;
+    - the card id the client proposes is checked against the stored thread at record time, because the card is still being generated at `prepare`. This is read against decision 0025 point 8;
+    - the difference between trim and strip is accepted: a 422 that changes nothing;
+    - the session-binding census sees the literal keyword only.
+  - **Detected, not a defect of this leaf.** `repository_access`'s symbolic-link check does not see Windows directory junctions. The acceptance's own decision-directory check adds a junction test, but other callers of `write_commit`, P-01.3's capture included, have none. This is discovered work for planning.
+  - **Not verified:**
+    - a real project repository, the Owner's configured identity, a real browser and the live Integration process (U-06.1);
+    - a real race;
+    - Linux and macOS.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
