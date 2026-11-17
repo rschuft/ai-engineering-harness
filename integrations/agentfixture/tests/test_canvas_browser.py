@@ -52,15 +52,18 @@ class Canvas:
         self.build_dir = build_dir
         self.process = None
 
-    def start(self) -> 'Canvas':
+    def start(self, ceiling_s: float = B.START_CEILING_S) -> 'Canvas':
+        """Starts the start command and waits, with a ceiling, for its own ready line; on any failure its process
+        tree is ended before the error is raised."""
         self.process = subprocess.Popen(self.argv, cwd=APP, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, creationflags=S.NO_WINDOW)
-        while True:   # the start command's own ready line (EOF if it exits first)
-            line = self.process.stdout.readline().decode('utf-8', 'replace')
-            if not line:
-                raise RuntimeError('the Canvas server exited: ' + self.process.stderr.read().decode('utf-8', 'replace'))
-            if line.startswith('listening '):
-                return self
+        try:
+            self.stdout, self.stderr = B.LineReader(self.process.stdout), B.LineReader(self.process.stderr)
+            self.stdout.wait_for(lambda line: line.startswith('listening '), ceiling_s)
+            return self
+        except BaseException:
+            B.kill_tree(self.process)
+            raise
 
     def stop(self) -> int | None:
         if self.process is None:
@@ -70,9 +73,7 @@ class Canvas:
             try:
                 self.process.wait(S.STOP_CEILING_S)
             except subprocess.TimeoutExpired:
-                subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.process.pid)], capture_output=True,
-                               creationflags=S.NO_WINDOW)
-                self.process.wait(S.STOP_CEILING_S)
+                B.kill_tree(self.process)
         for stream in (self.process.stdout, self.process.stderr):
             stream.close()
         return self.process.returncode
@@ -100,10 +101,12 @@ def g5(csp: bool, out: Path) -> dict:
         canvas_port = S.free_port()
         while canvas_port == 13330:
             canvas_port = S.free_port()
-        canvas = Canvas(canvas_port, served.port, out / 'canvas', csp).start()
+        canvas = Canvas(canvas_port, served.port, out / 'canvas', csp)   # assigned first: finally always stops it
+        canvas.start()
         if csp:
             report['policy'] = json.loads((out / 'canvas' / 'derived.json').read_text(encoding='utf-8'))['csp']
-        browser = B.Browser(out / 'profile').start()
+        browser = B.Browser(out / 'profile')   # assigned first: finally always closes it
+        browser.start()
         session = browser.page()
         report['armedBeforePage'] = list(browser.armed)
         before = len(served.calls())
@@ -137,6 +140,7 @@ def g5(csp: bool, out: Path) -> dict:
                                        'fixtureAnswer': answer, 'provenanceRows': answer in rows if answer else None})
         report['blocked'] = browser.blocked
         report['escaped'] = B.escaped(log)
+        report['backstop'] = list(browser.backstop.hits)
         report['fixtureCalls'] = served.calls()[before:]
     finally:
         if browser is not None:
@@ -161,8 +165,9 @@ class GateG5(unittest.TestCase):
         # the block was armed, and shown working, before the page under test opened
         probe = [a for a in report['armedBeforePage'] if a.get('probe') == B.PROBE_URL]
         self.assertTrue(probe and probe[0]['blocked'], report['armedBeforePage'])
-        # no request left loopback
+        # no request left loopback, and none reached the driver's backstop proxy
         self.assertEqual(report['escaped'], [])
+        self.assertEqual(report['backstop'], [])
         # every request the fixture answered 2xx has a provenance row
         self.assertEqual([r for r in report['requests'] if r['fixtureAnswer'] and r['status']
                           and 200 <= r['status'] < 300 and not r['provenanceRows']], [])

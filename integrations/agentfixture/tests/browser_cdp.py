@@ -16,13 +16,22 @@ before any page loads:
    ``127.0.0.1`` is failed (``BlockedByClient``) before it is sent, and logged with its URL, resource type and
    initiator. The run's own log records each arming, and a probe request to a non-routable address
    (``PROBE_URL``) is shown blocked before the page under test is opened.
-2. *Backstop:* every request the browser makes at all to a host other than ``127.0.0.1`` (WebSockets included,
-   which ``Fetch`` does not see; ``localhost`` and ``[::1]`` included) goes to a proxy on a closed loopback port
+2. *Backstop, owned by the driver* (U-01.2's review, S4): every request the browser makes at all to a host other
+   than ``127.0.0.1`` (WebSockets included, which ``Fetch`` does not see; ``localhost`` and ``[::1]`` included) goes to
+   the driver's own ``Backstop``, a loopback listener on a kernel-chosen port named as the browser's proxy
    (``--proxy-server``; the bypass list ``<-loopback>;127.0.0.1`` drops the implicit loopback bypass and bypasses
-   ``127.0.0.1`` alone), so it fails without a name lookup.
+   ``127.0.0.1`` alone). It refuses every request (403, nothing forwarded) and records it: any request that reaches it
+   is a failure of the run. Name resolution is off for every host but ``127.0.0.1``
+   (``--host-resolver-rules``), and WebRTC may send no UDP but through the proxy
+   (``--force-webrtc-ip-handling-policy=disable_non_proxied_udp``).
 
 The page's own network log (``Network`` domain, WebSocket included) is the evidence: ``off_loopback`` lists every
-request to another host, and ``escaped`` those of them that got a response (none may).
+request to another host, and ``escaped`` those of them that got a response (none may); ``backstop.hits`` lists what
+reached the backstop (none may).
+
+**No leak, no hang** (S3): every wait for a process's readiness has a ceiling (a bound on a hang, never a sleep: it
+waits on the ready line or the end of the stream); ``start`` ends its own browser process tree, stops the backstop and
+removes the profile on any failure after the process is started.
 
 Standard library and the tools set's ``websockets`` (its synchronous client) only.
 """
@@ -30,6 +39,7 @@ from __future__ import annotations
 
 import base64
 import itertools
+import socket
 import json
 import os
 import queue
@@ -42,8 +52,8 @@ from urllib.parse import urlsplit
 
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 LOOPBACK = '127.0.0.1'
-# a closed loopback port: the backstop proxy every non-loopback request is sent to (and refused by)
-DEAD_PROXY = 'http://127.0.0.1:9'
+# every host but 127.0.0.1 resolves to nothing (Chromium's resolver rules)
+RESOLVER_RULES = 'MAP * ~NOTFOUND , EXCLUDE 127.0.0.1'
 # a request the block must stop before the page under test opens (TEST-NET-1, RFC 5737: never routed)
 PROBE_URL = 'http://192.0.2.1/aieh-block-probe'
 BLOCKED_REASON = 'BlockedByClient'
@@ -56,8 +66,10 @@ QUIET_FLAGS = (
     '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,'
     'CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions,PrivacySandboxSettings4',
     '--password-store=basic', '--use-mock-keychain', '--mute-audio', '--hide-scrollbars',
-    f'--proxy-server={DEAD_PROXY}', '--proxy-bypass-list=<-loopback>;127.0.0.1',
+    '--proxy-bypass-list=<-loopback>;127.0.0.1', f'--host-resolver-rules={RESOLVER_RULES}',
+    '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
 )
+START_CEILING_S = 120   # a ceiling on a process's readiness, not an expected duration
 
 
 def candidates(environ=os.environ) -> list[Path]:
@@ -84,11 +96,118 @@ def find_browser(explicit: str | None = None, environ=os.environ) -> Path:
     raise BrowserError('neither Chrome nor Edge is installed')
 
 
-def launch_argv(browser: Path, profile: Path, *, width: int = 1280, height: int = 900) -> list[str]:
+def launch_argv(browser: Path, profile: Path, proxy_port: int, *, width: int = 1280, height: int = 900) -> list[str]:
     """The browser's command line: headless, quiet, a throwaway PROFILE, a kernel-chosen loopback debugging port,
-    every non-loopback request sent to the dead backstop proxy."""
-    return [str(browser), *QUIET_FLAGS, f'--user-data-dir={profile}', '--remote-debugging-address=127.0.0.1',
-            '--remote-debugging-port=0', f'--window-size={width},{height}', 'about:blank']
+    every non-loopback request sent to the driver's backstop on 127.0.0.1:PROXY_PORT."""
+    if not isinstance(proxy_port, int) or not 0 < proxy_port < 65536:
+        raise BrowserError(f'no backstop port: {proxy_port!r}')
+    return [str(browser), *QUIET_FLAGS, f'--proxy-server=http://{LOOPBACK}:{proxy_port}', f'--user-data-dir={profile}',
+            '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', f'--window-size={width},{height}',
+            'about:blank']
+
+
+class LineReader:
+    """The lines of a process's stream, read on a thread of their own until the stream ends (so the process never
+    blocks on a full pipe), and waited for with a ceiling."""
+
+    def __init__(self, stream):
+        self.lines: queue.Queue = queue.Queue()
+        threading.Thread(target=self._read, args=(stream,), daemon=True).start()
+
+    def _read(self, stream):
+        try:
+            for raw in iter(stream.readline, b''):
+                self.lines.put(raw.decode('utf-8', 'replace'))
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.lines.put(None)
+
+    def wait_for(self, predicate, ceiling_s: float) -> str:
+        """The first line PREDICATE accepts. EOFError when the stream ends first, TimeoutError when the ceiling (a
+        bound on a hang, not an expected duration) passes first."""
+        deadline = time.monotonic() + ceiling_s
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f'no ready line within {ceiling_s} s')
+            try:
+                line = self.lines.get(timeout=left)
+            except queue.Empty:
+                raise TimeoutError(f'no ready line within {ceiling_s} s') from None
+            if line is None:
+                raise EOFError('the stream ended before its ready line')
+            if predicate(line):
+                return line
+
+
+def kill_tree(process) -> None:
+    """Ends PROCESS and every process it started (taskkill /T on Windows), and waits for it."""
+    if process is None:
+        return
+    if process.poll() is None:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True,
+                           creationflags=NO_WINDOW)
+        else:
+            process.kill()
+    try:
+        process.wait(START_CEILING_S)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(START_CEILING_S)
+
+
+class Backstop:
+    """The driver's own proxy backstop (U-01.2's review, S4): a loopback listener on a kernel-chosen port that refuses
+    every request it receives (403, nothing forwarded, no name looked up) and records it (``hits``: the request line and
+    the Host). The browser names it as its proxy for every host but 127.0.0.1, so a hit is a request that tried to
+    leave loopback: any hit fails the run."""
+
+    def __init__(self):
+        self.hits: list[dict] = []
+        self.lock = threading.Lock()
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind((LOOPBACK, 0))
+        self.listener.listen(64)
+        self.port = self.listener.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                return   # stopped
+            threading.Thread(target=self._refuse, args=(conn,), daemon=True).start()
+
+    def _refuse(self, conn):
+        with conn:
+            conn.settimeout(START_CEILING_S)
+            head = b''
+            try:
+                while b'\r\n\r\n' not in head and len(head) < 65536:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    head += chunk
+            except OSError:
+                pass
+            lines = head.split(b'\r\n')
+            host = next((l[5:].strip() for l in lines[1:] if l.lower().startswith(b'host:')), b'')
+            with self.lock:
+                self.hits.append({'request': lines[0].decode('latin-1')[:2000], 'host': host.decode('latin-1')[:500]})
+            try:
+                conn.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+            except OSError:
+                pass
+
+    def stop(self):
+        try:
+            self.listener.close()
+        finally:
+            self.thread.join(START_CEILING_S)
 
 
 def fresh_profile(profile: Path) -> Path:
@@ -136,10 +255,15 @@ class Browser:
     ``navigate``, ``wait_for_text``, ``click_text`` and ``screenshot`` act on it; ``log()`` is its network log,
     ``blocked`` the requests the block failed, ``armed`` the run's own record of each arming."""
 
-    def __init__(self, profile: Path, *, browser: str | None = None, ceiling_s: float = 120):
+    def __init__(self, profile: Path, *, browser: str | None = None, ceiling_s: float = 120,
+                 start_ceiling_s: float = START_CEILING_S, launcher=launch_argv):
         self.profile = fresh_profile(profile)
         self.executable = find_browser(browser)
         self.ceiling_s = ceiling_s
+        self.start_ceiling_s = start_ceiling_s
+        self.launcher = launcher
+        self.backstop = None
+        self.stderr = None
         self.process = None
         self.ws = None
         self.ids = itertools.count(1)
@@ -164,26 +288,28 @@ class Browser:
 
     # -- process --------------------------------------------------------------------------------------------
     def start(self) -> 'Browser':
+        """Starts the backstop and the browser, and connects to its DevTools endpoint. On any failure the browser's
+        process tree is ended, the backstop stopped and the profile removed before the error is raised."""
         from websockets.sync.client import connect
-        self.process = subprocess.Popen(launch_argv(self.executable, self.profile), stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
-        url = None
-        while url is None:   # the browser's own readiness line on its standard error (EOF if it exits first)
-            line = self.process.stderr.readline().decode('utf-8', 'replace')
-            if not line:
-                raise BrowserError('the browser exited before it listened')
-            if line.startswith(DEVTOOLS_LINE):
-                url = line[len(DEVTOOLS_LINE):].strip()
-        if host_of(url) != LOOPBACK:
-            raise BrowserError(f'the DevTools endpoint is not on loopback: {url}')
-        threading.Thread(target=self._drain, daemon=True).start()
-        self.ws = connect(url, open_timeout=self.ceiling_s, max_size=None)
-        threading.Thread(target=self._read, daemon=True).start()
-        return self
-
-    def _drain(self):
-        for _ in iter(self.process.stderr.readline, b''):
-            pass
+        try:
+            self.backstop = Backstop()
+            self.process = subprocess.Popen(self.launcher(self.executable, self.profile, self.backstop.port),
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                            creationflags=NO_WINDOW)
+            self.stderr = LineReader(self.process.stderr)
+            try:   # the browser's own readiness line on its standard error, with a ceiling
+                line = self.stderr.wait_for(lambda l: l.startswith(DEVTOOLS_LINE), self.start_ceiling_s)
+            except (EOFError, TimeoutError) as exc:
+                raise BrowserError(f'the browser did not listen: {exc}') from None
+            url = line[len(DEVTOOLS_LINE):].strip()
+            if host_of(url) != LOOPBACK:
+                raise BrowserError(f'the DevTools endpoint is not on loopback: {url}')
+            self.ws = connect(url, open_timeout=self.ceiling_s, max_size=None)
+            threading.Thread(target=self._read, daemon=True).start()
+            return self
+        except BaseException:
+            self._teardown()
+            raise
 
     def _send(self, message: dict):
         with self.send_lock:
@@ -464,23 +590,35 @@ class Browser:
         data = self.call('Page.captureScreenshot', {'format': 'png'}, session=session)['data']
         Path(path).write_bytes(base64.b64decode(data))
 
+    def _teardown(self):
+        """Ends the browser's process tree, stops the backstop and removes the profile (whatever state they are in)."""
+        try:
+            if self.ws is not None:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
+            kill_tree(self.process)
+            if self.process is not None and self.process.stderr:
+                self.process.stderr.close()
+        finally:
+            if self.backstop is not None:
+                self.backstop.stop()
+            shutil.rmtree(self.profile, ignore_errors=True)
+
     def close(self):
-        """Closes the browser, waits for its process, and removes the throwaway profile."""
+        """Closes the browser (Browser.close, then its whole process tree if it lingers), stops the backstop and
+        removes the throwaway profile."""
         try:
             if self.ws is not None:
                 try:
                     self.call('Browser.close')
                 except Exception:
                     pass
-                self.ws.close()
-        finally:
             if self.process is not None:
                 try:
                     self.process.wait(self.ceiling_s)
                 except subprocess.TimeoutExpired:
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.process.pid)], capture_output=True,
-                                   creationflags=NO_WINDOW)
-                    self.process.wait(self.ceiling_s)
-                if self.process.stderr:
-                    self.process.stderr.close()
-            shutil.rmtree(self.profile, ignore_errors=True)
+                    pass
+        finally:
+            self._teardown()

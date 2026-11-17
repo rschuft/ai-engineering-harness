@@ -1,7 +1,13 @@
 """The real-browser driver's own rules (``browser_cdp.py``, U-01.2's gate G5): what the block lets through, what the
 network log calls off loopback and escaped, the browser's command line, the throwaway profile. Offline: no browser
 is started here (the driver itself runs only in the gated ``test_canvas_browser.py``)."""
+import io
+import os
+import socket
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -38,14 +44,21 @@ class Block(unittest.TestCase):
 
 
 class CommandLine(unittest.TestCase):
-    def test_headless_quiet_a_loopback_debugger_and_the_dead_proxy_for_everything_but_127_0_0_1(self):
-        argv = B.launch_argv(Path('C:/b/chrome.exe'), Path('C:/scratch/profile'))
+    def test_headless_quiet_a_loopback_debugger_and_the_backstop_for_everything_but_127_0_0_1(self):
+        argv = B.launch_argv(Path('C:/b/chrome.exe'), Path('C:/scratch/profile'), 50123)
         for flag in ('--headless=new', '--disable-background-networking', '--disable-component-update',
                      '--no-first-run', '--disable-sync', '--disable-default-apps', '--disable-extensions',
                      '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
-                     '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>;127.0.0.1',
+                     '--proxy-server=http://127.0.0.1:50123', '--proxy-bypass-list=<-loopback>;127.0.0.1',
+                     '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1',
+                     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
                      f'--user-data-dir={Path("C:/scratch/profile")}'):
             self.assertIn(flag, argv)
+        self.assertEqual([a for a in argv if a.startswith('--proxy-server=')], ['--proxy-server=http://127.0.0.1:50123'])
+        self.assertFalse([a for a in argv if ':9' in a and a.startswith('--proxy')], 'no assumed-closed port')
+        for port in (None, 0, 65536, '9'):
+            with self.assertRaises(B.BrowserError):
+                B.launch_argv(Path('C:/b/chrome.exe'), Path('C:/scratch/profile'), port)
         self.assertEqual(argv[0], str(Path('C:/b/chrome.exe')))
         self.assertEqual(argv[-1], 'about:blank')
         self.assertEqual(sum(a.startswith('--user-data-dir=') for a in argv), 1)
@@ -55,6 +68,89 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(names, ['chrome.exe', 'chrome.exe', 'msedge.exe', 'msedge.exe'])
         with self.assertRaises(B.BrowserError):
             B.find_browser('C:/no/such/browser.exe')
+
+
+class Lines(unittest.TestCase):
+    def test_a_ready_line_is_found_the_end_and_the_ceiling_are_errors(self):
+        reader = B.LineReader(io.BytesIO(b'noise\nDevTools listening on ws://127.0.0.1:1/x\nmore\n'))
+        self.assertEqual(reader.wait_for(lambda l: l.startswith('DevTools'), 30).strip(),
+                         'DevTools listening on ws://127.0.0.1:1/x')
+        with self.assertRaises(EOFError):
+            reader.wait_for(lambda l: l.startswith('never'), 30)
+        read, write = os.pipe()
+        self.addCleanup(os.close, write)
+        with self.assertRaises(TimeoutError):
+            B.LineReader(os.fdopen(read, 'rb')).wait_for(lambda l: True, 0.2)
+
+
+class Backstop(unittest.TestCase):
+    category = 'integration'   # a loopback listener
+
+    def ask(self, port, data):
+        with socket.create_connection(('127.0.0.1', port), timeout=30) as conn:
+            conn.sendall(data)
+            return conn.recv(4096)
+
+    def test_it_refuses_every_proxy_request_records_it_and_stops(self):
+        backstop = B.Backstop()
+        self.addCleanup(backstop.stop)
+        self.assertEqual(self.ask(backstop.port, b'GET http://cdn.example/x.png HTTP/1.1\r\nHost: cdn.example\r\n\r\n')
+                         .split(b'\r\n')[0], b'HTTP/1.1 403 Forbidden')
+        self.assertEqual(self.ask(backstop.port, b'CONNECT cdn.example:443 HTTP/1.1\r\nHost: cdn.example:443\r\n\r\n')
+                         .split(b'\r\n')[0], b'HTTP/1.1 403 Forbidden')
+        self.assertEqual(backstop.hits, [{'request': 'GET http://cdn.example/x.png HTTP/1.1', 'host': 'cdn.example'},
+                                         {'request': 'CONNECT cdn.example:443 HTTP/1.1', 'host': 'cdn.example:443'}])
+        port = backstop.port
+        backstop.stop()
+        with self.assertRaises(OSError):
+            socket.create_connection(('127.0.0.1', port), timeout=5).close()
+
+
+class StartFailures(unittest.TestCase):
+    """U-01.2's review, S3: a browser that exits, hangs or listens off loopback before it is ready leaves no process,
+    no backstop and no profile behind, and the wait for it has a ceiling. The stand-in browser is this interpreter."""
+
+    category = 'integration'   # processes and a listener
+
+    def browser(self, script, ceiling=30):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-cdp-'))
+        self.addCleanup(lambda: __import__('shutil').rmtree(tmp, ignore_errors=True))
+        launched = {}
+
+        def launcher(exe, profile, port):
+            launched['port'] = port
+            return [str(exe), '-I', '-c', script]
+        b = B.Browser(tmp / 'profile', browser=sys.executable, launcher=launcher, start_ceiling_s=ceiling)
+        return b, tmp / 'profile', launched
+
+    def assertLeftNothing(self, b, profile, launched):
+        self.assertIsNotNone(b.process.poll(), 'the stand-in browser was ended')
+        self.assertFalse(profile.exists(), 'the profile was removed')
+        with self.assertRaises(OSError):
+            socket.create_connection(('127.0.0.1', launched['port']), timeout=5).close()
+
+    def test_a_browser_that_exits_before_it_listens(self):
+        b, profile, launched = self.browser('import sys; sys.exit(3)')
+        with self.assertRaises(B.BrowserError) as caught:
+            b.start()
+        self.assertIn('did not listen', str(caught.exception))
+        self.assertLeftNothing(b, profile, launched)
+
+    def test_a_browser_that_never_listens_is_ended_at_the_ceiling(self):
+        b, profile, launched = self.browser('import threading; threading.Event().wait()', ceiling=1.0)
+        with self.assertRaises(B.BrowserError) as caught:
+            b.start()
+        self.assertIn('within 1.0 s', str(caught.exception))
+        self.assertLeftNothing(b, profile, launched)
+
+    def test_a_debugger_off_loopback_is_refused_and_ended(self):
+        script = ("import sys, threading; sys.stderr.write('DevTools listening on ws://203.0.113.9:1/x\\n'); "
+                  "sys.stderr.flush(); threading.Event().wait()")
+        b, profile, launched = self.browser(script)
+        with self.assertRaises(B.BrowserError) as caught:
+            b.start()
+        self.assertIn('not on loopback', str(caught.exception))
+        self.assertLeftNothing(b, profile, launched)
 
 
 class Profile(unittest.TestCase):
