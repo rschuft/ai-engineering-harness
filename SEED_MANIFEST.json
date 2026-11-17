@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "961759ab887a2106ca5c6fc275374f5f6a3d950f9dfb2b07f89372b67f765889",
-      "size_bytes": 3680386
+      "sha256": "cc091ee9a42bb2dd76ce2899a708d4bd298f13eb80b3d75c3ca381b601d2c8c3",
+      "size_bytes": 3688991
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "b30bc0e8d574c8de48885b21ca2f359ff29505e3531c61af58148c58096b76e6",
-      "size_bytes": 1953652
+      "sha256": "c11bca01f016a2fb73160ab3a04be25457422fc79c41ae6df5bd906f9d807d2e",
+      "size_bytes": 1960275
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "f01d0893cc153148918b3cec8b599e9401dd3a90289ac4b7a1bf9473d3630884",
-      "size_bytes": 349937
+      "sha256": "6bac625e220cc6f7319caa4a35ea8efe5d057b4f345a7b298f7f328420a57864",
+      "size_bytes": 350589
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,7 +49,7 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "119205724a50a13067025c78c06ac477f5df669dbd33480594a871421be02c9f",
+      "sha256": "18c205a9fe54ec34171b9304b7462ee01c8d2b663481e63a3bffef06292b52a9",
       "size_bytes": 58787
     },
     {
@@ -139,8 +139,8 @@
     },
     {
       "path": "task_prompts/E-01.8.md",
-      "sha256": "b29a94839a5b3c3f93e1e7ba25a407ade670f576013a1398351ae389c4903e63",
-      "size_bytes": 5110
+      "sha256": "7e3ff02b9195571b7799628c8bae562b9263c696ea6e82093a961e5c01e0dcb7",
+      "size_bytes": 5393
     },
     {
       "path": "task_prompts/E-01.9.md",
@@ -1004,8 +1004,8 @@
     },
     {
       "path": "task_prompts/U-06.1.md",
-      "sha256": "c8e0777ca4f5d451d592650a161ddd601c39daa1c56042235b0156a8c962b0b5",
-      "size_bytes": 7659
+      "sha256": "4ce8980cae03fd212759dae0fa9de86643c1520561db23449dfc5922ac836575",
+      "size_bytes": 8028
     },
     {
       "path": "tools/verify_seed.py",
