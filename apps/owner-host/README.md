@@ -277,6 +277,80 @@ the card the message follows and the message's sha256, and replies with the reco
 [`src/areas/acceptance-flow.test.tsx`](src/areas/acceptance-flow.test.tsx) shows it against a fake
 Integration process. A real browser is **not yet verified**.
 
+## The standalone Agent Canvas (U-01.2): gates G6 and G5
+
+Plan leaf U-01.2 shows an attempt's engineering session as blueprint UI-01's fallback: Agent Canvas 1.36.0's
+standalone application, served by upstream's own `scripts/static-server.mjs` on its own loopback origin,
+`http://127.0.0.1:13330`, proxying to the served fixture's read-only UI face (`http://127.0.0.1:13320/ui`,
+[`integrations/agentfixture`](../../integrations/agentfixture/README.md)), framed in the engineering area
+(the I1 design, R14 and R15; decision 0026 points 8 and 9, Proposed). Its edges and asset were recorded first
+(`nm-owner-ui-canvas`, `nm-canvas-agentfixture-ui`, `app-agent-canvas`; census port 13330).
+
+The two gates' decision rules below were written and committed **before** the Canvas server first listened and
+before any browser was opened (the I1 design, section 6). They are not changed after the observation.
+
+### G6: the static server at the pin
+
+**Run.** `node <agent-canvas>/scripts/static-server.mjs --host 127.0.0.1 --port 13330 --dir <derived build>
+--route /api=http://127.0.0.1:13320/ui --route /sockets=http://127.0.0.1:13320/ui
+--route /server_info=http://127.0.0.1:13320/ui --session-api-key agentfixture-ui-face-public-value
+--disable-telemetry`, from the installed pinned package (`@openhands/agent-canvas` 1.36.0, integrity as
+`package-lock.json` records it), unpatched, with no window, its environment holding no `MARS_*`,
+`SESSION_API_KEY` or `AGENT_CANVAS_*` variable but `MARS_WEB=0`. `<derived build>` is a copy of the package's
+`build/` outside the checkout.
+
+**PASS iff every one of these is observed:**
+
+1. *Binding.* The host census by port 13330 (`tools/guest.py`'s query, `Get-NetTCPConnection -State Listen`)
+   finds exactly one listener on that port, its address `127.0.0.1`, owned by the started process (or its
+   child), and no other listener of that process tree on any address.
+2. *`--host`, `--port`.* The server's own ready line names `http://127.0.0.1:13330/`.
+3. *`--route`* ("Proxy <prefix> (and subpaths) to <url>; may be repeated. WebSockets supported"): a `GET
+   /server_info` and a `GET /api/conversations/<id>` sent to 13330 are answered by the fixture (its
+   `X-AIEH-Fixture` label header present, and the fixture's call log names the request on its UI face under
+   `/ui`); a WebSocket upgrade of `/sockets/session/<id>` sent to 13330 reaches the fixture's UI face (a labelled
+   handshake, and its call log's `connect`).
+4. *`--session-api-key`* ("Inject session API key into index.html"): the served `index.html` holds
+   `window.__AGENT_CANVAS_SESSION_API_KEY__="agentfixture-ui-face-public-value"`.
+5. *`--disable-telemetry`* ("Injects window.__AGENT_CANVAS_DO_NOT_TRACK__ = true"): the served `index.html` holds
+   `window.__AGENT_CANVAS_DO_NOT_TRACK__=true`.
+6. *The derived build* differs from the package's `build/` only by the two remote Google Fonts `@import` rules
+   removed: a byte comparison of every file finds exactly one changed file (the root stylesheet), whose bytes equal
+   the original's with exactly those two rules taken out, and no JavaScript file changed, added or removed.
+
+**STOP** (and report, building nothing on it) if the server binds anything but `127.0.0.1`, or any flag above does
+not do what its help text says.
+
+### G5: the conversation view in a real browser
+
+**Run.** The fixture serves on `127.0.0.1:13320` (scenario `finished`, the locked release document given). Before
+the page opens, the conversation is created and its one message sent on the fixture's **dispatcher's** face, as
+the dispatcher sends them (the D1 stage's create template with a conversation id; one user message): the fixture's
+session socket sends the `sync` frame and the replay at connect and no live frame after (E-01.7's verdict), so
+the message can only reach the view by the replay or the event search, never by a live frame. The Canvas server
+runs as in G6. A real browser (the host's installed Chrome or Edge, headless, a throwaway profile under the
+session's scratch directory, background networking, component updates, sync and default apps off) opens
+`http://127.0.0.1:13330/conversations/<id>`, driven over the DevTools protocol; the page's own network log
+(the protocol's Network domain, WebSocket included) is the egress evidence. The browser process's own background
+traffic is constrained by those flags, not packet-captured.
+
+**Recorded:** every request the page made (URL, method, status, and for each one the fixture answered, its catalog
+answer from the label header and the call log, and that answer's provenance rows in
+`integrations/agentfixture/README.md`); which requests failed; whether the view renders; screenshots.
+
+**PASS iff all of:**
+
+1. the view shows the fixture conversation's title (`FIXTURE: ai-engineering-harness/agentfixture (not a live
+   conversation)`, the UI face's labelled title) and the dispatched message's text, read from the rendered page
+   (its visible text) and seen in a screenshot;
+2. every request the fixture answered with a 2xx status names a catalog answer that has provenance rows (the
+   label header's `answer`, found in the served provenance table);
+3. no request in the page's network log went to a host other than `127.0.0.1`.
+
+**STOP** (and report) if a request leaves loopback (an egress origin is the Owner's: decision 0018 point 4.7), or
+rendering needs an answer with no provenance row. A request the fixture refuses (its labelled 501) is recorded as
+failed; it does not stop the gate unless the view cannot render without it.
+
 ## Agent Canvas and assistant-ui in one React app
 
 This is the evidence for the compatibility-matrix row "agent-canvas 1.36.0 /
