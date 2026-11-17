@@ -830,6 +830,18 @@ class Restore(Base):
         self.restore(backup)
         self.assertStatus(self.view(), 'unknown', 'ATTEMPT_RESERVED_UNPROVEN')
 
+    def test_the_outcome_projection_reads_the_open_epoch(self):
+        result = self.fixture_attempt()
+        backup = self.store.backup(actor='owner')
+        self.restore(backup)
+        projection = Outcome.build(self, 'listed').project(self)
+        self.assertTrue(projection['sources']['restoreEpochOpen'])
+        [attempt] = projection['attempts']
+        self.assertEqual((attempt['operationKey'], attempt['executionStatus'], attempt['executionCode']),
+                         (result.operation_key, 'unknown', 'CREATED_UNPROVEN'))
+        [task] = [t for t in projection['tasks'] if t['reference'] == f'backlog:{WORK}']
+        self.assertEqual((task['execution']['status'], task['execution']['code']), ('unknown', 'CREATED_UNPROVEN'))
+
     def test_a_running_row_inside_an_epoch_is_unknown_too(self):
         """TURN_SENT rests on the absence of a result record, which the restored history cannot prove either."""
         result = self.fixture_attempt()
