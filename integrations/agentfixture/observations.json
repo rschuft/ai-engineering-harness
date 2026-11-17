@@ -1366,6 +1366,16 @@
       "ui-preflight": {
         "status": 200
       },
+      "ui-settings": {
+        "status": 200,
+        "body": {
+          "agent_settings": {
+            "mcp_config": {}
+          },
+          "conversation_settings": {},
+          "llm_api_key_is_set": false
+        }
+      },
       "malformed": {
         "status": 400
       }
@@ -1538,6 +1548,20 @@
           "refusal"
         ],
         "validation": "the locked document (an empty response schema) and model `EventPage` (`as:openhands/agent_server/models.py:461-463`), each item the locked `#/components/schemas/Event`"
+      },
+      {
+        "face": "ui",
+        "method": "GET",
+        "path": "/api/settings",
+        "inventory": "/api/settings",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "ui-settings",
+          "ui-unauthorized",
+          "refusal"
+        ],
+        "validation": "the locked document's `#/components/schemas/SettingsResponse` (model `SettingsResponse`, `as:openhands/agent_server/settings_router.py:118-119`)"
       },
       {
         "face": "ui",
@@ -2371,6 +2395,102 @@
         "field": "`fixture`",
         "class": "label",
         "citation": "the fixture's label, naming the source-derived field",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`status`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/settings_router.py:118-119` (the route answers `SettingsResponse`), `as:openhands/agent_server/settings_router.py:150-153` (from `PersistedSettings()` when none is persisted)",
+        "determinedBy": "the route (no input): a server that persists no settings, as the fixture persists none",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.agent_settings.mcp_config`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/persistence/models.py:179` (the default agent settings), `sdk:openhands/sdk/settings/model.py:2341-2347` (`OpenHandsAgentSettings()`), `sdk:openhands/sdk/settings/model.py:1603-1604` (`mcp_config` defaults to `{}`), dumped at `as:openhands/agent_server/settings_router.py:171-173`",
+        "determinedBy": "the route (no input): a server that persists no settings, as the fixture persists none",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.agent_settings.<every other AgentSettings field>`",
+        "class": "none",
+        "citation": "not served: unobserved at the UI's vantage and not required (the locked `SettingsResponse` requires `mcp_config` alone of `agent_settings`)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.conversation_settings`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/persistence/models.py:180-182` (`ConversationSettings()` by default), dumped as an object at `as:openhands/agent_server/settings_router.py:174-176`",
+        "determinedBy": "the route (no input): a server that persists no settings, as the fixture persists none",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.conversation_settings.<every ConversationSettings field>`",
+        "class": "none",
+        "citation": "not served: unobserved at the UI's vantage and not required (the locked `SettingsResponse`'s `conversation_settings` is an object with no required property)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.llm_api_key_is_set`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/persistence/models.py:212-222` (`False` unless the agent's `llm.api_key` holds a value), `sdk:openhands/sdk/settings/model.py:528-531` (the default LLM is built with its model alone), `sdk:openhands/sdk/llm/llm.py:289-290` (`api_key` defaults to `None`)",
+        "determinedBy": "the route (no input): a server that persists no settings, as the fixture persists none",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`body.<every other SettingsResponse field>`",
+        "class": "none",
+        "citation": "not served: unobserved at the UI's vantage and not required (`SettingsResponse` requires `agent_settings`, `conversation_settings` and `llm_api_key_is_set`)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-settings",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, naming the source-derived fields",
         "determinedBy": "",
         "read": false,
         "readBy": [],
