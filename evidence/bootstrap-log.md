@@ -5921,6 +5921,85 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - a real race;
     - Linux and macOS.
 
+- <a id="e-01-8-verdict-2026-11-17"></a>**2026-11-17: E-01.8 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline. Judged against:
+  - TASK-13's criterion;
+  - the I1 design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R8–R11, slice 11, PB-3 and PB-7 as planning disposed of them in [i1-blockers-disposed-2026-11-16](#i1-blockers-disposed-2026-11-16));
+  - decisions 0024, 0026 and 0028.
+  - **Commits, all pushed by this entry:**
+    - **the slice:** `a7a1153` (the attempt's authority bound by its pinned allowlist, the fixture profile `profiles/fixture-d1-replay` and its pin), `3a847c6` (the fixture composition root, the delivery seam, the fixture candidate and the proof), `5db0444` (test ids);
+    - **the review's fixes:** `d3a2d30`, `0a99b54`, `ccf6a85`;
+    - **the engineering manager's ruling on the store's reconcile:** `f730eb5`, `68ab2ea`;
+    - **the re-check's fixes:** `9b6be63`, `b8201a7`.
+  - **The composition.**
+    - `integrations/agentfixture/run.py` is the fixture composition root. It runs a ready task through the production resolver, admission, launch gate, `run_attempt`, result intake and `publish_result`, over E-01.7's fixture core.
+    - `integrations/agentfixture/backend.py` and `transport.py` are the fixture's credentials, delivery and pull. The delivery seam applies the probe's own rules (`tools/guest.py`'s `API_PROBE` and `check_exchange_name`), read as data through `ast` and pinned by digest.
+    - The fixture candidate is `integrations/dispatch/candidates/fixture-approved-inputs.json`: version 3, design `dd18102d`, pin `a7a1153`. It is a candidate only; its promotion is OA-33.
+  - **The authority (design R8–R11).**
+    - An attempt's authority is computed from its reservation's pinned route allowlist (`dispatch_inputs.attempt_authority`). It is never taken from a caller's flag.
+    - `AgentServerClient` refuses a transport whose declaration differs from the binding; an undeclared transport counts as live.
+    - Writers add `authority` only when the bound authority is not live (`authority_label`), so a live record is byte for byte what it was. This covers:
+      - the dispatch transitions;
+      - the launch receipt;
+      - the result journal and its receipt;
+      - the end journal and the stop receipts;
+      - the Owner report and the pull request body;
+      - the moves written by `recover`, `reconcile_creates` and an admission refusal, including the restore-epoch sweep of every per-attempt journal (`attempt_of`, `record_label`).
+    - The store's `IntegrationStore.reconcile` gained one optional keyword, `label=None` (`f730eb5`, +14 −4). Without it, or when it returns an empty mapping, the detail stays NULL. No existing store test changed.
+  - **The criterion** (tests in `integrations/agentfixture/tests/test_dispatch.py` and `integrations/dispatch/tests/test_authority.py` unless named):
+    - **A ready task resolves and is dispatched exactly once on the fixture, through the production resolver, admission and gate:** `Dispatched.test_the_ready_task_is_dispatched_once_through_the_production_path_and_every_record_is_fixture` (one create, one SEED, one message, one RESULT; outcome `verified`, published `confirmed`).
+    - **The gate compares the fixture's cited recorded inspect with its logic unchanged:** the launch receipt's verdict is `launched`, its inspect source is the fixture's, and every compared field is equal. `launch_gate` gained only the label.
+    - **The intake takes the fixture's cited recorded result:** D1's recorded test output digest (PB-4), with the delivered bundle equal to the intake's.
+    - **The attempt receipt, the resolved record (outcome reference, design revision, profile digest, catalog pin) and the result receipt are written, each labelled fixture:** the same test. It also checks that every record the attempt causes (at least 7) carries `fixture`, which closes E-01.7 criterion 11's records clause.
+    - **No credential entry is read, and the native token's entry is shown untouched:**
+      - the fixture credentials (`backend.FixtureCredentials`) are the only provider asked;
+      - no module under `integrations/credentials/` is loaded;
+      - the host credential provider is never constructed;
+      - `advapi32` is never loaded, and no `keyring` or `credential_provider` import happens.
+
+      A live provider handed to a fixture attempt is refused `CREDENTIAL_AUTHORITY_MISMATCH` with no entry read (`Dispatched.test_a_live_provider_is_refused_...`, `Dispatch.test_a_live_provider_is_refused_for_a_fixture_attempt_with_no_entry_read`).
+    - **A fixture profile is refused for a live transport and a live profile is refused as fixture, each with a stable code:** `Dispatch.test_a_fixture_profile_is_refused_for_a_live_transport` and `test_a_live_profile_is_refused_as_fixture` (`TRANSPORT_AUTHORITY_MISMATCH`). The live-as-fixture refusal comes before any native entry read, any workspace and the `dispatched` mark. The other mismatches each have their own code: `OBSERVER_AUTHORITY_MISMATCH`, `RESULT_TARGET_AUTHORITY_MISMATCH`, `TRANSPORT_DECLARATION_MISMATCH`, `RESULT_AUTHORITY_MISMATCH`.
+    - **The native admission's and E-05.4's suites are unchanged:** no existing file in `integrations/dispatch/tests/` or `integrations/gitea/tests/` changed in `0f41b76..b8201a7`; the only new dispatch test file is `test_authority.py`. `integrations/agentfixture/tests/test_live_bytes.py` runs a live attempt end to end, plus a live reconcile and an ended attempt, and finds no `authority` or `identity` key in any record, report or pull request body.
+  - **Attribution under decision 0028.**
+    - The fixture path's result commit is made under the commissioning user's configured identity, passed to RESULT as an input. Author and committer are read back in the test.
+    - A fixture-bound attempt with no identity is refused `RESULT_IDENTITY_REQUIRED` before any call.
+    - The first result step's identity is recorded in the fixture turn journal's intent, before any commit can exist. A resume with another identity is refused `RESULT_IDENTITY_MISMATCH`.
+    - The native path is unchanged: its default result identity is still decision 0024 point 4's `aieh-bot-builder@localhost.invalid`. That migration is discovered work for planning, before E-01.6 goes live.
+  - **The R10 reading, accepted.** The production result path imports `gitea_host`, which loads `credential_provider.py`'s code at import. Nothing in it is constructed, no entry is read, and `advapi32` is never loaded; the census test shows each. Planning's confirmed PB-3 wording asks for "an import census", which this reading meets in substance but not as a pure import census. It is named in the planning handoff.
+  - **Review.** One fresh read-only review (dispatch 29) found no blocker, 4 should-fix findings and 6 notes. Two re-checks followed:
+    - The first re-check closed 3 of the 4 should-fix findings and found one new should-fix (N1: the restore-epoch sweep left the turn and result journals unlabelled), plus notes.
+    - The second re-check, of `68ab2ea..b8201a7`, closed everything, with no new blocker or should-fix.
+    - **Accepted as notes:**
+      - the census is a lint, and the binding that R11's readers use is the guarantee (M12b and M12c pass, as documented);
+      - `record_label` scans the store's attempts once per transition (quadratic in store size; no budget gate is added, by the standing direction);
+      - on the live path, `intake_result` re-reads the pinned allowlist, so a read error refuses a resumable intake;
+      - a test-supplied reader that raises another exception type now ends `recover`, which `admit` already does on the same reader.
+  - **Validation:**
+    - **Mutants:** the builder's M1–M40 and the reviewer's M8, M8b, M8c, M10 (without the document), M12, M17–M22 are all killed.
+    - **The full `tools/run_tests.py` in a clean clone:** 16 suites passed at `ccf6a85` with and without the locked document, at `68ab2ea` without it and at `b8201a7` without it; the reviewer's own full run at `68ab2ea` with it also passed. The dispatch suite (897 tests) passed with the document at `b8201a7`.
+    - **Checkers:** `verify_seed`, the gate, `check_profile` (all four profiles), `check_network_matrix`, `check_security_inventory` and `check_role_tokens` PASS.
+    - **The engineering manager's re-run at `b8201a7`, with the locked document:** `test_dispatch` 13, `test_live_bytes` 3, `test_authority` 39, `test_reconcile_label` 4, all OK.
+  - **Budgets.** The dispatch, tools, agentfixture and store rows were re-measured by the `1e9de10` convention, each in a clean clone, three runs, without the document. One `suites_added` entry was added per measurement, and the later entry supersedes. No budget gate was added.
+  - **Fix-forward of an earlier slice.** `test_plan_commitment.PinnedBacklogTests.test_round_trip_and_status_change` (P-05.1, skipped without `AIEH_BACKLOG`) was never in `evidence/test-profile/test-ids.json`. `ccf6a85` records it with its skip.
+  - **Delegated decisions:**
+    - Decision 0028 applies to the fixture path's result commit only. The native path stays byte-identical.
+    - The lineage test doubles (`integrations/lineage/tests/fixture_attempts.py`) were corrected to declare their authority, rather than relaxing the client equality.
+    - The bound authority is checked at `attempt_role_token`'s caller, so its pinned signature is unchanged. `publish_result`'s interim check is accepted.
+    - The fixture profile's provider block admits only `provision_lock`.
+    - The command's real Gitea target, a new loopback listener, is deferred to U-06.1.
+    - The probe's rules are read through `ast`.
+    - The store's reconcile takes an optional label (option (a)). Leaving those transitions unlabelled was rejected, because R11 names the `confirmed` detail. Changing E-01.4.1's settlement path was rejected as wider than needed.
+    - The identity binding sits on the existing turn journal; there is no new journal.
+    - `bound_label` catches only `DispatchRefused` and `ValueError`.
+    - The early `require_authority` in `dispatch` runs right after admission.
+  - **Detected, not defects of this leaf:**
+    - `integrations/store/tests/test_backup_restore.py`'s retention test fails about 1 run in 6 with `backup target already exists`. `storecore.backup_store` names a copy by a microsecond timestamp and the high-water mark, and this host's clock advances in ticks of 0.5–16 ms. This is discovered work for planning.
+    - The U-06.1 execution window (items 5 and 7): the engineer's feasibility report proposes a two-phase command (stop after the message, resume the result step later). It is honest only if shown as "awaiting the result step (fixture)", not "running". It is carried to slice 15 and the planning handoff.
+  - **Not verified:**
+    - a live run (E-01.6);
+    - U-06.1's command against a real Gitea listener;
+    - the candidate's version 3 against the live promotion series (checked before OA-33);
+    - Linux and macOS.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
