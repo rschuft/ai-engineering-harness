@@ -68,8 +68,8 @@ def wire():
 class Server:
     """One Integration process this test started: app.serve on PORT, with the state and logs directories given."""
 
-    def __init__(self, state: Path, logs: Path, port: int):
-        self.state, self.logs, self.port = state, logs, port
+    def __init__(self, state: Path, logs: Path, port: int, child: Path = CHILD, extra=()):
+        self.state, self.logs, self.port, self.child, self.extra = state, logs, port, child, tuple(extra)
         self.proc = None
         self.pids = []
 
@@ -78,8 +78,8 @@ class Server:
             (self.state / name).unlink(missing_ok=True)
         out = open(self.logs / f'child-{len(self.pids)}.out', 'wb')
         try:
-            self.proc = subprocess.Popen([sys.executable, '-I', '-B', str(CHILD), str(self.state), str(self.logs),
-                                          str(self.port)], cwd=str(self.state), env=SV.child_environment(os.environ),
+            self.proc = subprocess.Popen([sys.executable, '-I', '-B', str(self.child), str(self.state), str(self.logs),
+                                          str(self.port), *self.extra], cwd=str(self.state), env=SV.child_environment(os.environ),
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                          creationflags=SV.no_window.no_window_flags())
         finally:

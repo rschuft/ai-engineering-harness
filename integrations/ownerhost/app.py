@@ -45,7 +45,8 @@ Every write is attributed to the authenticated session. A body is JSON (``Conten
 stable codes. Nothing the client wrote is logged: a request is logged by its route's path template.
 
 What it never does (decision 0025 point 2): it opens no outbound connection (its one socket is the listener that
-``bind_listener`` binds); it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it
+``bind_listener`` binds; once the event loop runs, ``OutboundGuard``, armed by ``serve``'s lifespan, refuses
+every ``socket.connect`` and ``socket.getaddrinfo`` in the process as ``OUTBOUND_REFUSED``); it imports no credential, Gitea, authorization-recorder or dispatch-transport module; it
 reads no credential and no ``config.yml`` (service.py passes ``components.owner_host`` in); it has no dispatch
 endpoint. The credential is never logged: the service
 log records each request's outcome code, its method (one of the common ones, else OTHER), the path of the route it
@@ -63,6 +64,7 @@ import argparse
 import asyncio
 import contextlib
 import datetime
+import errno
 import importlib.util
 import json
 import logging
@@ -126,6 +128,7 @@ REMEDIES = {
     'MESSAGE_ID_CONFLICT': 'the thread already holds another message under this id',
     'MESSAGE_IMMUTABLE': 'an Owner statement is never changed; send an edit as a new message',
     'MESSAGE_NOT_FOUND': 'append the message first; an update never creates a user message',
+    'OUTBOUND_REFUSED': 'nothing in the Integration process connects out; report the route that tried',
 }
 MAX_BODY_BYTES = 1_048_576
 STORE_REFUSAL_STATUS = {'THREAD_INVALID': 400, 'MESSAGE_INVALID': 400, 'THREAD_NOT_FOUND': 404,
@@ -367,6 +370,11 @@ async def _method_not_allowed(request, exc):
     return refusal('METHOD_NOT_ALLOWED', 'the route does not take this method', 405)
 
 
+async def _outbound_refused(request, exc):
+    return refusal('OUTBOUND_REFUSED', 'the request tried to open an outbound connection or look a name up, which '
+                                       'the Integration process refuses', 500)
+
+
 ROUTES = (
     Route('/session', start_session, methods=['POST']),
     Route('/threads', threads, methods=['GET', 'POST']),
@@ -411,7 +419,7 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
                        allow_headers=list(ALLOWED_HEADERS), allow_credentials=False, max_age=PREFLIGHT_MAX_AGE_S),
             Middleware(SessionGuard, sessions=sessions, clock=clock, log=log),
         ],
-        exception_handlers={404: _not_found, 405: _method_not_allowed},
+        exception_handlers={404: _not_found, 405: _method_not_allowed, OutboundRefused: _outbound_refused},
         lifespan=lifespan)
     app.state.store = store or sessions
     app.state.clock = clock
@@ -420,6 +428,40 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
 
 
 # ---------------------------------------------------------------------------- the server process
+
+OUTBOUND_EVENTS = frozenset({'socket.connect', 'socket.getaddrinfo'})   # connect and connect_ex both raise the first
+
+
+class OutboundRefused(PermissionError):
+    """An outbound connection or name lookup in the server process once its guard is armed."""
+
+
+class OutboundGuard:
+    """Decision 0025 point 2, held by the process itself: an audit hook that, once armed, refuses every
+    ``socket.connect`` (``connect`` and ``connect_ex``) and ``socket.getaddrinfo`` in the process, whatever
+    the address, raising OutboundRefused before the call; there is no exemption. ``serve`` arms it in the
+    application's lifespan startup, once uvicorn's event loop and its self-pipe exist: on Windows asyncio's
+    ProactorEventLoop makes its self-pipe with a socketpair whose fallback connects to a loopback listener of its
+    own when the loop is created (measured, Python 3.12), and nothing connects after that. The listener's bind,
+    listen and accept are not touched, nor ``socket.gethostname``. An audit hook cannot be removed, so only the
+    server process arms it, never a test process (tests/test_outbound_guard.py runs ``serve`` in a child)."""
+
+    def __init__(self):
+        self.armed = False
+
+    def arm(self) -> None:
+        if not self.armed:
+            sys.addaudithook(self._hook)
+            self.armed = True
+
+    @staticmethod
+    def _hook(event, _args):
+        if event in OUTBOUND_EVENTS:
+            raise OutboundRefused(errno.EACCES, f'{event} refused: the Integration process opens no outbound '
+                                                'connection and looks no name up')
+
+
+OUTBOUND_GUARD = OutboundGuard()
 
 
 class ServeError(Exception):
@@ -536,6 +578,8 @@ def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT, owner_host: str 
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
+        OUTBOUND_GUARD.arm()        # the event loop and its self-pipe exist now; nothing connects from here on
+        log.info('outbound guard armed')
         async def watch():
             while not stop_request.exists():
                 await asyncio.sleep(STOP_POLL_S)

@@ -32,6 +32,7 @@ endpoint.
 | `tests/test_history_routes.py` | The thread and history routes over ASGI: initialize, list, fetch, rename, archive; append, update, load; the store's refusals, the body rules, the log (contract) |
 | `tests/test_history_listener.py` | U-02.1's proof against the real service: a reload after a restart, repeats, the refusals, a quote cut from a received statement and a changed source byte (integration, Windows) |
 | `tests/test_pending_decision.py` | U-02.2's proof against a real Integration process the test starts (`app.serve` through `serve_on_port.py`) on a free loopback port and a throwaway state directory, stopped by its stop request and started again twice: the shell's recorded pending-decision requests replayed, the thread and its pending call back once, a reconnect adding nothing, the answer an update of the same id; the lineage resolvers reading the store it wrote (integration) |
+| `tests/test_outbound_guard.py` | The outbound guard in a real server process on a free port (`serve_outbound_probe.py`): connect, connect_ex and getaddrinfo refused before the call, the process still serving, the guard armed by the lifespan; never armed in the test process (integration) |
 | `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals (bidirectional controls included); the crash windows, the commit id recorded before the branch moves, and settlement through every branch and parent (a branch switch, a merge without fast-forward, packed references, a rewritten history); a confirmed receipt under another configuration; the work-tree flag; the store's refusals; the commit identity, its placeholder classes and the session's principal; the harness checkout refused as the project; no socket, no process, no model (integration) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
@@ -207,9 +208,8 @@ objects are written and **before the branch moves**, it goes to `dispatched` wit
   process's other routes** (the thread and history routes included) while it runs; a capture reads and writes one
   local repository and the store, with no network.
 
-The branch names come from the files reference backend (the only one the repository-access module opens), read in
-`capture.py` from the git common directory; each name is resolved, and each commit read, through the repository-access
-module.
+The branches come from the repository-access module's `Repository.branches()` (loose and packed, through Dulwich's
+refs container), and each commit is read through the same module.
 
 **Who commits.** The commissioning user is the author and the committer of the commits the harness makes on that
 user's behalf: the commit is made under the user's own git identity, and the harness is the user's mechanism. In I1
@@ -269,11 +269,17 @@ exercised.
 
 ## What it never does
 
-Decision 0025 point 2, each with its test: it opens no outbound connection (its one socket is `bind_listener`'s
-listener, bound with `SO_EXCLUSIVEADDRUSE`, so no other socket binds `127.0.0.1:13310` while it is held, even with
+Decision 0025 point 2, each with its test: it opens no outbound connection, and the server process holds itself to
+that: once uvicorn's event loop runs, `serve`'s lifespan arms `OutboundGuard`, an audit hook that refuses every
+`socket.connect` (`connect` and `connect_ex`) and `socket.getaddrinfo` in the process before the call, whatever the
+address (a route that tries answers `OUTBOUND_REFUSED`, 500, and the process keeps serving). It is armed after the
+loop exists because asyncio's Windows event loop makes its self-pipe with a socketpair that connects to a loopback
+listener of its own when the loop is created; nothing connects after that. An audit hook cannot be removed, so only
+the server process arms it: `tests/test_outbound_guard.py` runs `serve` in a child (`tests/serve_outbound_probe.py`).
+Its one socket is `bind_listener`'s listener, bound with `SO_EXCLUSIVEADDRUSE`, so no other socket binds `127.0.0.1:13310` while it is held, even with
 `SO_REUSEADDR`; a socket on another address of the port is not excluded, which `up` and `verify` cover by refusing or
-failing on any other holder of the port; readiness reads the kernel's TCP table, never a request);
-the server process loads only `app.py`, `session.py`, the conversation store and storecore, and since P-01.3 the
+failing on any other holder of the port; readiness reads the kernel's TCP table, never a request. The
+server process loads only `app.py`, `session.py`, the conversation store and storecore, and since P-01.3 the
 capture's modules (`capture.py`, the integration store, the planning adapter, the shared repository-access module,
 `lineage.py` and `tools/check_intent_record.py`): no credential, Gitea, authorization-recorder, dispatch or inference
 module, and no network client (the repository-access module's remote transport, which imports one, is never reached:
