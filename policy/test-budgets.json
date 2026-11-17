@@ -122,10 +122,10 @@
    "wall_s": 8.2
   },
   "agentfixture": {
-   "tests": 56,
-   "launches": 17,
-   "mkdtemp": 23,
-   "wall_s": 13.1
+   "tests": 74,
+   "launches": 27,
+   "mkdtemp": 33,
+   "wall_s": 19.7
   }
  },
  "categories": {
