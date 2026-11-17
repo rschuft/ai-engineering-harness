@@ -19625,9 +19625,10 @@ HOST_CENSUS_SCHEMA = 'ai-engineering-harness/profiles/host-census-record/v1'
 # its egress-policy proxy; the pinned binary's process is named gitea-<version>-windows-amd64),
 # the Integration process (13310, plan leaf U-01.3, Proposed decision 0025; its process is only
 # python, so it is found by port), the served Agent Server fixture (13320, plan leaf E-01.7, Proposed
-# decision 0026; python too, found by port) and the Owner host's Vite dev and preview servers (strictPort).
+# decision 0026; python too, found by port), the Owner host's Vite dev and preview servers (strictPort) and
+# the standalone Agent Canvas server (13330, plan leaf U-01.2, Proposed decision 0026; node, found by port).
 HOST_CENSUS_PROCESSES = ('qemu-system-x86_64', 'gitea*')
-HOST_CENSUS_PORTS = (13300, 13310, 13320, 5173, 4173)
+HOST_CENSUS_PORTS = (13300, 13310, 13320, 5173, 4173, 13330)
 HOST_CENSUS_LOOPBACK = '127.0.0.1'
 
 

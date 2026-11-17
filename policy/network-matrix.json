@@ -59,6 +59,7 @@
     "repo-owner-local": "repository",
     "repo-github-public": "credential",
     "app-owner-host": "service",
+    "app-agent-canvas": "service",
     "api-integration-service": "management",
     "gitea-server": "credential",
     "repo-gitea-authorization": "management",
@@ -236,6 +237,90 @@
         "planned: E-01.7 (the conformance suite: the listener on 127.0.0.1 only, by the kernel TCP table of its process; every answer labelled; the refusals; the call log)"
       ],
       "notes": "The I1 design (evidence/I1-integration-design-2026-11-16.md), R7, R12 and section 5 N4, recorded at E-01.7 (slice 9) before the listener first listens. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection and holds no credential (decision 0025, point 7); its access values are public labelled constants, not credentials (the same-account limit, decision 0010 point 1). Its UI face (under /ui) is reached by Agent Canvas's server from U-01.2 (slice 13, N7); the dispatcher never calls it."
+    },
+    {
+      "id": "nm-owner-ui-canvas",
+      "name": "The Owner's browser to the standalone Agent Canvas application (its own origin, framed by the Owner host)",
+      "from": "td-owner",
+      "to": "td-owner",
+      "verdict": "allow",
+      "protocol": "http and WebSocket on host 127.0.0.1:13330 (the standalone Agent Canvas server's one declared port; a busy port is a refusal, never another port)",
+      "endpoint": "app-agent-canvas",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "upstream's static server (@openhands/agent-canvas 1.36.0 scripts/static-server.mjs, unpatched) started by the Owner host's start command with --host 127.0.0.1 on port 13330 only",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "its own origin, never the shell's (decision 0026 point 8; the I1 design R4 and R14): the shell frames http://127.0.0.1:13330 only (content-security policy frame-src) and never sends it the Owner UI session credential",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "no request beyond loopback by configuration: upstream's --disable-telemetry, and a derived copy of the pinned build/ whose only difference is the two remote Google Fonts @import rules removed (the U-01.1 ruling; no JavaScript file changed)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
+        "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md",
+        "evidence/I1-integration-design-2026-11-16.md"
+      ],
+      "builds_at": "U-01.2",
+      "verify_at": "U-01.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: U-01.2 (gate G6: guest.py host-census by port 13330, the one listener on 127.0.0.1; gate G5: the page's own network log in a real browser, every request to 127.0.0.1)"
+      ],
+      "notes": "The I1 design (evidence/I1-integration-design-2026-11-16.md), R7, R14 and section 5 N7, recorded at U-01.2 (slice 13) before the Canvas server first listens. A host-internal listener of the Owner's account, not an Owner act while it binds 127.0.0.1 on this declared port, is the target of no forward or profile endpoint, makes no outbound connection beyond its proxy route to the fixture's UI face (nm-canvas-agentfixture-ui) and holds no credential: its access value is the fixture's public labelled constant (decision 0026 point 9; the I1 design R15)."
+    },
+    {
+      "id": "nm-canvas-agentfixture-ui",
+      "name": "The standalone Agent Canvas server to the served Agent Server fixture's UI face",
+      "from": "td-owner",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "http and WebSocket to host 127.0.0.1:13320 under /ui (the fixture's read-only UI face): the static server's reverse proxy for /api, /sockets and /server_info",
+      "endpoint": "api-agentfixture",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the reverse proxy's routes name only http://127.0.0.1:13320/ui (composed by the Owner host's start command; no other target)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "the UI face is read only: every method but GET, and every inbound session-socket message but the authentication frame, refused with the fixture's label (integrations/agentfixture/server.py)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "the access value is the fixture's public labelled constant for the UI face (agentfixture-ui-face-public-value), refused on the dispatcher's face; no credential of a recorded class (decision 0026 point 9)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
+        "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md",
+        "evidence/I1-integration-design-2026-11-16.md"
+      ],
+      "builds_at": "U-01.2",
+      "verify_at": "U-01.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: U-01.2 (gate G5: every request the Canvas page makes, with the fixture's call log and its answer's provenance row)"
+      ],
+      "notes": "The I1 design, R14, R15 and section 5 N7, recorded at U-01.2 (slice 13) before the Canvas server first listens. Paths between processes of one account, which the accepted records already disclose as reachable (nm-owner-management-same-account); it gives no principal a reach to a protected asset it lacked (the I1 design R7). The live counterpart, a conversation's inner server through the dispatcher-issued forward, is nm-owner-ui-conversation (U-03.1)."
     },
     {
       "id": "nm-owner-management-same-account",
@@ -568,7 +653,7 @@
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
       ],
-      "builds_at": "U-01.2",
+      "builds_at": "U-03.1",
       "verify_at": "E-01.3.2",
       "owner_act": true,
       "findings": [
@@ -577,7 +662,7 @@
       "inspection": [
         "planned: U-01.2, E-01.3.x"
       ],
-      "notes": "Decision 0013, points 2 to 4: every such forward is a new host port, opened only after a recorded Owner approval (op-guest-boundary-change)."
+      "notes": "Decision 0013, points 2 to 4: every such forward is a new host port, opened only after a recorded Owner approval (op-guest-boundary-change). builds_at corrected U-01.2 -> U-03.1 when U-01.2 was built (the plan amendment of 2026-11-16 (I1); the I1 design, section 5 C4): U-01.2 shows the session against the deterministic fixture (nm-owner-ui-canvas, nm-canvas-agentfixture-ui); the live forward and its runtime credential are U-03.1's. Recording a planned edge's correction, not a widening (decision 0018 point 4.7)."
     },
     {
       "id": "nm-owner-conversation-direct",

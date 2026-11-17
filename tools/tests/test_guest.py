@@ -5508,7 +5508,7 @@ class HostCensus(unittest.TestCase):
         # U-01.3 (Proposed decision 0025): the Integration process's one fixed port, 13310; its
         # process is only python, so the census finds it by port, beside Gitea's and the Vite servers'.
         _, script = self.census(self.answer())
-        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort 13300,13310,13320,5173,4173 |', script)
+        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort 13300,13310,13320,5173,4173,13330 |', script)
         out, _ = self.census(self.answer(tcp_by_port=[
             {'LocalAddress': '0.0.0.0', 'LocalPort': 13310, 'OwningProcess': 6100,
              'Process': 'python'}]))
@@ -5528,6 +5528,21 @@ class HostCensus(unittest.TestCase):
         out, _ = self.census(self.answer(tcp_by_port=[
             {'LocalAddress': '127.0.0.1', 'LocalPort': 13320, 'OwningProcess': 6200,
              'Process': 'python'}]))
+        self.assertEqual(out['result'], 'PASS')
+
+    def test_the_standalone_agent_canvas_server_port_is_censused_by_port(self):
+        # U-01.2 (Proposed decision 0026 point 8): the standalone Agent Canvas server's one declared port,
+        # 13330; its process is only node, so the census finds it by port.
+        _, script = self.census(self.answer())
+        self.assertIn(',13330 |', script)
+        out, _ = self.census(self.answer(tcp_by_port=[
+            {'LocalAddress': '0.0.0.0', 'LocalPort': 13330, 'OwningProcess': 6300,
+             'Process': 'node'}]))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['problems'][0]['problem'], 'not bound to 127.0.0.1')
+        out, _ = self.census(self.answer(tcp_by_port=[
+            {'LocalAddress': '127.0.0.1', 'LocalPort': 13330, 'OwningProcess': 6300,
+             'Process': 'node'}]))
         self.assertEqual(out['result'], 'PASS')
 
     def test_non_loopback_listener_fails(self):
