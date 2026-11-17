@@ -263,7 +263,7 @@ class Delivery(unittest.TestCase):
         self.assertEqual((tmp / 'a' / 'x.bundle').read_bytes(), data)
 
     def test_without_an_exchange_a_delivery_is_refused_before_anything_is_sent(self):
-        transport = S.TRANSPORT.FixtureTransport(S.free_port())
+        transport = S.TRANSPORT.FixtureTransport(UNUSED_PORT)
         with self.assertRaises(S.TRANSPORT.FixtureTransportError) as caught:
             transport('POST', '/x', {'command': 'c'}, deliver={'part': 'bundle', 'name': 'x.bundle'})
         self.assertEqual((caught.exception.code, transport.calls), ('FIXTURE_DELIVERY_UNAVAILABLE', []))
@@ -274,7 +274,7 @@ class Delivery(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix='e18n-'))
         self.addCleanup(shutil.rmtree, tmp, True)
         bounds = json.loads((NATIVE / 'profile.json').read_bytes())['exchange']['pull']
-        transport = S.TRANSPORT.FixtureTransport(S.free_port(), exchange=tmp, bounds={
+        transport = S.TRANSPORT.FixtureTransport(UNUSED_PORT, exchange=tmp, bounds={
             k: bounds[k] for k in ('name_pattern', 'max_bytes')})
         for name in ('../x.bundle', 'x.bundle.partial', '.hidden', 'a/b'):
             with self.subTest(name=name):
@@ -311,6 +311,8 @@ class Pull(unittest.TestCase):
         self.assertEqual(staged.read_bytes(), b'not a bundle')
 
 
+# a port no request reaches: a delivery refused before anything is sent opens no socket (a unit class)
+UNUSED_PORT = 9
 # sha256 of tools/guest.py check_exchange_name's source text: a change of its shape fails Delivery
 PINNED_NAME_CHECK_SHA256 = '9e89d46901ae56b3d16f057392e8f218698a2f9ec9678b282591da1deef8b6b6'
 # sha256 of tools/guest.py API_PROBE's deliver function's source text: a change of its shape fails Delivery
