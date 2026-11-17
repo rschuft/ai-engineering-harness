@@ -286,6 +286,12 @@ standalone application, served by upstream's own `scripts/static-server.mjs` on 
 (the I1 design, R14 and R15; decision 0026 points 8 and 9, Proposed). Its edges and asset were recorded first
 (`nm-owner-ui-canvas`, `nm-canvas-agentfixture-ui`, `app-agent-canvas`; census port 13330).
 
+**The start command** is `npm run canvas:serve` ([`scripts/canvas-standalone.mjs`](scripts/canvas-standalone.mjs),
+its tests beside it): it checks the installed package against `package-lock.json`, derives the copy of `build/`
+(the two font imports removed, checked byte for byte; `--csp` adds the content-security policy, off by default),
+and runs upstream's server with G6's command line below; `npm run canvas:derive` only derives. The font rule both
+it and the library build plugin apply is one module, [`scripts/remote-imports.mjs`](scripts/remote-imports.mjs).
+
 The two gates' decision rules below were written and committed **before** the Canvas server first listened and
 before any browser was opened (the I1 design, section 6). They are not changed after the observation.
 
@@ -397,6 +403,49 @@ DevTools protocol from the tools set's `websockets`; the fixture and the Canvas 
 
 Nothing is built on this gate: the engineering route, the frame and the source action wait for the decision on
 both conditions.
+
+**Re-run (2026-11-17), the engineering manager's direction after the STOP: STOP again, on rule 4 of that direction
+(completing Canvas's onboarding needs a write to the backend).** The rule above is unchanged. What changed:
+
+- *No request can leave loopback.* The browser now blocks, before any page loads, every request whose host is not
+  `127.0.0.1` (the DevTools protocol's `Fetch` interception, each blocked attempt logged with its URL, type and
+  initiator; a probe to `http://192.0.2.1/` shown blocked first), and sends anything else it tries to a closed
+  loopback proxy (`--proxy-server=http://127.0.0.1:9`, bypassing `127.0.0.1` alone). The driver is
+  `integrations/agentfixture/tests/browser_cdp.py`; the gate itself is the environment-gated
+  `integrations/agentfixture/tests/test_canvas_browser.py`.
+- *The fixture's UI face answers Canvas's local-backend check* (a fix-forward of E-01.7's catalog, its rows first):
+  `GET /api/settings` (a server that persists no settings, source-derived) and the observed `version` in
+  `/server_info` ([the fixture's README](../../integrations/agentfixture/README.md)).
+- *The onboarding is passed in the browser, as a user passes it*, nothing written into Canvas's storage from outside.
+
+Observed, the same with the content-security policy option off and on (below):
+
+- Canvas now connects to the backend (its check reads `/api/settings` 200 `ui-settings` and `/server_info` 200
+  `ui-server-info`; every fixture 2xx answer is one of those two, both with provenance rows) and shows its onboarding
+  with a modal dialog over it, "Help improve OpenHands": "This preference is saved for the local backend", a box
+  "Send anonymous usage data" ticked by default, and "Confirm preferences", its only control. It is shown while the
+  backend's settings carry no `misc_settings.app_preferences.user_consents_to_analytics` (a server that persists
+  none answers none), even with telemetry disabled by upstream's flag.
+- Declined as a user would (the box unticked, then Confirm), Canvas sends `PATCH /api/settings` (three times); the
+  read-only UI face refuses it (its labelled 501), and the dialog stays. "Skip for now" lies under the dialog;
+  clicking it changes nothing. No request for the conversation, its events or its socket was made, so the
+  conversation's title and the dispatched message were not shown, and the socket's sync-and-replay behaviour was not
+  reached.
+- The other start-up reads stay the fixture's labelled 501 (`/api/llm/models/verified`, `/api/profiles`,
+  `/api/agent-profiles`, `/api/meta-profiles`, `/api/settings/agent-schema`, `/api/automation/sdk-version`,
+  `/api/automation/health`: 20 in all); none is shown to be needed, since the view is never reached.
+- *Off loopback, now blocked:* only the probe and Canvas's MCP-catalog logos, images from
+  `https://cdn.simpleicons.org/` (`github`, `linear`, `gitlab`, `bitbucket`, `atlassian`, `jira`, `notion`; 31
+  attempts with the policy off), every one blocked before it was sent; none got a response. They come from the
+  onboarding and home view; whether the conversation view itself attempts any is not known, since it was not
+  reached. No WebSocket was opened.
+- *The content-security policy option* (`--csp`, off by default; evidence for planning, not adopted): `default-src
+  'self'; script-src 'self'` and the sha256 of each of the page's six inline scripts (five of the pinned
+  `index.html` and the one upstream's server injects); `style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+  font-src 'self'; connect-src 'self' ws://127.0.0.1:13330; worker-src 'self'; object-src 'none'; base-uri 'self';
+  form-action 'self'`. With it on, the page made the same 281 loopback requests with the same answers and showed the
+  same views; the policy blocked the logo images itself (298 attempts, the browser's own `img-src` violation for
+  each; the block saw only its probe), and nothing else: no script, style, connection or worker violation.
 
 ## Agent Canvas and assistant-ui in one React app
 
