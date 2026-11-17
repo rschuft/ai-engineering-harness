@@ -119,6 +119,43 @@ describe("a stored copy and Sign out", () => {
     expect(window.localStorage.getItem(CREDENTIAL_STORAGE_KEY)).toBeNull();
   });
 
+  it("drops a credential refused on an authenticated route and returns to sign-in, as Sign out does", async () => {
+    // N8: verified at open, then refused by the thread list (a later enrollment revoked it while the shell was open).
+    const credential = throwawayCredential();
+    window.localStorage.setItem(CREDENTIAL_STORAGE_KEY, JSON.stringify({ v: 1, credential, ...SESSION }));
+    const seen: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      seen.push(url);
+      if (url.endsWith("/session")) return new Response(JSON.stringify(SESSION), { status: 200 });
+      return new Response(JSON.stringify({ code: "SESSION_CREDENTIAL_REVOKED" }), { status: 401 });
+    };
+    const router = renderApp("/chat", fetchImpl);
+    await waitFor(() => expect(window.localStorage.getItem(CREDENTIAL_STORAGE_KEY)).toBeNull());
+    expect(seen).toContain("http://127.0.0.1:13310/threads");
+    await waitFor(() => expect(screen.getByTestId("session-identity").textContent).toContain("Not signed in"));
+    expect(screen.getByTestId("sign-in-link").getAttribute("href")).toBe("/sign-in");
+    await act(async () => {
+      await router.navigate("/sign-in");
+    });
+    expect((await screen.findByTestId("sign-in-refusal")).getAttribute("data-code")).toBe("SESSION_CREDENTIAL_REVOKED");
+    expect(document.body.innerHTML).not.toContain(credential);
+  });
+
+  it("keeps the credential when an authenticated route refuses the request, not the credential", async () => {
+    const credential = throwawayCredential();
+    window.localStorage.setItem(CREDENTIAL_STORAGE_KEY, JSON.stringify({ v: 1, credential, ...SESSION }));
+    const seen: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      seen.push(url);
+      if (url.endsWith("/session")) return new Response(JSON.stringify(SESSION), { status: 200 });
+      return new Response(JSON.stringify({ code: "REQUEST_INVALID" }), { status: 400 });
+    };
+    renderApp("/chat", fetchImpl);
+    await waitFor(() => expect(seen).toContain("http://127.0.0.1:13310/threads"));
+    await waitFor(() => expect(screen.getByTestId("session-identity").textContent).toContain("Signed in"));
+    expect(JSON.parse(window.localStorage.getItem(CREDENTIAL_STORAGE_KEY)!).credential).toBe(credential);
+  });
+
   it("keeps a stored copy while the Integration process is unreachable", async () => {
     const credential = throwawayCredential();
     window.localStorage.setItem(CREDENTIAL_STORAGE_KEY, JSON.stringify({ v: 1, credential, ...SESSION }));

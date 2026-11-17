@@ -1,9 +1,12 @@
 import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 
 // The tool UI for a pending Owner decision (plan leaf U-02.2; I1 work design,
-// slice 6). A decision is a human tool: a tool call named owner_decision that
-// pauses its run (status requires-action) until the Owner answers it here,
-// with addResult. The pause is kept in the Owner conversation store as the
+// slice 6). A decision is a human tool: a tool call named owner_decision whose
+// run pauses (status requires-action) until the Owner answers it here, with
+// addResult. The pause comes from the run's model adapter returning status
+// requires-action with the call: in the pinned assistant-ui 0.15.32,
+// unstable_humanToolNames does not pause a run (gate G2's test), so a future
+// producer of decisions must return requires-action itself. The pause is kept in the Owner conversation store as the
 // assistant message the history adapter appended; after the browser or the
 // Integration process restarts, the history adapter's load brings the same
 // message back and this card shows the call still pending, once (gate G2,
@@ -14,7 +17,7 @@ import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@as
 // is shown for any owner_decision call the thread holds. Any other tool call
 // is shown as a tool the Owner host has no view for.
 
-/** The human tool's name, and the runtime option that pauses a run on it. */
+/** The human tool's name, and the runtime's human-tool option (kept; it does not pause a run by itself). */
 export const DECISION_TOOL = "owner_decision";
 export const HUMAN_TOOL_NAMES = [DECISION_TOOL];
 

@@ -118,10 +118,30 @@ export function OwnerSessionProvider({
     setState({ status: "signed-out", refusal: null });
   }, [store]);
 
-  const client = useMemo(
-    () => (credential && state.status === "signed-in" ? createIntegrationClient(credential, fetchImpl) : null),
-    [credential, fetchImpl, state.status],
-  );
+  // The credential the shell holds now: a refusal that arrives for an earlier one changes nothing.
+  const held = useRef(credential);
+  held.current = credential;
+
+  // A credential refused on any authenticated route (expired, revoked or foreign while signed in), not only at
+  // verify, removes the stored copy and returns the shell to sign-in with the refusal, as Sign out does.
+  const client = useMemo<IntegrationClient | null>(() => {
+    if (!credential || state.status !== "signed-in") return null;
+    const inner = createIntegrationClient(credential, fetchImpl);
+    return {
+      async request(method, path, body) {
+        try {
+          return await inner.request(method, path, body);
+        } catch (error) {
+          if (error instanceof SessionRefusal && error.credentialRefused && held.current === credential) {
+            clearStoredCredential(store);
+            setCredential(null);
+            setState({ status: "signed-out", refusal: error.code });
+          }
+          throw error;
+        }
+      },
+    };
+  }, [credential, fetchImpl, state.status, store]);
 
   const value = useMemo(() => ({ state, signIn, signOut, client }), [state, signIn, signOut, client]);
   return <OwnerSessionContext.Provider value={value}>{children}</OwnerSessionContext.Provider>;

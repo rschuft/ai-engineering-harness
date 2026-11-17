@@ -88,6 +88,11 @@ own console with `task ownerhost:enroll`, and pastes it into `/sign-in`.
 - A stored copy is checked once when the shell opens (the browser may have been
   closed and reopened). A refused credential (`SESSION_CREDENTIAL_FOREIGN`,
   `_EXPIRED`, `_REVOKED`) removes the copy; an unreachable process keeps it.
+- The same holds on every authenticated route while signed in: a credential the
+  thread or history routes refuse (for example after a later enrollment) removes
+  the copy and returns the shell to sign-in, with the refusal shown, as "Sign
+  out" does; a refusal of the request itself (`REQUEST_INVALID`, a store code)
+  keeps it.
 - "Sign out" removes the copy. The service's expiry bounds it either way.
 
 Who can read the copy:
@@ -183,9 +188,10 @@ every time: no model is called.
 What the pinned runtime does, which the adapters rely on, is gate G2's test
 ([`src/areas/g2-runtime-gate.test.tsx`](src/areas/g2-runtime-gate.test.tsx), jsdom,
 no network): the history append of a message, with its id, before the model
-adapter runs; `load()` without a head; a run paused by a tool in
-`unstable_humanToolNames` appended at the pause, restored by a reload and
-completed by an update; per-thread history; a title stream with no model.
+adapter runs; `load()` without a head; a run paused on a human tool (the model
+adapter returns status `requires-action`) appended at the pause, restored by a
+reload and completed by an update; per-thread history; a title stream with no
+model.
 [`src/areas/stored-chat.test.tsx`](src/areas/stored-chat.test.tsx) runs the
 stored chat against a fake Integration process. A real browser and the Owner's
 own session are **not yet verified**.
@@ -193,10 +199,15 @@ own session are **not yet verified**.
 ## Pending decisions and reconnect (U-02.2)
 
 A decision the Owner is asked is a human tool, `owner_decision`
-([`src/areas/decision-tool.tsx`](src/areas/decision-tool.tsx)): the stored chat's
-runtime pauses a run on it (`unstable_humanToolNames`), and the paused assistant
-message (status `requires-action`, the tool call without a result) is appended
-to the Owner conversation store like any message. The assistant message renders
+([`src/areas/decision-tool.tsx`](src/areas/decision-tool.tsx)). A run pauses on
+it because the run's model adapter returns the `owner_decision` call with status
+`requires-action`: in the pinned assistant-ui 0.15.32, `unstable_humanToolNames`
+(which the stored chat still passes) does not pause a run, and a settled run is
+marked complete unless its adapter says otherwise (gate G2's test). A future
+producer of decisions (a chat model adapter) must therefore return
+`requires-action` itself. The paused assistant message (status
+`requires-action`, the tool call without a result) is appended to the Owner
+conversation store like any message. The assistant message renders
 its tool calls through `MessagePrimitive.Parts`' tool components: the decision
 card shows the question and one button per option while the call is pending,
 and the answer once given.

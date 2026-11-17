@@ -1682,7 +1682,7 @@ and adapter exist:
 | `commit` | Git | the shared repository-access module (in process over Dulwich, as `git rev-parse` and `cat-file` answer) in a registered clone | implemented; offline tests |
 | `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
 | `objective` | OpenSpec | the outcome id declared under `x-outcomes` in the declaring change's `.openspec.yaml`, cross-checked against its intent record ([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md), Proposed) | implemented; offline, and live with `AIEH_OPENSPEC` (`validate --strict`, `archive`) |
-| `conversation`, `message` | Owner conversation store | `MessageResolver`, `ConversationResolver` (U-02.2): the store opened read-only (`mode=ro`, `query_only`, `check_current` and the store's own checks); a message's content checked with `lineage.check_message_content`, unchanged; an assistant message is never a statement (`MESSAGE_NOT_A_STATEMENT`) | implemented (built 2026-11-16, U-02.2's verdict pending); offline on throwaway stores and on a store the real Integration process wrote; the Owner's own store **not yet verified** |
+| `conversation`, `message` | Owner conversation store | `MessageResolver`, `ConversationResolver` (U-02.2): the store opened read-only (`mode=ro`, `query_only`, `check_current` and the store's own checks); a message's content checked with `lineage.check_message_content`, unchanged; an assistant message is never a statement (`MESSAGE_NOT_A_STATEMENT`), and a thread resolves only at an Owner statement (its pinned message, or unpinned its last: `CONVERSATION_NOT_A_STATEMENT`, `CONVERSATION_EMPTY`) | implemented (built 2026-11-16, U-02.2's verdict pending); offline on throwaway stores and on a store the real Integration process wrote; the Owner's own store **not yet verified** |
 | `attempt` | OpenHands Agent Server | none | authority unavailable (E-01.3.1, E-01.4.1); **not yet verified** |
 | `review`, `ci`, `authorization` | Gitea | none | authority unavailable (E-03.3.x, Q-03.x, G-03.1/G-04.3.1); **not yet verified** |
 | `release`, `catalog` | Git/Gitea, Gitea catalog | none | identity not settled (`unsupported-kind`) |
@@ -1693,7 +1693,8 @@ byte. Since U-02.2 the durable source is the Owner conversation store: the messa
 reads an Owner statement's bytes from it, read-only, and checks the anchor against them.
 An archived Backlog.md task resolves: Backlog.md 1.55.3's `task view --json` reads it
 (`"archived": true`), while `task list --json`, which the traversal enumerates, omits it
-(gate G11). Live
+(gate G11): the traversal reaches such a task only through a reservation whose intent cites the
+outcome, and otherwise omits it silently. Live
 resolution of effect receipts, which needs the store's custody identity (G-04.2.x), every
 host but Windows 11 x86_64, and every kind marked unavailable or unsettled are **not yet
 verified**.
@@ -1718,8 +1719,9 @@ statements are read from the Owner conversation store (`--conversations`); the s
 sample is retired, the planned end of that sample. The attempt authority does not exist yet,
 so attempts resolve only with the clearly labelled attempt sample in `lineage_samples.py`,
 which the command line never uses. The example projections are in
-`integrations/lineage/examples/`; the example's intent record cites P-01.2 corpus statements,
-which are not Owner conversation store identities, so the store answers them missing. A live
+`integrations/lineage/examples/`; the example holds the P-01.2 corpus statements its intent record
+cites in an Owner conversation store, under store identities, and a commit that cites them: the
+statements resolve authoritatively and Q1's quote is verified against the store's bytes. A live
 attempt authority, the Owner's own conversation store, and the shape of a real dispatcher's
 reservation intent are **not yet verified** (see the
 [lineage README](../integrations/lineage/README.md#lineage-traversal-p-032)).
@@ -1822,7 +1824,8 @@ Owner conversation store
 ([`integrations/conversation/`](../integrations/conversation/README.md),
 `<state>/owner-host/conversation.sqlite`) keeps only its verifier. The shell's sign-in view
 (`/sign-in`) verifies the pasted credential with `POST /session`, keeps it in its own
-origin's `localStorage` until Sign out, and sends it on every request; the shell's
+origin's `localStorage` until Sign out, and sends it on every request (a credential refused on any
+authenticated route removes that copy and returns the shell to sign-in, as Sign out does); the shell's
 content-security policy lets the page connect only to its own origin and to
 `http://127.0.0.1:13310`. The port is fixed: it is not configurable, and a busy port is a
 refusal. The records name it (the network matrix's `nm-owner-ui-integration`, the security
@@ -1845,8 +1848,8 @@ under the same parent; every table is append-only and a thread delete is refused
 order writes of different messages). The history load answers no head, so after a reload the
 newest branch is shown. The pinned runtime's behaviour these adapters rely on is gate G2's
 test (`apps/owner-host/src/areas/g2-runtime-gate.test.tsx`): the append of a message with its
-native id before the model adapter runs, `load()` without a head, a run paused by a tool in
-`unstable_humanToolNames` appended at the pause and restored by a reload, per-thread history,
+native id before the model adapter runs, `load()` without a head, a run paused on a human tool (its
+model adapter returns status `requires-action`) appended at the pause and restored by a reload, per-thread history,
 and a title stream that closes at once with no model. Built 2026-11-16 (U-02.1, its verdict
 pending): `conversation:test`, `ownerhost:test` (in process and against the real service) and
 `owner-host:test` PASS offline; a real browser and the Owner's own session are **not yet
@@ -1854,7 +1857,10 @@ verified**.
 
 **Pending decisions and reconnect (U-02.2).** A run that pauses on the human tool
 `owner_decision` (`HUMAN_TOOL_NAMES`, `apps/owner-host/src/areas/decision-tool.tsx`) is kept as
-the paused assistant message (status `requires-action`, the tool call without a result). After
+the paused assistant message (status `requires-action`, the tool call without a result). The pause comes from the
+run's model adapter returning `requires-action` with the call: in the pinned assistant-ui 0.15.32
+`unstable_humanToolNames`, which the shell still passes, does not pause a run, so a future producer of decisions must
+return `requires-action` itself. After
 the browser is closed and reopened, or the Integration process restarts, the history load
 brings it back once and the decision card shows it still pending; the Owner's answer resumes the
 run, and the completed message is an update of the same id, which the store keeps as a new
