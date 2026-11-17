@@ -6000,6 +6000,117 @@ act's row in the Owner actions table and against the gated leaves' task dependen
     - the candidate's version 3 against the live promotion series (checked before OA-33);
     - Linux and macOS.
 
+- <a id="u-04-1-verdict-2026-11-17"></a>**2026-11-17: U-04.1 PASS, the engineering manager's verdict (decision 0018 point 1).** Offline. Judged against:
+  - TASK-14's three criteria and the planning note on the task;
+  - the I1 design ([`evidence/I1-integration-design-2026-11-16.md`](I1-integration-design-2026-11-16.md): R2, R6, R11, slice 12, PB-5);
+  - decisions 0004 (point 7), 0013, 0024, 0025 and 0026.
+  - **Commits, all pushed by this entry:**
+    - **the slice:** `73d9e9f` (the state table, before the projection), `6fcbd41`, `592ef79`, `6a5271a`;
+    - **the review's fixes:** `48312a5`, `22be316`, `73dc95b`, `fd58088`, `499e7e2`;
+    - **the re-check's fixes:** `39d7d8f`, `8b33a23`, `ebe043d`.
+    - `48312a5` and `39d7d8f` fix E-01.8's launch gate forward (see below).
+  - **The projection.** `integrations/ownerhost/projection.py` serves `GET /outcomes/{outcome_id}` (format `outcome-projection/v1`) behind the session, Host and Origin guards. Each refusal has a stable code, and none changes anything.
+    - **What it joins:**
+      - the lineage traversal over the project repository;
+      - Backlog.md's `task list` and `task view` only;
+      - the conversation store and the integration store, opened read-only;
+      - the dispatcher's receipts.
+    - **What it never does:** call an Agent Server, real or fixture (decision 0013 point 1; R6), or re-read Gitea.
+    - **Its fields:** each attempt's `executionStatus` and `executionCode` come from the state table in `integrations/ownerhost/README.md`; the first matching row decides. `lineageVerdict` and `lineageUncertainties` are kept apart from the execution status, and so are `coverage` and `disclosed`.
+  - **The criteria** (tests in `integrations/ownerhost/tests/test_projection.py` unless named):
+    1. **"Pending/running/failed/unknown represent observed state, not agent exit claims":**
+       - **every row is tested** from records the dispatcher's own writers made (in-process runs, the gate, the end, stop and recover paths, the store's restore epoch): `StateTable`, `MoreRows`, `EndMapping`, `Restore`, `Latest`;
+       - **exit claims:** `ExitClaims` shows that the core's `finished` without verification is not a success, and no Agent Server call is made;
+       - **`succeeded`** comes only from a confirmed result receipt. It means "verified and read back at publication time";
+       - **reported vs verified:** they are kept apart in each attempt's `result`;
+       - **error, stuck or paused turns:** their mapping is unit-tested only (`EndMapping`), as the planning note says.
+    2. **"The lineage message and statement resolvers resolve, and archived tasks resolve; an unresolved message, statement or archived-task reference is a failure":** `Outcome`.
+       - **Archived tasks:** an archived task reached by reference resolves through `task view`, from Backlog.md 1.55.3's recorded output (`tests/fixtures/backlog-archive/`), and a deleted one is `WORK_MISSING`.
+       - **What the pin cannot do:** Backlog.md 1.55.3's `task list` cannot enumerate archived tasks (observed: no option, and every filter misses them). The projection says so in an always-present `coverage` field (`ARCHIVED_TASKS_NOT_ENUMERABLE`) rather than omitting them silently.
+    3. **"The attempt's result receipt (E-05.4's) is joined as evidence, its commit, diff and test output referenced, not copied":** `EndToEnd`.
+       - A fixture run and a live run, each published to E-05.4's in-process fakes, project `succeeded RESULT_PUBLISHED`, with the receipt's references and digests; the report digests equal the files written.
+       - No diff text, test output, commit message, commit subject, pull request title or message text appears in the view.
+  - **The engineering manager's rulings** (decision 0018 point 3.1):
+    1. **The authority reader.**
+       - **The STOP.** The engineer found that no transport-free reader could be extracted from `dispatch_inputs` with its bodies unchanged. `DispatchRefused`'s `REFUSALS` spreads `create_secrets`' meanings, which name the inference broker and the native-token reader, so the Integration process's census (R2) would reach them.
+       - **Ruling: option B.** `integrations/ownerhost/bound_authority.py` is the projection's own reader, with its own codes, pinned to `dispatch_inputs.attempt_authority` and `bound_label` by an equivalence test (`test_bound_authority.py`). It covers:
+         - the checked-in live and fixture profiles;
+         - each declaration shape;
+         - a drifted, missing or malformed allowlist;
+         - the pin's own defects;
+         - the policy's format and digest;
+         - the approval's schema;
+         - the ordinal;
+         - duplicate keys;
+         - records that are not the dispatcher's;
+         - every per-attempt record kind, on real runs.
+       - **The documented divergence:** the reader does not validate the whole admission policy. Each of the six admission codes is reached by a test: the dispatcher refuses, and the reader binds. No dispatcher-reserved record can reach it.
+       - **Rejected:** moving about 450 lines and the exception's home (option A), and admitting `create_secrets.py` into the census, which would weaken R2 (option C). The precedent for B is `lineage_resolve`'s own `declared_authority`.
+    2. **R11's reader rule.**
+       - **Fixture-bound:** a record the writers label that lacks the label (`ATTEMPT_LABEL_MISSING`) or carries another (`ATTEMPT_LABEL_MISMATCH`) is `unknown`. This includes the intake's nested `record.authority` and the result journal's `result.authority`.
+       - **Live-bound:** a record that carries a label is `unknown` (`ATTEMPT_LABEL_ON_LIVE`).
+       - **Unreadable binding:** an unreadable binding is `unknown` (`ATTEMPT_AUTHORITY_UNBOUND`). The exception is an admission refusal, which stays `failed` with its cause, with the authority shown as unknown.
+       - **Where the authority is read:** the checkout's current `profiles/`, as the dispatcher reads it. A later edit of a pinned allowlist therefore turns earlier attempts of that profile `unknown`. This is accepted under R11.
+    3. **Absence is not evidence after a restore** (decision 0004 point 7). Every `pending` or `running` row of an attempt that crossed a restore is `unknown` `<row>_UNPROVEN`, with `restoredRow` and `restoreEpochs` shown, whether the epoch is open or closed.
+       - "Crossed" means the attempt's reservation event id is at or below some epoch's `backup_high_water`. Both are the store's own event ids, and the store refuses a reservation while an epoch is open.
+       - While any epoch exists, a task with no recorded attempt is `unknown NO_ATTEMPT_UNPROVEN`.
+       - The epoch reads are public, read-only methods of `lineage_resolve.ReadOnlyIntegrationStore` (`open_epochs`, `restore_epochs`); no existing lineage test changed.
+    4. **The lineage verdict is unfiltered.** `lineageUncertainties` carries:
+       - the traversal's own uncertainties, including `RESOLVER_NOT_CONFIGURED` on attempt nodes, because the projection never asks an Agent Server;
+       - a `FIXTURE_AUTHORITY` uncertainty for each fixture-bound attempt node.
+
+       So a projection that used a fixture is never `complete` (R11). U-06.1's item 8 is judged from the dispatcher-side trace in the run record (R6, PB-5), not from this verdict.
+    5. **The latest attempt** of a task is the last one reserved, by the reservation event id. Ordinals restart per work, design revision and stage.
+    6. **Archived tasks** are resolved by reference. The enumeration limit is `coverage`, not a lineage uncertainty: an attempt's chain is reached through its reservation whatever its task's state, and a task archived without an attempt has no execution to project.
+    7. **A published result comes first.** A stop recorded beside it is listed in `disclosed`, and the result is `succeeded`.
+  - **Fix-forward of E-01.8** (introduced by `3a847c6`, exposed by this slice). When the launch gate could not read the admitted values, it wrote a `not-launched` receipt without the bound label, so a failed fixture launch projected `unknown`.
+    - `48312a5`: that receipt takes the label from the pinned route allowlist when that file is readable.
+    - `39d7d8f`: a defect in that read is now named among the receipt's problems.
+    - Live bytes are unchanged (`test_live_bytes.NotLaunchedLabel`).
+  - **Census (R2).**
+    - `projection.py`, `bound_authority.py` and `lineage/lineage_trace.py` are admitted to `LIVE_SERVER_MODULES` by exact name.
+    - `test_structure` and `NewModules` show that no credential, Gitea, dispatch or inference module is reached, and that no client socket is opened.
+    - `ReadOnly` shows that both stores' bytes, and the project repository's status, refs and HEAD, are unchanged. Backlog is asked `list` and `view` only, and the audit hook sees no socket.
+  - **Review.** One fresh read-only review (dispatch 31) found no blocker, 7 should-fix findings and notes. Among them:
+    - absence read as "not sent" after a restore;
+    - the verdict dropping the attempt nodes' uncertainty;
+    - the latest attempt chosen by ordinal;
+    - E-01.8's unlabelled `not-launched`;
+    - 14 surviving projection mutants and 8 surviving reader mutants;
+    - the task-id reuse hazard unrecorded.
+
+    The same reviewer's re-check closed findings 2–6 and found one new should-fix: the task-level `NO_ATTEMPT` in an epoch. It also confirmed that `pending` returned once the epoch closed. Ruling 3 and the third round closed both, verified by the engineering manager (see below).
+  - **Validation:**
+    - **Mutants:**
+      - the engineer's 45 at build, 20 at the first fixes and 7 at the last, all killed;
+      - the reviewer's B1–B10 killed, and P1–P16 killed or killed by an equivalent on the rewritten code;
+      - one surviving mutant, E3 (a `failed` result-step receipt treated as present), is in a state no writer produces today.
+    - **The full `tools/run_tests.py` in a clean clone:**
+      - 16 suites passed at `6a5271a` and `499e7e2`, both with and without the locked document;
+      - at `ebe043d` without it, and the ownerhost suite (325 tests) with it.
+    - **Checkers:** `verify_seed`, the gate, `check_network_matrix` and `check_security_inventory` PASS.
+    - **The engineering manager's re-run at `ebe043d`, with the locked document:** `test_projection` 70 (including `Restore`'s p6 and p7 tests), `test_bound_authority` 11, `test_structure` 16 and `test_live_bytes` 7: all OK. The store's own refusal of a reservation while an epoch is open (`integration_store.py`, `RestoreEpochOpen`) was read.
+  - **Budgets.** The ownerhost, agentfixture and lineage rows were re-measured by the `1e9de10` convention. No budget gate was added.
+    - The ownerhost row was still U-01.3's, and the lineage row predated U-02.1; the re-measures take in that growth.
+  - **Fix-forward of earlier records.**
+    - `499e7e2` records 14 agentfixture test ids from E-01.7's review rounds that had never been recorded.
+    - `ebe043d` removes one U-04.1 id whose test the restore-crossing rule replaced (the `f92601c` precedent).
+  - **Delegated decisions:**
+    - the rulings above;
+    - the route `GET /outcomes/{outcome_id}` (and HEAD), with no referenced artifact served, because the receipt holds digests and the objects are git's and the result path's files;
+    - the pull request's title left out, keeping its body's sha256;
+    - an intake receipt counts as `RESULT_VERIFIED`, because its intent is written only after the host verified the result;
+    - the route runs on the event loop, as the capture does.
+  - **Detected, not defects of this leaf:**
+    - **Task-id reuse in Backlog.md 1.55.3:** `task delete` of an archived task releases its id, and the next task created takes it (observed). A `backlog:` reference carries no digest, so it then resolves to the later task: a wrong resolution, which criterion 2's failure rule does not catch. This is discovered work for planning.
+    - **ResourceWarnings in the ownerhost suite:** `test_listener` and `test_history_listener` leave `Popen` objects of `service.py`'s `up` (present at `05d9d91`).
+  - **Not verified:**
+    - a live attempt;
+    - a real project repository and the live Backlog.md;
+    - a real browser (U-04.2, U-06.1);
+    - a pull request closed or a branch rewritten after publication (the projection does not re-read Gitea);
+    - Linux and macOS.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
