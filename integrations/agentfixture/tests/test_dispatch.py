@@ -472,6 +472,8 @@ class Dispatched(Context):
                 if record.operation_key == key:      # the reservation: its label is its binding (R11)
                     continue
                 self.assertIn('"authority":"fixture"', di._canonical(json.loads(record.intent_json)))
+        turn = json.loads(self.store.get(AR.TURN_KEY.format(attempt_id=attempt_id)).intent_json)
+        self.assertEqual(turn['identity'], IDENTITY, 'the first result step\'s identity, bound to the attempt')
         # the review's item 4: the labelled fixture intake receipt is never resumed as live
         base = AR.read_base(self.project, repository=REPOSITORY, design_commit=self.design)
         with self.assertRaises(di.DispatchRefused) as caught:

@@ -32,6 +32,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -536,6 +537,160 @@ class Identity(Bound):
             self.store, result.operation_key, base=self.base_for(result), printed={}, pulled={}, message='x',
             when=1, authority='live', read_artifact=self.read_artifact))
         self.assertEqual(refusal.context, {'given': 'live'})
+
+
+IDENTITY = ('E-01.8 Fixture Owner', 'e18-fixture-owner@users.noreply.github.com')
+OTHER = ('Another Owner', 'another-owner@users.noreply.github.com')
+
+
+class BoundIdentity(Bound):
+    """The review's item 9, round 3: a fixture attempt's result identity is the one its first result step recorded on
+    its turn journal (``identity`` beside ``authority``); a resumed step takes no other, refused before any call or
+    write. A live turn journal records none."""
+
+    def turned(self, identity=IDENTITY, authority='fixture', result=None):
+        result = result or self.fixture_attempt()
+        base = self.base_for(result)
+        key = AR.TURN_KEY.format(attempt_id=result.attempt_id)
+        self.store.reserve(key, AR.turn_intent(result.operation_key, base, 'text', authority, identity), actor=ACTOR)
+        di._mark(self.store, key, 'reserved', 'dispatched', ACTOR, 'send-message', None)
+        di._mark(self.store, key, 'dispatched', 'confirmed', ACTOR, 'sent', {'status': 200})
+        return result, base
+
+    def resume(self, result, base, identity):
+        return AR.resume_result(self.store, result.operation_key, transport=Seam(self.core, 'fixture'), base=base,
+                                actor=ACTOR, pull=Seam(lambda n: {}, 'fixture'),
+                                exists=Seam(lambda n: False, 'fixture'), read_artifact=self.read_artifact,
+                                identity=identity)
+
+    def snapshot(self):
+        return [(r.operation_key, r.state, len(self.store.events(r.operation_key))) for r in self.store.attempts()]
+
+    def test_another_identity_is_refused_before_any_call_and_the_same_one_resumes(self):
+        result, base = self.turned()
+        turn = json.loads(self.store.get(AR.TURN_KEY.format(attempt_id=result.attempt_id)).intent_json)
+        self.assertEqual((turn['authority'], turn['identity']), ('fixture', f'{IDENTITY[0]} <{IDENTITY[1]}>'))
+        calls, before = len(self.core.calls), self.snapshot()
+        refusal = self.refused('RESULT_IDENTITY_MISMATCH', lambda: self.resume(result, base, OTHER))
+        self.assertEqual(refusal.context, {'recorded': True})
+        self.assertEqual((len(self.core.calls), self.snapshot()), (calls, before), 'nothing called or changed')
+        # the same identity passes the binding: the step goes on to read the conversation (idle: not finished)
+        self.refused('TURN_NOT_FINISHED', lambda: self.resume(result, base, IDENTITY))
+        self.assertGreater(len(self.core.calls), calls)
+
+    def test_a_turn_journal_without_a_recorded_identity_admits_none(self):
+        result, base = self.turned(identity=None)
+        self.refused('RESULT_IDENTITY_MISMATCH', lambda: self.resume(result, base, IDENTITY))
+
+    def test_a_live_turn_journal_records_no_identity(self):
+        live = self.dispatch(self.core, provider(), profile=ci.REAL, manifest=self.approve_real())
+        result, base = self.turned(identity=OTHER, authority='live', result=live)
+        intent = json.loads(self.store.get(AR.TURN_KEY.format(attempt_id=live.attempt_id)).intent_json)
+        self.assertEqual(sorted(intent), sorted(AR._turn_intent(live.operation_key, base, 'text')))
+
+
+class ResumedLabel(Bound):
+    """The review's item 4, round 3, without the locked document: a labelled fixture intake receipt is never resumed as
+    live (``recorded_result`` without the reader admits only an unlabelled record)."""
+
+    def test_a_labelled_intake_receipt_is_not_resumed_without_the_reader(self):
+        result = self.fixture_attempt()
+        base = self.base_for(result)
+        record = {'format': AR.RESULT_FORMAT, 'attemptId': result.attempt_id, 'authority': 'fixture'}
+        AR._receipt(self.store, AR.INTAKE_KEY.format(attempt_id=result.attempt_id),
+                    {'format': AR.INTAKE_FORMAT, 'record': record, 'staged': 'nowhere', 'verifyRepo': 'nowhere',
+                     'authority': 'fixture'}, ACTOR)
+        refusal = self.refused('RESULT_STAGED_UNVERIFIED', lambda: AR.recorded_result(self.store, result.operation_key,
+                                                                                      base=base))
+        self.assertIn('labelled \'fixture\'', refusal.detail)
+        # given the reader the label agrees with the binding, and the record is refused only further on
+        refusal = self.refused('RESULT_STAGED_UNVERIFIED', lambda: AR.recorded_result(
+            self.store, result.operation_key, base=base, read_artifact=self.read_artifact))
+        self.assertNotIn('labelled', refusal.detail)
+
+
+class EpochSweep(Bound):
+    """The review's N1: a restore epoch's sweep (the store's reconcile) moves an attempt's dispatched journals to
+    unknown; through ``reconcile_creates`` and through ``recover`` (``dispatch_inputs.record_label``: any record of an
+    attempt mapped to it by the attempt id its key carries) each carries the bound authority, and a live attempt's
+    none."""
+
+    def epoch(self, result, authority):
+        base = self.base_for(result)
+        turn_key = AR.TURN_KEY.format(attempt_id=result.attempt_id)
+        self.store.reserve(turn_key, AR.turn_intent(result.operation_key, base, 'text', authority, IDENTITY),
+                           actor=ACTOR)
+        di._mark(self.store, turn_key, 'reserved', 'dispatched', ACTOR, 'message', None)
+        resolved = di.stored_inputs(self.store, result.operation_key, state='confirmed')
+        verified = AR.VerifiedResult(attempt_id=result.attempt_id, conversation_id=result.conversation_id,
+                                     repository=resolved.repository, base='b' * 40, commit='c' * 40, tree='d' * 40,
+                                     ref=AR.result_ref(result.attempt_id), bundle_sha256='e' * 64, bundle_bytes=1,
+                                     staged='nowhere', verify_repo='nowhere', files=1, inflated_bytes=1,
+                                     tests={'status': '0'}, excluded=(), authority=authority)
+        reserved = RP.reserve_result(self.store, result.operation_key, verified, actor=ACTOR)
+        di._mark(self.store, reserved['key'], 'reserved', 'dispatched', ACTOR, 'publish', None)
+        path = Path(self.store.path)
+        manifest = self.store.backup(actor='owner')
+        self.store.close()
+        store_mod.restore_store(path, path.parent / 'backups' / (manifest['backup_file'] + '.manifest.json'),
+                                actor='owner')
+        self.store = store_mod.open_store(path)
+        self.addCleanup(self.store.close)
+        return [turn_key, reserved['key']]
+
+    def swept(self, keys):
+        out = {}
+        for key in keys:
+            [sweep] = [e for e in self.store.events(key) if e.reason.startswith('restore epoch')]
+            out[key] = json.loads(sweep.detail_json) if sweep.detail_json else None
+        return out
+
+    def sweep(self, act):
+        keys = self.epoch(self.fixture_attempt(), 'fixture')
+        transport = Seam(self.core, 'fixture')
+        if act == 'recover':
+            RR.recover(self.store, transport=transport, actor=ACTOR, read_artifact=self.read_artifact)
+        else:
+            RR.RC.reconcile_creates(self.store, transport=transport, actor=ACTOR, read_artifact=self.read_artifact)
+        self.assertEqual(self.swept(keys), {k: {'authority': 'fixture'} for k in keys})
+
+    def test_through_reconcile_creates_every_swept_record_is_labelled(self):
+        self.sweep('reconcile_creates')
+
+    def test_through_recover_every_swept_record_is_labelled(self):
+        self.sweep('recover')
+
+    def test_a_live_attempts_sweep_writes_no_detail(self):
+        live = self.dispatch(self.core, provider(), profile=ci.REAL, manifest=self.approve_real())
+        keys = self.epoch(live, 'live')
+        RR.RC.reconcile_creates(self.store, transport=self.core, actor=ACTOR, read_artifact=self.read_artifact)
+        self.assertEqual(self.swept(keys), {k: None for k in keys})
+
+    def test_every_record_of_an_attempt_maps_to_it_and_no_other(self):
+        result = self.fixture_attempt()
+        key = result.operation_key
+        for name in ('turn', 'result', 'end', 'delivery', 'pull', 'intake', 'launch', 'stop/egress-stop/X',
+                     'inference-grant'):
+            self.assertEqual(di.attempt_of(self.store, f'dispatch/attempt/{result.attempt_id}/{name}'), key)
+        self.assertEqual(di.attempt_of(self.store, key), key)
+        for other in (f'dispatch/attempt/{"0" * 8}-0000-4000-8000-{"0" * 12}/turn', 'owner/receipt/1',
+                      f'dispatch/attempt/{result.attempt_id}'):
+            self.assertIsNone(di.attempt_of(self.store, other))
+        self.assertEqual(di.record_label(self.store, 'owner/receipt/1', self.read_artifact), {})
+
+
+class LabelErrors(Bound):
+    """The review's N2: ``bound_label`` turns only a read's own refusals into no label; a defect propagates."""
+
+    def test_a_defect_inside_the_authority_read_propagates(self):
+        result = self.fixture_attempt()
+        with mock.patch.object(di, 'attempt_authority', side_effect=RuntimeError('a defect')):
+            with self.assertRaises(RuntimeError):
+                di.bound_label(self.store, result.operation_key, self.read_artifact)
+        self.assertEqual(di.bound_label(self.store, result.operation_key, self.read_artifact),
+                         {'authority': 'fixture'})
+        (self.profiles / FIX / 'agent-server' / 'routes.json').unlink()      # a read refused: no bound authority
+        self.assertEqual(di.bound_label(self.store, result.operation_key, self.read_artifact), {})
 
 
 class Census(unittest.TestCase):

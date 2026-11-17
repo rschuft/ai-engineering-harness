@@ -141,6 +141,6 @@ def reconcile_creates(integration_store, *, transport: Callable[[str, str, dict 
     observations: list = []
     report = integration_store.reconcile(create_oracle(integration_store, transport=transport,
                                                        read_artifact=read_artifact, observations=observations),
-                                         actor=actor, label=lambda reservation: di.bound_label(
+                                         actor=actor, label=lambda reservation: di.record_label(
                                              integration_store, reservation.operation_key, read_artifact))
     return {**report, 'observations': observations}

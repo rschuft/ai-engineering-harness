@@ -1865,8 +1865,14 @@ are labelled too; a live attempt's label is empty, and its detail stays NULL. An
 commissioning user's identity for its result commit: without one, `run_attempt`, `resume_result` and `prepare`
 refuse `RESULT_IDENTITY_REQUIRED` before any call, never the bot's; given the reader, `intake_result` checks the
 authority it is given against the binding (`RESULT_AUTHORITY_MISMATCH`). The dispatch modules compare declared
-values and contain no fixture-specific path: `Census` refuses any reference to `FIXTURE` or `'fixture'` outside the
-vocabulary.
+values and contain no fixture-specific path. `Census` is a lint, not the guarantee: it catches a direct reference to
+`FIXTURE` or `'fixture'` outside the vocabulary and the F-04.2 template functions; a dynamic lookup or a branch on
+`!= LIVE` is out of its reach. The guarantee is the binding: R11's readers compute the authority from the
+reservation's pinned allowlist. A fixture attempt's turn journal also records its first result step's commit
+identity (`identity`, beside `authority`); a resumed result step given another is refused
+`RESULT_IDENTITY_MISMATCH` before any call or write. Any record of an attempt
+(`dispatch/attempt/<attempt id>/...`) is labelled by the attempt its key names (`attempt_of`, `record_label`),
+including the journals a restore epoch's sweep moves.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
@@ -2032,7 +2038,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `RESULT_WRITE_UNSETTLED`, `RESULT_READBACK` | after the dispatch: a push or pull request refused or its answer lost, or the read-back not answered (the journal `unknown`, settled by the next run's reading); the read-back not as written |
 | `TRANSPORT_AUTHORITY_MISMATCH`, `CREDENTIAL_AUTHORITY_MISMATCH`, `RESULT_TARGET_AUTHORITY_MISMATCH`, `OBSERVER_AUTHORITY_MISMATCH` | E-01.8: a seam (the Agent Server transport, the credential provider, the Gitea target, an inspect or pull observer) declares another authority than the attempt's pinned route allowlist: refused at the seam's first use, with no call ([the attempt's authority](#the-attempts-authority-e-018)) |
 | `TRANSPORT_DECLARATION_MISMATCH` | E-01.8: the profile's transport declaration and its pinned allowlist's differ, or one is not a declaration of the authority vocabulary |
-| `RESULT_IDENTITY_REQUIRED`, `RESULT_AUTHORITY_MISMATCH` | E-01.8: an attempt bound to an authority not live given no identity for its result commit; an intake given another authority than its binding |
+| `RESULT_IDENTITY_REQUIRED`, `RESULT_AUTHORITY_MISMATCH`, `RESULT_IDENTITY_MISMATCH` | E-01.8: an attempt bound to an authority not live given no identity for its result commit; an intake given another authority than its binding; a resumed result step given another identity than the attempt's first |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
 without a pin refuses every request (`NO_APPROVED_CATALOG` or `CATALOG_PIN_REQUIRED`). That is

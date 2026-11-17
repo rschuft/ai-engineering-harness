@@ -482,6 +482,8 @@ REFUSALS = {
                                 'identity for its result commit, and none was given: nothing was called',
     'RESULT_AUTHORITY_MISMATCH': 'the authority the intake was given is not the one the attempt\'s pinned route '
                                  'allowlist declares: nothing is taken',
+    'RESULT_IDENTITY_MISMATCH': 'a resumed result step of an attempt bound to an authority not live was given another '
+                                'commit identity than its first result step recorded: nothing was called',
 }
 
 
@@ -2795,9 +2797,40 @@ def bound_label(integration_store, operation_key: str, read_artifact: Callable[[
             return {}
         intent = _strict_loads(reservation.intent_json)
         resolved = ResolvedInputs.from_json(intent.get(INTENT_KEY) if isinstance(intent, dict) else None)
-        return authority_label(attempt_authority(resolved, read_artifact))
-    except (DispatchRefused, ValueError, TypeError, KeyError):
+        authority = attempt_authority(resolved, read_artifact)
+    except (DispatchRefused, ValueError):
+        # what reading legitimately refuses: the record not strict JSON (_strict_loads' ValueError), not the dispatch
+        # record (from_json's RESERVATION_INVALID), the allowlist missing, drifted or invalid (DispatchRefused); any
+        # other exception is a defect and propagates (E-01.8's review, N2)
         return {}
+    return authority_label(authority)
+
+
+ATTEMPT_RECORD_RE = re.compile(r'dispatch/attempt/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.+')
+
+
+def attempt_of(integration_store, key: str) -> str | None:
+    """The operation key of the typed attempt KEY belongs to: KEY itself for a typed attempt; for one of its own records
+    (``dispatch/attempt/<attempt id>/...``: the turn, result, end, delivery, pull, intake, launch, stop and grant
+    journals) the typed attempt whose attempt id that is, as the record's key already carries it; None otherwise."""
+    if integration_store.attempt_identity(key) is not None:
+        return key
+    match = ATTEMPT_RECORD_RE.fullmatch(key)
+    if match is None:
+        return None
+    for reservation in integration_store.attempts():
+        if store.attempt_id_for(reservation.operation_key) == match.group(1) \
+                and integration_store.attempt_identity(reservation.operation_key) is not None:
+            return reservation.operation_key
+    return None
+
+
+def record_label(integration_store, key: str, read_artifact: Callable[[str], bytes] = None) -> dict:
+    """``bound_label`` of the typed attempt the record KEY belongs to (``attempt_of``), for the writers that move any of
+    an attempt's records outside ``dispatch`` (``recover``, the store's reconcile); {} for a record of no typed
+    attempt."""
+    attempt = attempt_of(integration_store, key)
+    return {} if attempt is None else bound_label(integration_store, attempt, read_artifact)
 
 
 def authority_label(authority: str) -> dict:

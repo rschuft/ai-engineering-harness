@@ -731,16 +731,30 @@ def message_received(client, conversation_id: str, message_sha256: str) -> bool:
                for e in events)
 
 
-def turn_intent(operation_key: str, base: Base, text: str, authority: str = di.LIVE) -> dict:
-    """The turn journal's intent; AUTHORITY, the attempt's bound one, labels it when it is not live (R11)."""
+def identity_text(identity) -> str:
+    """``Name <email>`` of a result commit's (name, email) identity (``commit_identity``)."""
+    name, email = commit_identity(identity)
+    return f'{name} <{email}>'
+
+
+def turn_intent(operation_key: str, base: Base, text: str, authority: str = di.LIVE, identity=None) -> dict:
+    """The turn journal's intent; AUTHORITY, the attempt's bound one, labels it when it is not live (R11), and then
+    IDENTITY, the result commit's identity this run prepared, is recorded beside it (``identity``; E-01.8's review,
+    item 9: a later result step of the attempt takes no other). A live intent is byte for byte what it was."""
+    bound = {} if authority == di.LIVE or identity is None else {'identity': identity_text(identity)}
+    return {**_turn_intent(operation_key, base, text), **di.authority_label(authority), **bound}
+
+
+def _turn_intent(operation_key: str, base: Base, text: str) -> dict:
     return {'format': TURN_FORMAT, 'operationKey': operation_key, 'attemptId': store.attempt_id_for(operation_key),
             'conversationId': store.conversation_id_for(operation_key),
             'base': {'repository': base.repository, 'ref': base.ref, 'commit': base.commit},
             'seed': {'sha256': base.seed_sha256, 'files': len(base.files)}, 'frame': FRAME_VERSION,
-            'messageSha256': hashlib.sha256(text.encode('utf-8')).hexdigest(), **di.authority_label(authority)}
+            'messageSha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
 
 
-def send_message(integration_store, operation_key: str, client, base: Base, text: str, *, actor: str) -> dict:
+def send_message(integration_store, operation_key: str, client, base: Base, text: str, *, actor: str,
+                 identity=None) -> dict:
     """The one message of the attempt: the turn journal reserved with its intent (TURN_CONFLICT for another one),
     ``dispatched`` immediately before the one POST, ``confirmed`` with the answer's status. A journal already past
     ``reserved`` is TURN_ALREADY_SENT with zero calls: the message is never sent twice. A lost answer (no answer or a
@@ -753,7 +767,7 @@ def send_message(integration_store, operation_key: str, client, base: Base, text
     with di.dispatcher_lock(integration_store):
         body = message_body(text)
         di.TAIL_GRAMMARS[di.MESSAGE_TAIL](body)                 # the client's own grammar, before anything is recorded
-        intent = turn_intent(operation_key, base, text, di.seam_authority(client))
+        intent = turn_intent(operation_key, base, text, di.seam_authority(client), identity)
         key = TURN_KEY.format(attempt_id=intent['attemptId'])
         try:
             held = integration_store.reserve(key, intent, actor=actor).reservation
@@ -1248,6 +1262,18 @@ def _identity_required(authority: str, identity) -> None:
                        'commit takes the commissioning user\'s identity, and none was given', authority=authority)
 
 
+def _identity_bound(turn: dict, authority: str, identity) -> None:
+    """RESULT_IDENTITY_MISMATCH unless IDENTITY is the one the attempt's turn journal recorded (its first result step's,
+    ``turn_intent``) when its bound AUTHORITY is not live: the identity belongs to the commissioning principal of that
+    attempt (decision 0028 point 4), never to a later caller. A live attempt records none and takes the bot's."""
+    if authority == di.LIVE:
+        return
+    recorded = turn.get('identity') if isinstance(turn, dict) else None
+    if recorded is None or recorded != identity_text(identity):
+        raise _refused('RESULT_IDENTITY_MISMATCH', 'the attempt\'s first result step recorded another commit identity '
+                       '(or none): a resumed step takes no other', recorded=recorded is not None)
+
+
 def _authority(authority) -> str:
     if authority not in di.AUTHORITIES:
         raise ValueError(f'an authority is one of {di.AUTHORITIES}')
@@ -1537,7 +1563,8 @@ def run_attempt(integration_store, operation_key: str, *, transport, base: Base,
             return stopped(records)
         # 3. the message
         try:
-            send_message(integration_store, operation_key, client, base, prepared.text, actor=actor)
+            send_message(integration_store, operation_key, client, base, prepared.text, actor=actor,
+                         identity=prepared.identity)
         except DispatchRefused as refusal:
             if refusal.code != 'TURN_RUN_NOT_STARTED':
                 raise
@@ -1662,6 +1689,7 @@ def resume_result(integration_store, operation_key: str, *, transport, base: Bas
     if result is not None and result.state in AE.HANDED_ON:
         raise _refused('ATTEMPT_RESULT_HANDED_ON', f'the result journal is {result.state}: the result step is the '
                        'result path\'s now', result_state=result.state)
+    _identity_bound(json.loads(turn.intent_json), bound, identity)    # before any call or write (review, item 9)
     observe = observe or (lambda phase, **facts: ())
 
     def stopped(records, outcome='stopped', problems=(), status=None):

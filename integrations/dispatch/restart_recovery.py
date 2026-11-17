@@ -217,7 +217,7 @@ class _Recovery:
         """One transition, expected from FROM_STATE; another writer's move is a conflict, reported, never retried. Its
         detail carries the attempt's bound authority when it is not live (E-01.8, R11; ``bound_label``: the typed
         attempt's own, or a turn journal's attempt's), so a live record is byte for byte what it was."""
-        detail = {**detail, **di.bound_label(self.store, self.turn_attempts.get(key, key), self.read_artifact)}
+        detail = {**detail, **di.record_label(self.store, key, self.read_artifact)}
         try:
             di._mark(self.store, key, from_state, to_state, self.actor, reason, detail)
             return True
@@ -265,9 +265,8 @@ class _Recovery:
         for _ in range(len(self.store.attempts()) + 1):
             last[0] = None
             try:
-                self.store.reconcile(once, actor=self.actor, label=lambda reservation: di.bound_label(
-                    self.store, turn_attempt(self.store, reservation) or reservation.operation_key,
-                    self.read_artifact))
+                self.store.reconcile(once, actor=self.actor, label=lambda reservation: di.record_label(
+                    self.store, reservation.operation_key, self.read_artifact))
                 break
             except store.IllegalTransition as exc:
                 key = last[0]

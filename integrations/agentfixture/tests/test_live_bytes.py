@@ -115,6 +115,8 @@ class LiveBytes(TA.Bound):
         [pull] = gitea.pulls.values()
         self.assertNotIn('Authority', pull['body'])
         self.assertEqual(authority_keys(outcome.result.to_json()), [])
+        turn = json.loads(self.store.get(AR.TURN_KEY.format(attempt_id=result.attempt_id)).intent_json)
+        self.assertNotIn('identity', turn, 'a live turn journal records no identity')
         commit = remote.repo[published.receipt['commit'].encode('ascii')]
         self.assertEqual(commit.author, f'{AR.BOT_NAME} <{AR.BOT_EMAIL}>'.encode(), 'decision 0024 point 4, unchanged')
 
