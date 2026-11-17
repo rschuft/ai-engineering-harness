@@ -1348,6 +1348,19 @@
       "findings": ["fd-owner-ui-access", "fd-owner-ui-session-plan-silence"]
     },
     {
+      "id": "api-agentfixture",
+      "name": "The served Agent Server fixture's host-loopback API (two faces)",
+      "kind": "api",
+      "custodian": "owner-os-account",
+      "location": "Built at E-01.7 (slice 9; decision 0026, Proposed): integrations/agentfixture/server.py, Starlette on uvicorn under the tools interpreter, bound to host 127.0.0.1:13320 only (a test binds a free loopback port), started by the execution session as a process of the Owner's account. It answers from the one cited catalog (integrations/agentfixture/observations.json) on two faces: the dispatcher's, at the root, and a read-only UI face under /ui for the Owner UI and Agent Canvas. Its access values are public labelled constants, not credentials; every answer carries the fixture's label. It opens no outbound connection, imports no client module, holds no credential and has no route that reaches a guest, a model or a credential.",
+      "status": "planned",
+      "sources": [
+        "decisions/0026-declared-transport-authority-fixture-profile-and-agent-server-fixture.md",
+        "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md"
+      ],
+      "notes": "Recorded before the listener first listens (the I1 design, section 5 N5 and N6: evidence/I1-integration-design-2026-11-16.md). Observed at E-01.7's verdict by its conformance suite."
+    },
+    {
       "id": "api-integration-service",
       "name": "The Integration process's host-loopback API for the Owner UI",
       "kind": "api",

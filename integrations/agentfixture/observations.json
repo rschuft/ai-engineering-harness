@@ -967,6 +967,17 @@
     },
     {
       "answer": "seed",
+      "field": "`body.command_id`, `body.kind`, `body.id`, `body.timestamp`, `body.order`",
+      "class": "none",
+      "citation": "not served: no committed observation of its value, and not read; `BashOutput` requires `command_id` and `kind` (`as:openhands/agent_server/models.py:669-687`), listed here (the dispatcher's-face clause)",
+      "determinedBy": "",
+      "read": false,
+      "readBy": [],
+      "served": false,
+      "marks": ""
+    },
+    {
+      "answer": "seed",
       "field": "`fixture`",
       "class": "label",
       "citation": "the fixture's label",
@@ -1259,5 +1270,1035 @@
       "served": true,
       "marks": ""
     }
-  ]
+  ],
+  "served": {
+    "use": "The served fixture (E-01.7, slice 9): the answers the listener adds to the core's catalog above, both faces, each field's provenance row exactly as the README's served table states it (a test binds the two). The listener also serves the core's own answers on the dispatcher's face, by the rows above, and refuses the request that would need its source-derived entry (message-event).",
+    "records": {
+      "S-01.3.1": "evidence/S-01.3.1-management-api-admission.md",
+      "E-01.3.3": "evidence/E-01.3.3-dispatcher-custody.md",
+      "D1": "evidence/D1-run-2026-11-16.md",
+      "F-04.1c": "evidence/F-04.1c-agent-server.md"
+    },
+    "lockedOpenapi": {
+      "release": "OpenHands/software-agent-sdk v1.60.1",
+      "asset": "openapi.json",
+      "sha256": "3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0",
+      "lock": "composition/lock/components.lock.json release_assets",
+      "committed": false
+    },
+    "inventory": {
+      "path": "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
+      "sha256": "919d67e2ee49823d0b4d0034f92ab190d95a64abfd9e07bb698680f9edabbc09",
+      "profile": "b7c5d2fedb6495679d6d24eca7df652b4f55e8832f2c17987c26569861eed9c7"
+    },
+    "faces": {
+      "dispatcher": {
+        "prefix": "",
+        "access": "agentfixture-dispatcher-face-public-value"
+      },
+      "ui": {
+        "prefix": "/ui",
+        "access": "agentfixture-ui-face-public-value"
+      }
+    },
+    "answers": {
+      "result": {
+        "status": 200,
+        "exit_code": 0,
+        "rule": "integrations/dispatch/attempt_run.py RESULT_SCRIPT",
+        "testOutput": {
+          "bytes": 114,
+          "sha256": "432e764160c5b06b41e1864e05386aaf72bcdcdfe2465d19c35fe57144567754"
+        }
+      },
+      "unauthorized": {
+        "status": 401,
+        "body": {
+          "detail": "Unauthorized"
+        }
+      },
+      "ui-server-info": {
+        "status": 200,
+        "body": {
+          "uptime": 31.0,
+          "idle_time": 31.0
+        }
+      },
+      "ui-conversation": {
+        "status": 200,
+        "title": "FIXTURE: ai-engineering-harness/agentfixture (not a live conversation)",
+        "tags": {
+          "fixture": "ai-engineering-harness-agentfixture"
+        }
+      },
+      "ui-events": {
+        "status": 200,
+        "next_page_id": null
+      },
+      "ui-message-event": {
+        "kind": "MessageEvent",
+        "source": "user",
+        "role": "user"
+      },
+      "ui-socket": {},
+      "ui-sync": {
+        "type": "sync"
+      },
+      "ui-durable": {
+        "type": "durable"
+      },
+      "ui-unauthorized": {
+        "status": 401,
+        "body": {
+          "detail": "Unauthorized"
+        }
+      },
+      "ui-socket-unauthorized": {
+        "code": 4001,
+        "reason": "Authentication failed"
+      },
+      "ui-socket-denied": {
+        "status": 403
+      },
+      "socket-refusal": {
+        "code": 1008
+      }
+    },
+    "routes": [
+      {
+        "face": "dispatcher",
+        "method": "GET",
+        "path": "/server_info",
+        "inventory": "/server_info",
+        "source": "openapi",
+        "locked": false,
+        "answers": [
+          "server-info",
+          "refusal"
+        ],
+        "validation": "model `ServerInfo` (`as:openhands/agent_server/server_details_router.py:38-103`), the schema below"
+      },
+      {
+        "face": "dispatcher",
+        "method": "POST",
+        "path": "/api/conversations",
+        "inventory": "/api/conversations",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "create-new",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `ConversationInfo` (`as:openhands/agent_server/models.py:357`), as the locked document carries its schema (`#/components/schemas/ConversationInfo`); the request against `#/components/schemas/StartConversationRequest`"
+      },
+      {
+        "face": "dispatcher",
+        "method": "GET",
+        "path": "/api/conversations/count",
+        "inventory": "/api/conversations/count",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "count",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "an integer (`as:openhands/agent_server/conversation_router.py:215-216`)"
+      },
+      {
+        "face": "dispatcher",
+        "method": "GET",
+        "path": "/api/conversations/{conversation_id}",
+        "inventory": "/api/conversations/{conversation_id}",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "conversation",
+          "conversation-absent",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `ConversationInfo` (`as:openhands/agent_server/models.py:357`), as the locked document carries its schema; 404 without a body schema"
+      },
+      {
+        "face": "dispatcher",
+        "method": "GET",
+        "path": "/api/conversations/{conversation_id}/runtime",
+        "inventory": "/api/conversations/{conversation_id}/runtime",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "runtime",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `ConversationRuntimeInfo` (`as:openhands/agent_server/models.py:67-72`)"
+      },
+      {
+        "face": "dispatcher",
+        "method": "DELETE",
+        "path": "/api/conversations/{conversation_id}/runtime",
+        "inventory": "/api/conversations/{conversation_id}/runtime",
+        "source": "openapi",
+        "locked": false,
+        "answers": [
+          "runtime-stop",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "204, no content (`as:openhands/agent_server/docker_runtime/routers.py:291-292`)"
+      },
+      {
+        "face": "dispatcher",
+        "method": "GET",
+        "path": "/api/conversations/{conversation_id}/events/search",
+        "inventory": "/api/conversations/{conversation_id}/events/search",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "events",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `EventPage` (`as:openhands/agent_server/models.py:461-463`; the locked document's response schema is empty)"
+      },
+      {
+        "face": "dispatcher",
+        "method": "POST",
+        "path": "/api/conversations/{conversation_id}/events",
+        "inventory": "/api/conversations/{conversation_id}/{tail}",
+        "source": "openapi",
+        "locked": false,
+        "answers": [
+          "message",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `Success` (`as:openhands/agent_server/models.py:453-454`, the proxied local route's answer); the tail `events` of the inventory's closed `tails`"
+      },
+      {
+        "face": "dispatcher",
+        "method": "POST",
+        "path": "/api/conversations/{conversation_id}/bash/execute_bash_command",
+        "inventory": "/api/conversations/{conversation_id}/{tail}",
+        "source": "openapi",
+        "locked": false,
+        "answers": [
+          "seed",
+          "result",
+          "unauthorized",
+          "refusal"
+        ],
+        "validation": "model `BashOutput` (`as:openhands/agent_server/models.py:669-687`), as the locked document carries its schema; the tail `bash/execute_bash_command` of the inventory's closed `tails`"
+      },
+      {
+        "face": "ui",
+        "method": "GET",
+        "path": "/server_info",
+        "inventory": "/server_info",
+        "source": "openapi",
+        "locked": false,
+        "answers": [
+          "ui-server-info",
+          "refusal"
+        ],
+        "validation": "model `ServerInfo` (`as:openhands/agent_server/server_details_router.py:38-103`)"
+      },
+      {
+        "face": "ui",
+        "method": "GET",
+        "path": "/api/conversations/{conversation_id}",
+        "inventory": "/api/conversations/{conversation_id}",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "ui-conversation",
+          "ui-unauthorized",
+          "refusal"
+        ],
+        "validation": "the locked document's `#/components/schemas/ConversationInfo` (the local runtime's route)"
+      },
+      {
+        "face": "ui",
+        "method": "GET",
+        "path": "/api/conversations/{conversation_id}/events/search",
+        "inventory": "/api/conversations/{conversation_id}/events/search",
+        "source": "openapi",
+        "locked": true,
+        "answers": [
+          "ui-events",
+          "ui-unauthorized",
+          "refusal"
+        ],
+        "validation": "the locked document (an empty response schema) and model `EventPage` (`as:openhands/agent_server/models.py:461-463`), each item the locked `#/components/schemas/Event`"
+      },
+      {
+        "face": "ui",
+        "method": "WEBSOCKET",
+        "path": "/sockets/session/{conversation_id}",
+        "inventory": "/sockets/session/{conversation_id}",
+        "source": "binary",
+        "locked": false,
+        "answers": [
+          "ui-socket",
+          "ui-sync",
+          "ui-durable",
+          "ui-socket-unauthorized",
+          "ui-socket-denied",
+          "socket-refusal"
+        ],
+        "validation": "models `SyncFrame` and `DurableFrame` (`as:openhands/agent_server/session_protocol.py:51-81`), the schemas below"
+      }
+    ],
+    "schemas": {
+      "ServerInfo": {
+        "type": "object",
+        "required": [
+          "uptime",
+          "idle_time"
+        ],
+        "properties": {
+          "uptime": {
+            "type": "number"
+          },
+          "idle_time": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "sdk_version": {
+            "type": "string"
+          },
+          "tools_version": {
+            "type": "string"
+          },
+          "workspace_version": {
+            "type": "string"
+          },
+          "build_git_sha": {
+            "type": "string"
+          },
+          "build_git_ref": {
+            "type": "string"
+          },
+          "python_version": {
+            "type": "string"
+          },
+          "usable_tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runtime_idle_timeout_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "conversation_runtime": {
+            "enum": [
+              "local",
+              "docker"
+            ]
+          },
+          "available_conversation_runtimes": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "local",
+                "docker"
+              ]
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "app_backend_ingress_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_foreground_terminal_timeout_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "docs": {
+            "type": "string"
+          },
+          "redoc": {
+            "type": "string"
+          }
+        }
+      },
+      "EventPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SyncFrame": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "sync"
+          },
+          "from_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "through_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "DurableFrame": {
+        "type": "object",
+        "required": [
+          "seq",
+          "event"
+        ],
+        "properties": {
+          "type": {
+            "const": "durable"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "event": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "scenarios": {
+      "finished": {
+        "what": "the dispatcher's face as the core answers it; the UI face idle until the message, then finished",
+        "transportEvents": []
+      },
+      "running": {
+        "what": "as finished, but the UI face shows the conversation running for 7 of its own conversation reads after the message (D1's wait read the conversation seven times: D1 §5 calls), then finished; the dispatcher's face still answers finished at the first read after the message",
+        "transportEvents": []
+      },
+      "pending": {
+        "what": "the conversation stays idle: the dispatcher's message never reaches the core",
+        "transportEvents": [
+          "the first `POST .../events` (the message): the request never reaches the core; the listener withholds the response until the client goes away"
+        ]
+      },
+      "failed": {
+        "what": "S-01.3.1's observed refusal of a create: the dispatcher's face admits no key, so the create (and every key-gated request) is answered `unauthorized`",
+        "transportEvents": []
+      },
+      "lost-create-acknowledgement": {
+        "what": "the create is received and its acknowledgement lost; the lookup is answered (E-01.4.1 reconciles it)",
+        "transportEvents": [
+          "the first `POST /api/conversations`: it reaches the core; the response is withheld until the client goes away"
+        ]
+      },
+      "unknown": {
+        "what": "the create is received and its acknowledgement lost, and so is every lookup of that conversation: the attempt stays unknown (`LOOKUP_INDETERMINATE`)",
+        "transportEvents": [
+          "the first `POST /api/conversations`: it reaches the core; the response is withheld",
+          "each `GET /api/conversations/{id}` of that conversation: it reaches the core; the response is withheld"
+        ]
+      }
+    },
+    "provenance": [
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`status`",
+        "class": "observation",
+        "citation": "D1 §5 calls (`POST .../bash/execute_bash_command` 200 (RESULT, ...)) and (8)",
+        "determinedBy": "the harness's RESULT command (its script byte for byte `RESULT_SCRIPT`, the builder's constants), after the core's SEED and the finished turn, on the seeded workspace, whose files outside `openspec/` and `backlog/` are D1's demo repository by blob id, with D1's recorded changes applied; the script's exit `0`",
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.exit_code`",
+        "class": "pinned-rule",
+        "citation": "`integrations/dispatch/attempt_run.py` `RESULT_SCRIPT` (run by the core over the seeded workspace with D1's changes; served only as `0`)",
+        "determinedBy": "the harness's RESULT command (its script byte for byte `RESULT_SCRIPT`, the builder's constants), after the core's SEED and the finished turn, on the seeded workspace, whose files outside `openspec/` and `backlog/` are D1's demo repository by blob id, with D1's recorded changes applied; the script's exit `0`",
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.stdout#base`, `body.stdout#tree`, `body.stdout#commit`, `body.stdout#excluded`, `body.stdout#bundle`, `body.stdout#done`",
+        "class": "pinned-rule",
+        "citation": "`integrations/dispatch/attempt_run.py` `RESULT_SCRIPT`, its own output lines: the commit by decision 0024 point 4.4's rule (`attempt_run.expected_commit` over the printed tree, the base, the identity, the date and the message the command carries; G7), its bundle and the excluded paths; D1's commit id `51af29e4…` a citation only (D1 §2)",
+        "determinedBy": "the command's parameters (base, bundle, identity, date, message) and the edited workspace",
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.stdout#tests`",
+        "class": "observation",
+        "citation": "D1 §5 (8) and §2 (Tests in RESULT: status `0`, `PASSED`)",
+        "determinedBy": "D1's test command (`RESULT_SCRIPT`'s fixed `python -m unittest discover -s tests`) over D1's base outside `openspec/` and `backlog/` and D1's changes (planning's PB-7); served only when the script's own run of it passed",
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.stdout#test-output`",
+        "class": "observation",
+        "citation": "D1 §5 (8) and §2 (Tests in RESULT: output 114 bytes, sha256 `432e7641…7754`), the bytes as D1 §12's Owner report shows them (the report's sha256 `4c2e6826…c338` checked)",
+        "determinedBy": "D1's test command over D1's base outside `openspec/` and `backlog/` and D1's changes (planning's PB-7); served only when the script's own run of it passed",
+        "read": true,
+        "readBy": [
+          "attempt_run.parse_result"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.stdout#frame`",
+        "class": "pinned-rule",
+        "citation": "`integrations/dispatch/attempt_run.py` `RESULT_SCRIPT` (the frame it prints when the command asks for the exchange delivery)",
+        "determinedBy": "the command's `frame` parameter",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`body.stderr`, `body.command_id`, `body.kind`, `body.id`, `body.timestamp`, `body.order`",
+        "class": "none",
+        "citation": "not served: no committed observation of its value, and not read; `BashOutput` requires `command_id` and `kind` (`as:openhands/agent_server/models.py:669-687`), listed here (the dispatcher's-face clause)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`delivered`",
+        "class": "none",
+        "citation": "not served: the exchange delivery is E-01.8's seam (the I1 design's R13); over the listener the whole result path is proven at E-01.8",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "result",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "unauthorized",
+        "field": "`status`",
+        "class": "observation",
+        "citation": "S-01.3.1 §3.4 (`401 {\"detail\": \"Unauthorized\"}`, a key-gated HTTP route with no key or a wrong key); E-01.3.3 §8.3 step (4), PASS live at §9.1 (a key the outer server does not hold, the runtime credential, answered 401 on its key-gated routes)",
+        "determinedBy": "a key-gated route (every route of the face but `GET /server_info`) with no key or a key not the face's; in the failed scenario every key",
+        "read": true,
+        "readBy": [
+          "dispatch_inputs.create_receipt"
+        ],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "unauthorized",
+        "field": "`body.detail`",
+        "class": "observation",
+        "citation": "S-01.3.1 §3.4",
+        "determinedBy": "as `status`",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "dispatcher",
+        "answer": "unauthorized",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-server-info",
+        "field": "`status`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/server_details_router.py:184-192` (the public route answers `ServerInfo`)",
+        "determinedBy": "the route (no input)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-server-info",
+        "field": "`body.uptime`, `body.idle_time`",
+        "class": "observation",
+        "citation": "F-04.1c §3",
+        "determinedBy": "the clock",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "clock-valued"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-server-info",
+        "field": "`body.<every other ServerInfo field>`",
+        "class": "none",
+        "citation": "not served: unobserved at the UI's vantage and not required (`ServerInfo` requires `uptime` and `idle_time` only: `as:openhands/agent_server/server_details_router.py:38-103`)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-server-info",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, naming the source-derived fields",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`status`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/conversation_router.py:219-234` (`ConversationInfo` for a conversation the server holds)",
+        "determinedBy": "a conversation the server holds, idle, running or finished",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.id`",
+        "class": "echo",
+        "citation": "the request path's `conversation_id`",
+        "determinedBy": "the request",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.workspace`",
+        "class": "source-derived",
+        "citation": "the conversation's state (`as:openhands/agent_server/conversation_service.py:387-388`, `sdk:openhands/sdk/conversation/state.py:95`): the create's `LocalWorkspace` and its `working_dir`",
+        "determinedBy": "the conversation's create (its `workspace`)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.agent`",
+        "class": "source-derived",
+        "citation": "the conversation's state (`sdk:openhands/sdk/conversation/state.py:86`): an ACP `agent_settings` create becomes an `ACPAgent` (`sdk:openhands/sdk/conversation/request.py:517-519`, `sdk:openhands/sdk/settings/model.py:2142-2160`) whose `acp_command` is the settings' own when not empty and not an `npx` command (`sdk:openhands/sdk/settings/model.py:2047-2073`); only `kind` and `acp_command` (the required pair) are served",
+        "determinedBy": "the conversation's create (`agent_settings`: `agent_kind` `acp`, `acp_command`)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.execution_status`",
+        "class": "source-derived",
+        "citation": "`sdk:openhands/sdk/conversation/state.py:125` (`idle`, `running`, `finished`)",
+        "determinedBy": "the conversation's state: `idle` before the message; then `finished`, or in the running scenario `running` for that scenario's number of the UI face's own reads first",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived; scenario: the UI face's call count"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.title`, `body.tags`",
+        "class": "label",
+        "citation": "the fixture's label (where the schema has room, in the data the UI shows: the I1 design's R12)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`body.<every other ConversationInfo field>`",
+        "class": "none",
+        "citation": "not served: unobserved at the UI's vantage and not required (`ConversationInfo` requires `id`, `workspace` and `agent`)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-conversation",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, naming the source-derived fields",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-events",
+        "field": "`status`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/event_router.py:68-71`, `:129-138` (`EventPage` for a conversation it holds)",
+        "determinedBy": "a conversation the server holds, idle, running or finished; no query",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-events",
+        "field": "`body.items`",
+        "class": "source-derived",
+        "citation": "the conversation's recorded events: none before the message, then the message's `MessageEvent` (`sdk:openhands/sdk/conversation/impl/local_conversation.py:2041-2043`); each item is `ui-message-event`",
+        "determinedBy": "the conversation's state",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-events",
+        "field": "`body.next_page_id`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/event_service.py:680`, `:689-690` (`null` while the events fit one page)",
+        "determinedBy": "no `page_id`; the log within one page",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-events",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, naming the source-derived fields",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-message-event",
+        "field": "`kind`, `source`, `llm_message.role`, `llm_message.content[].type`",
+        "class": "source-derived",
+        "citation": "`sdk:openhands/sdk/conversation/impl/local_conversation.py:2041-2043`, `sdk:openhands/sdk/event/llm_convertible/message.py:32-35`, `sdk:openhands/sdk/llm/message.py:177-179`, `:222-226` (a user message recorded as `MessageEvent`, source `user`, role `user`, text parts)",
+        "determinedBy": "a user message the conversation received",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-message-event",
+        "field": "`llm_message.content[].text`",
+        "class": "source-derived",
+        "citation": "`sdk:openhands/sdk/conversation/impl/local_conversation.py:2041-2043` (the message's own text)",
+        "determinedBy": "the message the conversation received (the dispatcher's)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-message-event",
+        "field": "`id`, `timestamp`, `<every other MessageEvent field>`",
+        "class": "none",
+        "citation": "not served: unobserved and not required (`MessageEvent` requires `source`, `llm_message` and `kind`)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": false,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-socket",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, on the session socket's handshake",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-sync",
+        "field": "`body.type`, `body.through_seq`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/session_protocol.py:51-68`, `as:openhands/agent_server/session_socket.py:400-404` (one `sync` frame first, `through_seq` the last event's seq or `null`)",
+        "determinedBy": "the conversation's events",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-sync",
+        "field": "`body.from_seq`",
+        "class": "echo",
+        "citation": "the request's `after_seq`",
+        "determinedBy": "the request",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-sync",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label (the handshake's)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-durable",
+        "field": "`body.type`, `body.seq`",
+        "class": "source-derived",
+        "citation": "`as:openhands/agent_server/session_protocol.py:71-81`, `as:openhands/agent_server/session_socket.py:295-312`, `:406-411` (a `durable` frame for each event above `after_seq`, `seq` its index)",
+        "determinedBy": "the conversation's events and the request's `after_seq`",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-durable",
+        "field": "`body.event`",
+        "class": "source-derived",
+        "citation": "the event, `ui-message-event`",
+        "determinedBy": "the conversation's events",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": "source-derived"
+      },
+      {
+        "face": "ui",
+        "answer": "ui-durable",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label (the handshake's)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-unauthorized",
+        "field": "`status`",
+        "class": "observation",
+        "citation": "E-01.3.3 §8.3 step (4), PASS live at §9.1 (the conversation's inner server refuses a request without its credential); S-01.3.1 §3.4 (`401`)",
+        "determinedBy": "a key-gated route of the face with no key or a key not the face's",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-unauthorized",
+        "field": "`body.detail`",
+        "class": "observation",
+        "citation": "S-01.3.1 §3.4 (`{\"detail\": \"Unauthorized\"}`)",
+        "determinedBy": "as `status`; the inner server is the same release (`as:openhands/agent_server/dependencies.py:27-39`)",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-unauthorized",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-socket-unauthorized",
+        "field": "`close.code`, `close.reason`",
+        "class": "observation",
+        "citation": "S-01.3.1 §3.4 (WebSocket, no auth message or a wrong key in it: handshake 101, then close 4001 \"Authentication failed\")",
+        "determinedBy": "a first frame that is not the face's authentication",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-socket-denied",
+        "field": "`status`",
+        "class": "observation",
+        "citation": "S-01.3.1 §3.4 (WebSocket, a wrong key in the query or header: handshake 403)",
+        "determinedBy": "a key in the query or header not the face's",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "ui",
+        "answer": "ui-socket-denied",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "both",
+        "answer": "socket-refusal",
+        "field": "`close.code`, `close.reason`",
+        "class": "label",
+        "citation": "the fixture's refusal on a socket: close 1008, the reason `FIXTURE_NO_OBSERVATION` and why (an inbound message on the read-only face, a socket outside the catalog, a conversation it does not hold)",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      },
+      {
+        "face": "both",
+        "answer": "socket-refusal",
+        "field": "`fixture`",
+        "class": "label",
+        "citation": "the fixture's label, on the handshake",
+        "determinedBy": "",
+        "read": false,
+        "readBy": [],
+        "served": true,
+        "marks": ""
+      }
+    ]
+  }
 }
