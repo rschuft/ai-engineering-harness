@@ -359,12 +359,14 @@ asked, and the projection holds no transport.
 
 **The session-detail source action** (`sessionDetail`, plan leaf U-01.2; the I1 design R15; decision 0026 point 9).
 Data only: the process opens no socket for it and names no Canvas or fixture client (the census of R2 is unchanged).
-For an attempt whose bound authority is `fixture` (from its pinned route allowlist, whatever its labels show) and
-whose conversation id is a lower-case UUID: `{"conversationId": <id>, "canvasPath": "/conversations/<id>",
+For an attempt whose bound authority is `fixture` (from its pinned route allowlist, whatever its labels show), whose
+create the dispatcher's records confirm (the typed attempt is `confirmed`: the conversation exists by the receipts;
+review note N5) and whose conversation id is a lower-case UUID: `{"conversationId": <id>, "canvasPath": "/conversations/<id>",
 "authority": "fixture"}`, the path of that conversation in the standalone Agent Canvas application. For any other
 attempt, `{"refused": "SESSION_ACCESS_UNAVAILABLE", "reason": ...}`: a live-bound attempt's session access (the
-dispatcher-issued runtime credential) is U-03.1's; an unbound attempt has none; an attempt without a conversation id
-has none. No origin is in the answer: the Owner host joins the id to its own constant Canvas origin, after checking
+dispatcher-issued runtime credential) is U-03.1's; an unbound attempt has none; an attempt whose create is not
+confirmed (reserved, sent and unanswered, refused, or its outcome unknown) has none, since its conversation is not
+known to exist; an attempt without a conversation id has none. No origin is in the answer: the Owner host joins the id to its own constant Canvas origin, after checking
 the id again.
 
 ### The state table

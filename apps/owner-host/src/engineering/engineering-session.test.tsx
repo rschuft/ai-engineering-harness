@@ -120,7 +120,7 @@ describe("the engineering session route", () => {
   });
 
   it("shows no frame, and the projection's reason, for a live-bound or unbound attempt", async () => {
-    for (const name of ["published-live", "authority-unbound"]) {
+    for (const name of ["published-live", "authority-unbound", "failed-refused-create", "unknown-create-outcome"]) {
       const credential = throwawayCredential();
       signIn(credential);
       const a = answer(name);

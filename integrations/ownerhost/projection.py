@@ -440,15 +440,20 @@ def evidence_of(records: dict) -> dict | None:
     }
 
 
-def session_detail(conversation, authority: dict) -> dict:
-    """The session-detail action of an attempt: available for a fixture-bound attempt whose conversation id is a
-    lower-case UUID, refused (SESSION_ACCESS_UNAVAILABLE) otherwise, with the reason."""
+def session_detail(conversation, authority: dict, created: bool = False) -> dict:
+    """The session-detail action of an attempt: available for a fixture-bound attempt whose create the dispatcher's
+    records confirm (CREATED: the typed attempt is confirmed, so the conversation exists by the receipts) and whose
+    conversation id is a lower-case UUID; refused (SESSION_ACCESS_UNAVAILABLE) otherwise, with the reason."""
     bound = authority.get('bound')
     if bound != FIXTURE:
         why = ("the attempt is bound to the live authority: a live conversation's session access (the "
                "dispatcher-issued runtime credential) is U-03.1's" if bound == LIVE
                else "the attempt's bound authority is not known, so no session access is given")
         return {'refused': SESSION_ACCESS_UNAVAILABLE, 'reason': why}
+    if created is not True:
+        return {'refused': SESSION_ACCESS_UNAVAILABLE,
+                'reason': "the attempt's create is not confirmed by the dispatcher's records (refused, unanswered, "
+                          'unknown or not sent), so its conversation is not known to exist'}
     if not isinstance(conversation, str) or CONVERSATION_ID.fullmatch(conversation) is None:
         return {'refused': SESSION_ACCESS_UNAVAILABLE, 'reason': 'the attempt has no conversation id'}
     return {'conversationId': conversation, 'canvasPath': f'{CANVAS_CONVERSATION_PATH}{conversation}',
@@ -487,7 +492,8 @@ def attempt_view(reservation, rows, events_of, *, identity=None, read_artifact=N
             view['authority'] = {'shown': UNKNOWN, 'bound': bound, 'code': broken[0], 'detail': broken[1]}
             decided = _decide(UNKNOWN, broken[0], typed.shown(), broken[1])
     view.update(decided)
-    view['sessionDetail'] = session_detail(conversation, view['authority'])
+    view['sessionDetail'] = session_detail(conversation, view['authority'],
+                                           created=typed.state == 'confirmed' and typed.problem() is None)
     view['result'] = result_of(records)
     view['evidence'] = evidence_of(records)
     return view

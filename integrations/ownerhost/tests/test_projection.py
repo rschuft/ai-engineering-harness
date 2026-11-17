@@ -959,15 +959,56 @@ class SessionDetail(Base):
 
     def test_the_rule_without_a_store(self):
         cid = '055b27f3-903e-5eb9-8758-197c1029ade7'
-        self.assertEqual(P.session_detail(cid, {'bound': 'fixture', 'shown': 'unknown'})['canvasPath'],
+        self.assertEqual(P.session_detail(cid, {'bound': 'fixture', 'shown': 'unknown'}, created=True)['canvasPath'],
                          f'/conversations/{cid}')
         for conversation in (None, '', cid.upper(), cid + '/x', '../threads', 'http://203.0.113.9/', 42):
             with self.subTest(conversation=conversation):
-                self.assertEqual(P.session_detail(conversation, {'bound': 'fixture'}),
+                self.assertEqual(P.session_detail(conversation, {'bound': 'fixture'}, created=True),
                                  {'refused': 'SESSION_ACCESS_UNAVAILABLE', 'reason': 'the attempt has no conversation id'})
         for bound in ('live', None, 'other'):
             with self.subTest(bound=bound):
-                self.assertEqual(set(P.session_detail(cid, {'bound': bound})), {'refused', 'reason'})
+                self.assertEqual(set(P.session_detail(cid, {'bound': bound}, created=True)), {'refused', 'reason'})
+        for created in (False, None, 'yes', 1):
+            with self.subTest(created=created):
+                refused = P.session_detail(cid, {'bound': 'fixture'}, created=created)
+                self.assertEqual(refused['refused'], 'SESSION_ACCESS_UNAVAILABLE')
+                self.assertIn('not confirmed', refused['reason'])
+
+    def assertNotConfirmed(self, view):
+        detail = view['sessionDetail']
+        self.assertEqual((set(detail), detail['refused']), ({'refused', 'reason'}, 'SESSION_ACCESS_UNAVAILABLE'))
+        self.assertIn('create is not confirmed', detail['reason'])
+
+    def test_n5_a_refused_create_gives_no_session(self):
+        def refused(method, path, body=None, **kwargs):
+            if (method, path) == ('POST', '/api/conversations'):
+                return {'status': 401, 'body': {'detail': 'Unauthorized'}}
+            return self.core(method, path, body, **kwargs)
+        with self.assertRaises(di.DispatchRefused):
+            self.dispatched(TA.Seam(refused, 'fixture'))
+        view = self.view()
+        self.assertStatus(view, 'failed', 'ATTEMPT_FAILED')
+        self.assertNotConfirmed(view)
+
+    def test_n5_an_unknown_create_outcome_gives_no_session(self):
+        def no_answer(method, path, body=None, **kwargs):
+            if (method, path) == ('POST', '/api/conversations'):
+                raise OSError('no answer')
+            return self.core(method, path, body, **kwargs)
+        with self.assertRaises(OSError):
+            self.dispatched(TA.Seam(no_answer, 'fixture'))
+        view = self.view()
+        self.assertStatus(view, 'unknown', 'CREATE_OUTCOME_UNKNOWN')
+        self.assertNotConfirmed(view)
+
+    def test_n5_a_create_never_answered_gives_no_session(self):
+        held = BACKEND.FixtureCredentials()
+        held.get = raiser(Crash('the dispatcher died reading the entry'))
+        with self.assertRaises(Crash):
+            self.dispatched(credentials=held)
+        view = self.view()
+        self.assertStatus(view, 'pending', 'ATTEMPT_RESERVED')
+        self.assertNotConfirmed(view)
 
 
 class Latest(Base):

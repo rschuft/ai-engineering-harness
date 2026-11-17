@@ -327,9 +327,9 @@
        "reported": {
         "basis": "reported",
         "record": "dispatch/attempt/0ac9cc13-dd79-5522-a87e-e5802c5ee369/delivery",
-        "commit": "3f624f5c0f67f80e4d603e8f3835f3952714d22b",
+        "commit": "d1093860a4ab54214077b2e27c65a1acbfa039cd",
         "bundle": {
-         "sha256": "e08e5c991cd386385c43396b5576145713ba184c536426ad15623614e97e7ebd",
+         "sha256": "9d0c77c2770b14c031fd4f059a6923ca3cb396c1050b7f7f555ed1eda8a28b52",
          "bytes": 9369
         },
         "statement": "the commit and bundle digest RESULT printed in the container"
@@ -337,11 +337,11 @@
        "verified": {
         "basis": "verified",
         "record": "dispatch/attempt/0ac9cc13-dd79-5522-a87e-e5802c5ee369/intake",
-        "commit": "3f624f5c0f67f80e4d603e8f3835f3952714d22b",
+        "commit": "d1093860a4ab54214077b2e27c65a1acbfa039cd",
         "tree": "42f85fc535ccf731ba718d152a076d246e992037",
         "base": "f9c9c6df9086b90d858a926604e5707c9466132b",
         "bundle": {
-         "sha256": "e08e5c991cd386385c43396b5576145713ba184c536426ad15623614e97e7ebd",
+         "sha256": "9d0c77c2770b14c031fd4f059a6923ca3cb396c1050b7f7f555ed1eda8a28b52",
          "bytes": 9369
         },
         "statement": "the host computed the commit over the pulled bundle and checked its tree"
@@ -363,21 +363,21 @@
         "record": "dispatch/attempt/0ac9cc13-dd79-5522-a87e-e5802c5ee369/result",
         "format": "ai-engineering-harness/dispatch/result-receipt/v1",
         "eventSeq": 2,
-        "sha256": "7153a6553dc17fa1a2948ebc229ee2a5bd91d6ccebb5d6d6bffb4b31c08e2cb2"
+        "sha256": "667e0cd4cb827f58a7746bcb04ae77f6670ba081914225ffd780837d44a06824"
        },
        "commit": {
         "basis": "verified",
-        "reference": "git:demo-app@3f624f5c0f67f80e4d603e8f3835f3952714d22b",
-        "commit": "3f624f5c0f67f80e4d603e8f3835f3952714d22b",
+        "reference": "git:demo-app@d1093860a4ab54214077b2e27c65a1acbfa039cd",
+        "commit": "d1093860a4ab54214077b2e27c65a1acbfa039cd",
         "branch": "work/0ac9cc13-dd79-5522-a87e-e5802c5ee369"
        },
        "diff": {
         "basis": "verified",
         "from": "git:demo-app@f9c9c6df9086b90d858a926604e5707c9466132b",
-        "to": "git:demo-app@3f624f5c0f67f80e4d603e8f3835f3952714d22b",
+        "to": "git:demo-app@d1093860a4ab54214077b2e27c65a1acbfa039cd",
         "ownerReport": {
-         "jsonSha256": "27f84be1b2c977fe13010f2187124dc464fb1d1e8f2d0758dd523b9016296cda",
-         "markdownSha256": "7da941aee8370b1cf54c2786b0f89c85b429d4af0123d04eb903d228afcaae9a"
+         "jsonSha256": "0f65cdf0f1caaf271e57790a7090ca12b422bebd362bc46e8e3235f8db567a71",
+         "markdownSha256": "a9bfdc3796ef3a775c6df183392f16dad401d3912b1364149646cfe608d649dc"
         },
         "statement": "the diff from the base to the result commit; the Owner report that shows it, by digest"
        },
@@ -397,10 +397,10 @@
         "url": "http://127.0.0.1:13300/aieh-demo/aieh-d1-demo/pulls/1",
         "state": "open",
         "draft": true,
-        "bodySha256": "f97e16d66dab7224eed8a591bd586c58d5fed0f690a3d5de6be2a6152011cf16"
+        "bodySha256": "94d475becf4baf77f2c79238285b2ce06516839a4a2a86f592e29a81b8989138"
        },
        "bundle": {
-        "sha256": "e08e5c991cd386385c43396b5576145713ba184c536426ad15623614e97e7ebd",
+        "sha256": "9d0c77c2770b14c031fd4f059a6923ca3cb396c1050b7f7f555ed1eda8a28b52",
         "bytes": 9369
        },
        "lineage": {

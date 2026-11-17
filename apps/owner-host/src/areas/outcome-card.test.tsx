@@ -430,7 +430,7 @@ describe("evidence: observed apart from asserted, by reference (U-04's proof; R6
   });
 
   it("keeps the session detail disabled, with the projection's reason, when the action is refused", async () => {
-    for (const name of ["published-live", "authority-unbound"]) {
+    for (const name of ["published-live", "authority-unbound", "failed-refused-create", "unknown-create-outcome"]) {
       const a = answer(name);
       const card = await show(name);
       const [attempt] = attempts(card);

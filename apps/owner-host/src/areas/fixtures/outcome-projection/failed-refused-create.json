@@ -314,9 +314,8 @@
       "detail": "the attempt failed (CREATE_REFUSED)",
       "cause": "CREATE_REFUSED",
       "sessionDetail": {
-       "conversationId": "bea5f866-3f2d-589f-a557-4c0941c0da7e",
-       "canvasPath": "/conversations/bea5f866-3f2d-589f-a557-4c0941c0da7e",
-       "authority": "fixture"
+       "refused": "SESSION_ACCESS_UNAVAILABLE",
+       "reason": "the attempt's create is not confirmed by the dispatcher's records (refused, unanswered, unknown or not sent), so its conversation is not known to exist"
       },
       "result": {
        "reported": null,
