@@ -694,6 +694,7 @@
       "read": true,
       "readBy": [
         "attempt_end._answer",
+        "attempt_end.prior_runtime",
         "reconcile._lookup",
         "reconcile.verdict_of",
         "restart_recovery._lookup_reserved"
@@ -710,6 +711,7 @@
       "read": true,
       "readBy": [
         "attempt_end.observe",
+        "attempt_end.prior_runtime",
         "attempt_run.inspect_conversation",
         "reconcile.verdict_of"
       ],
@@ -761,6 +763,7 @@
       "determinedBy": "a conversation the server does not hold",
       "read": true,
       "readBy": [
+        "attempt_end.prior_runtime",
         "reconcile._lookup",
         "reconcile.verdict_of",
         "restart_recovery._lookup_reserved"

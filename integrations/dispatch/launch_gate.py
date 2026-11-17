@@ -203,18 +203,25 @@ def launch_record(integration_store, attempt_id: str) -> dict | None:
 
 
 def _write_receipt(integration_store, key: str, intent: dict, actor: str) -> bool:
-    """The receipt written and confirmed (or found, the same); False when KEY holds another one."""
+    """The receipt written and confirmed (or found, the same) by the attempt run's own receipt writer
+    (``attempt_run._receipt``, the delivery, pull and intake receipts' writer, a listed write-ahead site of the
+    dispatcher lock's census); one an interruption left ``dispatched`` is confirmed. False when KEY holds another
+    one."""
     try:
-        held = integration_store.reserve(key, intent, actor=actor).reservation
-    except store.ConflictingReservation:
+        _attempt_run()._receipt(integration_store, key, intent, actor)
+    except DispatchRefused as refusal:
+        if refusal.code != 'RESULT_RECEIPT_CONFLICT':
+            raise
         return False
-    if held.state == 'reserved':
-        di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'inspect', None)
-        held = integration_store.get(key)
+    held = integration_store.get(key)
     if held.state == 'dispatched':
-        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, intent['verdict'], None)
+        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, 'record', None)
         held = integration_store.get(key)
     return held.state == 'confirmed'
+
+
+def _attempt_run():
+    return _load('attempt_run', HERE / 'attempt_run.py')
 
 
 def gate(integration_store, operation_key: str, *, inspect_source: Callable[[str], Mapping], source: str, actor: str,

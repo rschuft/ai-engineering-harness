@@ -609,8 +609,14 @@ required (`PRIOR_AUTH_CAUSE_UNRECORDED`: never an automatic retry), and where it
 newest native-token entry receipt (the Owner's entry command's `aieh-credential-act/1` receipt, E-05.9, OA-31 (e))
 must be newer than the refused attempt's dispatch and hold another token (`PRIOR_AUTH_TOKEN_NOT_REPLACED`); the
 token then read from the entry must be that receipt's (`NATIVE_TOKEN_NOT_REPLACED`, the reserved attempt failed
-and nothing sent). An earlier attempt that failed before or at its create created no conversation and needs no
-end; an `unknown` one is the store's live claim. Every refusal but the last comes before the reservation, reads no
+and nothing sent). Then, for every profile, E-01.5's execution non-overlap
+([below](#the-launch-gate-and-execution-non-overlap-e-015)): an earlier attempt whose grant is not revoked
+(`PRIOR_GRANT_UNREVOKED`), or whose conversation the Agent Server reports executing or cannot be observed
+(`PRIOR_CONVERSATION_RUNNING`, `PRIOR_CONVERSATION_UNOBSERVED`), refuses the next ordinal. An earlier attempt that
+**sent no create** (no `dispatched` event, or `send_create` refused before its POST: `create_sent` false) created no
+conversation and needs no end; one that failed **after** sending its create may have created one (a create the
+server was still processing when E-01.4.1's lookup answered 404), so it is asked; an `unknown` one is the store's
+live claim. Every refusal but the last comes before the reservation, reads no
 credential entry and sends no create. The new attempt is the next ordinal (E-01.1.1), so its conversation id is
 new: the token is never delivered again to an existing conversation or attempt, and an ended attempt is never
 dispatched again (its record is not `reserved`).
@@ -779,7 +785,8 @@ built offline. The create body is still the F-04.2 disposable template
 (finding F3, carried to A-01.x and E-03.1). The reconciliation of a lost acknowledgement is
 E-01.4.1 ([below](#reconciling-a-lost-create-acknowledgement-e-0141)); the lost response and the
 dispatcher restart at each step are exercised by E-01.4.2.
-The independent `docker inspect` of the created runtime is E-01.5. Nothing here has run against a
+The independent `docker inspect` of the created runtime is E-01.5's launch gate
+([below](#the-launch-gate-and-execution-non-overlap-e-015)). Nothing here has run against a
 live Agent Server: **not yet verified** live.
 
 ## Reconciling a lost create acknowledgement (E-01.4.1)
@@ -1001,6 +1008,67 @@ pushed and the engineering manager's readings of 2026-11-16:
 - C', D', J': the store's sweep moves the `dispatched` row in place of `recover`'s own move (5b), and the epoch is
   closed by `close_restore_epoch` once `recover` has run.
 - Z: run in two states, C's (no create received) and D's (one).
+
+## The launch gate and execution non-overlap (E-01.5)
+
+Plan leaf E-01.5 (slice 7 of the [I1 integration design](../../evidence/I1-integration-design-2026-11-16.md), R11;
+the [restart-recovery design](../../evidence/I1-restart-recovery-design-2026-11-16.md), R22 point 1), offline.
+
+**The launch gate** ([`launch_gate.py`](launch_gate.py)). `gate(store, operation_key, inspect_source=, source=,
+actor=)` is the `inspect` callable `run_attempt` takes (the attempt run's step 1, before SEED and before the message;
+`run_attempt` is unchanged, and the gate is never an observer at `after-message`). For the attempt's conversation it
+
+1. reads the admitted values from the reserved record only: the caps of the policy inputs as Docker's `Memory`,
+   `NanoCpus` and `PidsLimit` (`4g`, 2.0 and 512 on the checked-in profile), the declared mounts expanded with the
+   conversation's hex by the admission's own rule (`_binds_for`), and the image ID the approved profile pins
+   (`provider.provision_lock`, read by its pinned sha256: `image.image_id`);
+2. obtains the container's docker inspect from the injected source, independently of the Agent Server's answers;
+3. compares five fields: `caps`, `image`, `mounts` (exactly the declared binds, as `Type`, `Source`, `Destination`,
+   `RW`), `network-mode` and `extra-hosts`, the last two with the recorded limit values of
+   `fd-container-network-deviations` (`security/inventory.json`; F-04.2 section 7): `NetworkMode` `bridge` and
+   `ExtraHosts` `["host.docker.internal:host-gateway"]`. Any other value (another type included: `2.0` is not `2`),
+   or an inspect it cannot obtain (none, no inspect object, the source refused or raised), is **not launched**;
+4. writes the launch receipt `dispatch/attempt/<attempt id>/launch` (`attempt-launch/v1`: the verdict `launched` or
+   `not-launched`, each compared field with its basis, admitted or limit, its expected and its observed value, the
+   document's sha256 and its source; an observed value over 1024 characters is kept as its digest) through the
+   attempt run's receipt writer (`attempt_run._receipt`), confirmed before it answers; a second gate over the same
+   attempt finds its receipt, and one with another observation is not launched (the first stands);
+5. answers `[]`, or one problem per failed field, and `run_attempt` then ends the attempt (`INSPECTION_FAILED`, a
+   `containment-stop` record): no SEED and no message.
+
+The receipt is the gate's verdict over the container; an attempt whose API half of the inspection fails
+(`inspect_conversation`) is ended all the same, and its end record is its state. Offline the inspect source is the
+fixture catalog's `container-inspect` entry (`AgentServerCore.container_inspect`,
+[`../agentfixture/README.md`](../agentfixture/README.md#the-container-inspect-e-015)), each field cited to F-04.2 or
+to the D1 run record's steps (3) and (5b); live it is the guest's root facts, E-01.6's. No composition root wires
+the gate yet (slice 11).
+
+**Execution non-overlap** (`attempt_end.admit_new_attempt`, for every profile, before the next ordinal is reserved;
+after E-05.8's rule above). Over every earlier ordinal of the work item, design revision and stage that is
+`confirmed` or `failed` (a live one is the store's claim rule's):
+
+| Rule | Refused | Code |
+|---|---|---|
+| (c) its grant journal does not show its grant revoked (`grant_unrevoked`: a journal confirmed, dispatched or reserved with no confirmed revocation, or any revocation unsettled; a refused issue is no grant), read from the store only | before any call | `PRIOR_GRANT_UNREVOKED` |
+| (a) its history holds a `dispatched` event, whatever its final state, and it did not record its create as never sent: `GET` the conversation by its reserved id, then its runtime (`prior_runtime`); a conversation the server holds with its runtime not stopped is executing | executing | `PRIOR_CONVERSATION_RUNNING` |
+| (a) the same reads with no answer, or an answer that is not the conversation's or the runtime's | unknown execution state | `PRIOR_CONVERSATION_UNOBSERVED` |
+
+A 404 for the conversation is a conversation the server does not hold. An ended attempt whose runtime E-05.8's rule
+just read is not asked again. "Executing" is read from the runtime (a container serves the conversation), never from
+the conversation's persisted execution status, which a stopped runtime keeps.
+
+**The 404 race** (R22 point 1, now load-bearing). At the pinned source the create handler provisions, starts the
+container and forwards the create before it refreshes the outer catalog (openhands-agent-server 1.60.1,
+`docker_runtime/routers.py:173`, `:184`, `:187`, `:218`), and a lookup answers 404 while the catalog lacks the
+conversation (`conversation_router.py:229-231`). So E-01.4.1's lookup can answer 404, and the attempt be `failed`,
+for a create that completes afterwards. The non-overlap rule asks again at every admission, whatever the store says.
+A residual stays: an admission whose own lookup falls inside that window sees 404 and admits; the next attempt's
+inspection (the server's count) and its launch gate then stop it.
+
+**Delegated decisions** (dispatch 18): the refusal code `PRIOR_GRANT_UNREVOKED`; the launch receipt's key and format;
+an earlier attempt that recorded `create_sent` false is not asked (it provably sent no create: E-01.3.1's
+`test_a_failed_precondition_refuses_the_create` pins that only `/server_info` is called there); the runtime, not the
+execution status, as "executing".
 
 ## The live transport (E-01.3.3)
 
@@ -1895,6 +1963,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `CONVERSATION_STILL_RUNNING`, `ATTEMPT_NOT_INTERRUPTED`, `ATTEMPT_END_CONFLICT` | the conversation runs and the trigger is `conversation-ended`; it finished with no security stop (the result path's); an end resumed with another trigger or records |
 | `CONVERSATION_NOT_FOUND`, `RUNTIME_NOT_STOPPED`, `CONVERSATION_UNOBSERVED` | the server does not know the conversation (the end then records it absent and unclassified); the runtime was not stopped or not observed `missing`; the status or events could not be read whole |
 | `PRIOR_ATTEMPT_NOT_ENDED`, `PRIOR_ATTEMPT_FINISHED`, `PRIOR_CONVERSATION_RUNNING`, `PRIOR_CONVERSATION_UNOBSERVED` | a new attempt: an earlier native conversation has no end record (or finished: the result path's), or its runtime is not observed stopped now |
+| `PRIOR_GRANT_UNREVOKED` | E-01.5: an earlier attempt of the triple holds an inference grant its grant journal does not show revoked; also `PRIOR_CONVERSATION_RUNNING` and `PRIOR_CONVERSATION_UNOBSERVED` for any earlier attempt that sent its create, whatever its state |
 | `PRIOR_ATTEMPT_STOP_UNRESOLVED` | an earlier attempt of the work item has a recorded security stop of the dispatcher's (`attempt_end.record_stop`, D1 slice C's delta check) and its end is not a security stop (none yet, or an interruption's written before the stop was seen): no new attempt until the engineering manager escalates it (`record-end-cause security-stop`) |
 | `PRIOR_END_SECURITY_STOP`, `PRIOR_END_UNCLASSIFIED` | an attempt of the work item (any design revision or stage) ended non-retryable or was escalated to a security stop (the leaf's security stop); or an earlier one ended unclassified and the engineering manager has not classified it |
 | `PRIOR_AUTH_CAUSE_UNRECORDED`, `PRIOR_AUTH_TOKEN_NOT_REPLACED`, `NATIVE_TOKEN_NOT_REPLACED` | after an authentication refusal: no cause record; the provider refused the token and no newer entry receipt holds another; the token read is a refused one or not the receipt's |
@@ -2174,6 +2243,7 @@ answers). The three modules keep their 161 test ids, with no assertion changed.
 | `Citations` (unit) | `/server_info`'s `recorded` is F-04.1c section 3's JSON block exactly, and its served `body` that block less exactly the rows not served (the two timeouts); the create's values are F-04.2 section 4.2's block and its observed request the profile's fixture; each state value (`idle`, `finished`, `available`, `missing`, the counts, 204, the empty page, `MessageEvent`) is found in the section it cites; the server configuration F-04.1c wrote and the profile's now differ only by `enable_browser` false, F-04.1c's image being browser-less |
 | `ByState` (unit) | the core's answers by route and state: labelled, only listed fields served; a create serves the id and the clock-valued time, and the other fields only for F-04.2's request (`persistence_dir` only for its own id); any body whose `conversation_id` is a UUID not held is answered 201, the rest unchecked; the message finishes the conversation at that one call; a held id, a second message, a second stop, a count of 2, a query, an unknown route or conversation, a delivery are refused with the label; the call log holds what the core received and nothing a dropped request would have sent |
 | `Seed` | SEED's answer by running the harness's own `SEED_SCRIPT` over the request's payload: its success line and exit code, the files written in the core's scratch; a second SEED refused; another script refused without running; a script exit other than 0 refused with the label |
+| `ContainerInspect` (unit) | E-01.5: the `container-inspect` entry's values each in its cited section (F-04.2 4.3 and 7, D1 5 (3), (5b) and 4), its determining inputs the profile D1 ran's (the lock, the configured caps, the templates' `container`, the declared binds); the core answers it for a held conversation with its runtime `available` only, its mounts by `_binds_for`, and refuses it for another profile |
 | `Recording` (unit) | the read record notes each key read by catalog answer and path, present or not, through a deep copy, with its reader; `dict()`, `json.dumps`, `reversed` and a knob's write keep the answer; each operation class that reads a whole answer or changes it (equality, text, union, removal and update, `copy()`, an unbound `dict` method) is an opaque read and raises; not seen: an unbound `dict` method on an absent key; with no recorder the answers are plain dicts |
 
 [`tests/test_restart_matrix.py`](tests/test_restart_matrix.py): the restart matrix
@@ -2191,6 +2261,31 @@ the dispatch functions recorded reading it; reads of the core's refusals are lis
 (dispatch 14) is a violation, `OPAQUE_READ`, on any answer. The core answers in 16 of the 29 modules run. `Judge`
 (unit) is the falsifier set of the judgement: a read of an unmarked, clock-valued, not served, unlisted or absent
 field is a violation, and a container is not; an opaque read of each operation class is a named violation.
+
+### The launch gate and non-overlap tests (E-01.5)
+
+[`tests/test_launch_gate.py`](tests/test_launch_gate.py), on a native D1 attempt on the checked-in declaration whose
+create the core answers, its inspect source the core's `container-inspect` entry:
+
+| Class | What it shows |
+|---|---|
+| `Passes` | the gate passes on the cited document and its receipt records the five fields, the document's digest and its source; the admitted values are the reserved record's and the pinned lock's (a lock of other bytes is `PROFILE_ARTIFACT_DRIFTED`, not launched); a repeated gate finds its receipt, another observation is not launched |
+| `NotLaunched` | an altered copy (`Altered`, a test knob) of each compared field is not launched, the failed field named: caps (each of the three, a float, none), image, mounts (a source elsewhere, another conversation's, the engine socket added, read-only, a volume, one missing), NetworkMode (`host`, `none`, another container's), ExtraHosts (none, empty, one more); an inspect that cannot be obtained (raised, no object, no answer, refused) and a stopped runtime's (no container) are not launched; an inspect asked for another conversation is never made |
+| `Limits` (unit) | the limit values are `fd-container-network-deviations`' and F-04.2 section 7's; `compare` takes any other value or type as unequal |
+| `Wired` | as `run_attempt`'s `inspect`: a launched attempt goes on to SEED and its message, the inspect before both; an unauthorized workspace path, and a local-runtime fallback (no container to inspect), are ended `INSPECTION_FAILED` with no SEED and no message, never launched |
+
+[`tests/test_non_overlap.py`](tests/test_non_overlap.py):
+
+| Class | What it shows |
+|---|---|
+| `NativeOrdinals` | rulings (a) and (b): ordinal 1's create in flight (`InFlight`, a test knob derived from the pinned handler's order) when the dispatcher's wait ended, E-01.4.1's lookup answers 404 and the attempt is `failed`; once the create completes its conversation appears, and ordinal 2 is refused `PRIOR_CONVERSATION_RUNNING` with nothing reserved, no create and no credential read; after its runtime stops, ordinal 2 is dispatched. A conversation that never appeared does not block; a lookup or runtime read that never arrives (a transport event) is `PRIOR_CONVERSATION_UNOBSERVED`; an attempt that sent no create is never asked |
+| `BrokeredOrdinals` | ruling (c) and every profile: a brokered ordinal 1 (a real broker in process) refuses ordinal 2 `PRIOR_GRANT_UNREVOKED` with no issue and no call; after `end_attempt` revokes it, `PRIOR_CONVERSATION_RUNNING`; after its runtime stops, ordinal 2 is dispatched |
+| `GrantJournal` (unit) | `grant_unrevoked` in each journal and revocation state `end_attempt` reads |
+| `Readme` (unit) | this README states which earlier attempts are asked |
+
+`test_conversation_create.FakeAgentServer` answers the two reads the rule makes of an earlier attempt's conversation
+(`GET` it, and its runtime) as the core does, by its state (a fresh fake holds no earlier conversation: 404); the
+three fake modules keep their test ids and assertions.
 
 [`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
 

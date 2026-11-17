@@ -31,6 +31,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import unittest
 from unittest import mock
@@ -575,7 +576,9 @@ class FakeAgentServer(AC.AgentServerCore):
     every call is recorded (the core's call log). Its test knobs, answers no cited run gave, stay here: INFO (another
     server_info answer), INFO_ERROR and CREATE_ERROR (no answer), CREATE (another create answer), a create of a
     conversation the core already holds answered 201 again, and the persistence_dir derived from the request's id
-    (so that the store's negative assertions have something to refuse). Any other call is unexpected."""
+    (so that the store's negative assertions have something to refuse). The two reads E-01.5's non-overlap rule makes
+    of an earlier attempt's conversation (``GET`` the conversation, and its runtime) are the core's own answers, by
+    the conversation's state. Any other call is unexpected."""
 
     def __init__(self, info=None, info_error=None, create=None, create_error=None):
         super().__init__()
@@ -601,7 +604,12 @@ class FakeAgentServer(AC.AgentServerCore):
                 self.conversations[body['conversation_id']] = held
             answer['body']['persistence_dir'] = '/var/openhands/conversations/' + body['conversation_id'].replace('-', '')
             return answer
+        if method == 'GET' and NON_OVERLAP_READ.fullmatch(path):      # E-01.5: the core's own answers
+            return super().answer(method, path, body)
         raise AssertionError(f'unexpected call {method} {path}')
+
+
+NON_OVERLAP_READ = re.compile(r'/api/conversations/[0-9a-f-]{36}(/runtime)?')
 
 
 class DispatchTests(adm.AdmissionFixture):

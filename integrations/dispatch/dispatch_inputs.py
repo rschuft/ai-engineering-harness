@@ -449,6 +449,11 @@ REFUSALS = {
                               'conversation and has no end record: its result is the result path\'s (E-05.4), and '
                               'no new attempt is admitted on it here',
     'END_CAUSE_CONFLICT': 'the end-cause or escalation receipt of the attempt holds another intent',
+    # E-01.5: execution non-overlap (attempt_end.admit_new_attempt), with PRIOR_CONVERSATION_RUNNING and
+    # PRIOR_CONVERSATION_UNOBSERVED
+    'PRIOR_GRANT_UNREVOKED': 'an earlier attempt on the work item, design revision and stage holds an inference grant '
+                             'that its grant journal does not show revoked (none confirmed, or a revocation '
+                             'unsettled): no new attempt until end_attempt revokes it',
     # E-01.4.2 slice 5a (R17, draft decision 0027): the dispatcher lock, before anything is reserved or sent
     'DISPATCHER_BUSY': 'another dispatcher act holds the integration store\'s dispatcher lock: nothing was reserved '
                        'or sent',

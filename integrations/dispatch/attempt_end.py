@@ -45,6 +45,18 @@ receipt newer than that attempt's dispatch whose token is another (PRIOR_AUTH_TO
 read must be that receipt's (NATIVE_TOKEN_NOT_REPLACED). The new attempt is the next ordinal, so it has a new
 conversation id: the token is never sent to an existing conversation.
 
+Then, for every profile (E-01.5, execution non-overlap; the restart-recovery design R22 point 1), over every earlier
+ordinal of the triple that is no longer live (``confirmed`` or ``failed``; a live one is the store's claim rule's):
+an inference grant its grant journal shows not revoked refuses (PRIOR_GRANT_UNREVOKED, no call: ``end_attempt``
+revokes it); and every one whose history holds a ``dispatched`` event, whatever its final state, is asked of the
+Agent Server, by its reserved conversation id, now: a conversation the server holds with its runtime not stopped is
+executing (PRIOR_CONVERSATION_RUNNING), an answer that is not one of the runtime's is an unknown execution state
+(PRIOR_CONVERSATION_UNOBSERVED), and a 404 is a conversation the server does not hold. A failed attempt is asked too:
+a create the server was still processing when E-01.4.1's lookup answered 404 left it ``failed`` while its
+conversation may appear afterwards (the pinned handler refreshes its catalog only after it has forwarded the create).
+Only an earlier attempt that provably sent no create is never asked: its history holds no ``dispatched`` event, or
+its move from ``dispatched`` to ``failed`` records ``create_sent`` false (``send_create`` refused before its POST).
+
 ``record_auth_cause(store, operation_key, cause=, actor=)`` is the engineering manager's cause record, the smallest
 durable form: one integration-store receipt ``dispatch/attempt/<attempt id>/auth-cause`` (``auth-cause/v1``),
 written by the command ``record-auth-cause`` of this module. ``record_end_cause`` (command ``record-end-cause``) is
@@ -765,10 +777,111 @@ def _finished(client, conversation_id: str) -> bool:
     return status == 200 and isinstance(body, Mapping) and body.get('execution_status') == 'finished'
 
 
+def grant_unrevoked(integration_store, attempt_id: str) -> str | None:
+    """Whether the attempt ATTEMPT_ID holds an inference grant that is not revoked, by its grant journal and its
+    revocation receipts (the store only, ``end_attempt``'s own reading): None when it has no grant journal, when the
+    broker refused the issue (journal ``failed``, nothing issued) and no revocation is unsettled, or when a revocation
+    is confirmed, none is unsettled and the journal is settled; otherwise the reason (``revocation-unsettled``, or the
+    journal's state)."""
+    key = di.GRANT_JOURNAL_KEY.format(attempt_id=attempt_id)
+    journal = integration_store.get(key)
+    if journal is None:
+        return None
+    receipts = di._revocation_receipts(integration_store, attempt_id)
+    if any(held.state in ('reserved', 'dispatched') for _, held in receipts):
+        return 'revocation-unsettled'
+    detail = di._last_detail(integration_store, key)
+    if journal.state == 'failed' and isinstance(detail, dict) and detail.get('issued') is False:
+        return None
+    if any(held.state == 'confirmed' for _, held in receipts) and journal.state not in ('reserved', 'dispatched'):
+        return None
+    return journal.state
+
+
+def _create_may_have_been_sent(integration_store, operation_key: str) -> bool:
+    """Whether the attempt's history holds a ``dispatched`` event and does not record its create as never sent: a
+    move from ``dispatched`` to ``failed`` whose detail says ``create_sent`` false is ``_dispatch``'s record of a
+    refusal by ``send_create`` before its POST (its checks, ``/server_info`` and the preconditions, and the route
+    allowlist all come before the transport sends the create), so that attempt created no conversation."""
+    events = integration_store.events(operation_key)
+    if not any(event.to_state == 'dispatched' for event in events):
+        return False
+    for event in events:
+        if (event.from_state, event.to_state) == ('dispatched', 'failed'):
+            detail = _loads(event.detail_json)
+            return not (isinstance(detail, dict) and detail.get('create_sent') is False)
+    return True
+
+
+def prior_runtime(client, conversation_id: str) -> str | None:
+    """An earlier attempt's conversation as the Agent Server reports it now: None when the server does not hold it
+    (``GET`` the conversation answers 404), else its runtime's status (``GET .../runtime``; a container serves it unless
+    that is ``missing``, or 404). Any other answer, or none, is PRIOR_CONVERSATION_UNOBSERVED: its execution state is
+    unknown. The conversation's own execution status is not taken for its runtime's (a stopped runtime keeps its
+    persisted status)."""
+    try:
+        answer = client.call('GET', CONVERSATION_ROUTE, params={'conversation_id': conversation_id})
+    except DispatchRefused:
+        raise
+    except Exception as exc:  # no answer: nothing is inferred from it
+        raise _refused('PRIOR_CONVERSATION_UNOBSERVED', f'the earlier conversation: no answer ({type(exc).__name__})') \
+            from None
+    status = answer.get('status') if isinstance(answer, Mapping) else None
+    if type(status) is not int:
+        raise _refused('PRIOR_CONVERSATION_UNOBSERVED', 'the earlier conversation: not an HTTP answer')
+    if status == 404:          # the status only: a 404 has no body the dispatcher reads
+        return None
+    body = answer.get('body')
+    if status != 200 or not isinstance(body, Mapping) or body.get('id') != conversation_id:
+        raise _refused('PRIOR_CONVERSATION_UNOBSERVED', f'the earlier conversation answered {status} without its id',
+                       status=status)
+    return runtime_status(client, conversation_id, 'PRIOR_CONVERSATION_UNOBSERVED')
+
+
+def _no_overlap(integration_store, identity, client_for, observed: set) -> None:
+    """E-01.5's execution non-overlap over the earlier ordinals of IDENTITY's triple that are no longer live (the
+    module docstring): grants first (the store only), then the Agent Server for each one that was dispatched and is
+    not among OBSERVED (its runtime read already in this admission). CLIENT_FOR() makes the checked client."""
+    earlier = []
+    for claim in integration_store.claims(identity.work_id, identity.design_revision, identity.stage):
+        held = integration_store.get(claim.operation_key)
+        if claim.identity.ordinal < identity.ordinal and held is not None and held.state in ('confirmed', 'failed'):
+            earlier.append(claim)
+    for claim in earlier:
+        reason = grant_unrevoked(integration_store, claim.attempt_id)
+        if reason is not None:
+            raise _refused('PRIOR_GRANT_UNREVOKED', f'attempt {claim.attempt_id} (ordinal {claim.identity.ordinal}) '
+                           f'holds an inference grant that is not revoked ({reason}): end_attempt revokes it first',
+                           attempt_id=claim.attempt_id, reason=reason)
+    for claim in earlier:
+        if claim.operation_key in observed or not _create_may_have_been_sent(integration_store, claim.operation_key):
+            continue
+        runtime = prior_runtime(client_for(), store.conversation_id_for(claim.operation_key))
+        if runtime not in (None, STOPPED):
+            raise _refused('PRIOR_CONVERSATION_RUNNING', f'the conversation of attempt {claim.attempt_id} (ordinal '
+                           f'{claim.identity.ordinal}, {integration_store.get(claim.operation_key).state}) is '
+                           f'{runtime!r} at the Agent Server: it is executing', attempt_id=claim.attempt_id,
+                           runtime_status=runtime)
+
+
 def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) -> Admission:
     """The admission rule of a new attempt for the same task (the module docstring), before the reservation. An
-    attempt with no earlier native conversation on its triple is admitted with no call."""
+    attempt with no earlier attempt on its triple that was dispatched is admitted with no call."""
     identity = resolved.attempt_identity()
+    clients = []
+
+    def client_for():
+        if not clients:
+            clients.append(_client(resolved, transport)(read_artifact))
+        return clients[0]
+    admission, observed = _admit_after_ends(integration_store, identity, client_for)
+    _no_overlap(integration_store, identity, client_for, observed)
+    return admission
+
+
+def _admit_after_ends(integration_store, identity, client_for) -> tuple:
+    """E-05.8's rule (the module docstring's first paragraph): (the Admission, the operation keys whose runtime it
+    observed stopped)."""
     for record in work_item_ends(integration_store, identity.work_id):     # S6: the whole work item
         if effective_classification(integration_store, record) == NON_RETRYABLE:
             raise _refused('PRIOR_END_SECURITY_STOP', f'attempt {record.get("attemptId")} of work item '
@@ -791,13 +904,12 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
             continue   # not a native D1 conversation: another stage's or profile's rule
         prior.append(claim)
     if not prior:
-        return Admission()
-    ended, client = [], None
+        return Admission(), set()
+    ended = []
     for claim in prior:
         record = end_record(integration_store, claim.attempt_id)
         if record is None:
-            client = client or _client(resolved, transport)(read_artifact)
-            if _finished(client, store.conversation_id_for(claim.operation_key)):
+            if _finished(client_for(), store.conversation_id_for(claim.operation_key)):
                 raise _refused('PRIOR_ATTEMPT_FINISHED', f'attempt {claim.attempt_id} (ordinal '
                                f'{claim.identity.ordinal}) finished its conversation: its result is the result path\'s '
                                '(E-05.4), and no new attempt is admitted on it here', attempt_id=claim.attempt_id)
@@ -817,9 +929,7 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
                            'and the engineering manager has not classified it (record-end-cause)',
                            attempt_id=claim.attempt_id)
     for claim, record in ended:
-        if client is None:
-            client = _client(resolved, transport)(read_artifact)
-        observed = runtime_status(client, record['conversationId'], 'PRIOR_CONVERSATION_UNOBSERVED')
+        observed = runtime_status(client_for(), record['conversationId'], 'PRIOR_CONVERSATION_UNOBSERVED')
         if observed not in (None, STOPPED):
             raise _refused('PRIOR_CONVERSATION_RUNNING', f'the conversation of attempt {claim.attempt_id} is '
                            f'{observed!r}', attempt_id=claim.attempt_id, runtime_status=observed)
@@ -835,14 +945,16 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
             refused.append(cause.get('refusedFingerprint'))
             dispatched = _event_id(integration_store, claim.operation_key, 'dispatched')
             since = dispatched if since is None else max(since, dispatched)
+    observed_keys = {c.operation_key for c, _ in ended}
     if not refused:
-        return Admission(prior=[c.operation_key for c, _ in ended])
+        return Admission(prior=[c.operation_key for c, _ in ended]), observed_keys
     receipts = entry_receipts(integration_store)
     newest = receipts[-1] if receipts else None
     if newest is None or newest[0] <= since or newest[1] in refused:
         raise _refused('PRIOR_AUTH_TOKEN_NOT_REPLACED', 'the provider refused the native token and no newer entry '
                        'receipt holds another token', refused=sorted(f for f in refused if f))
-    return Admission(refused=tuple(refused), expected=newest[1], prior=[c.operation_key for c, _ in ended])
+    return Admission(refused=tuple(refused), expected=newest[1], prior=[c.operation_key for c, _ in ended]), \
+        observed_keys
 
 
 # ---------------------------------------------------------------------------
