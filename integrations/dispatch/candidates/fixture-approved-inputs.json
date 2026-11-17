@@ -1,0 +1,42 @@
+{
+  "schema": "ai-engineering-harness/dispatch/approved-inputs/v1",
+  "version": 3,
+  "repositories": [
+    {
+      "id": "aieh-d1-demo"
+    }
+  ],
+  "designs": [
+    {
+      "repository": "aieh-d1-demo",
+      "change": "add-slugify",
+      "commit": "dd18102dccfcfeac5ea0cd11c40e3e052d11a4b3"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "fixture-d1-replay",
+      "sha256": "14675b82177ca741241001931e6d8b66d4c6b9dc39f3ff971f212140cef383b7"
+    }
+  ],
+  "catalog_pins": [
+    {
+      "id": "fixture-d1-implement",
+      "repository": "ai-engineering-harness",
+      "commit": "a7a1153e21b8bf8ff086271bc3c90f5f0ba6540f",
+      "manifest_sha256": "beb560a10bf2fa3b5bcf6adbc17ba34d33a17c2995cffb33f1ea9d54ca07e990"
+    }
+  ],
+  "bindings": [
+    {
+      "repository": "aieh-d1-demo",
+      "stage": "implement",
+      "profiles": [
+        "fixture-d1-replay"
+      ],
+      "catalog_pins": [
+        "fixture-d1-implement"
+      ]
+    }
+  ]
+}

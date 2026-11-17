@@ -15,15 +15,31 @@ core's answer in process has it. It can reach only a fixture:
 - it declares ``authority = 'fixture'`` (decision 0026 point 2; the equality the dispatch path enforces is E-01.8's).
 
 No answer (a refused connection, a withheld response at the ceiling) raises ``FixtureTransportError``
-``NO_ANSWER``: to the dispatch path that is no answer, as the live transport's ``TransportError`` is. A call that asks
-for the exchange delivery (``deliver=``) is refused before anything is sent (``FIXTURE_DELIVERY_UNAVAILABLE``): the
-delivery is E-01.8's seam. ``calls`` records each call's method, path, status and the answer's catalog name, never a
-body. Standard library only; the served fixture's process never loads this module.
+``NO_ANSWER``: to the dispatch path that is no answer, as the live transport's ``TransportError`` is. ``calls``
+records each call's method, path, status and the answer's catalog name, never a body.
+
+**The exchange delivery** (E-01.8's seam; the I1 integration design, R13; the engineering manager's rulings 3 and 5
+of E-01.8). Given an exchange directory (``exchange=``) and the replayed execution profile's exchange bounds
+(``bounds=``: its ``exchange.pull`` ``name_pattern`` and ``max_bytes``), a call that asks for the delivery
+(``deliver={"part", "name"}``, as ``AgentServerClient`` passes a built command's) is sent as any other, and its answer
+then goes through the API probe's own delivery rule, ``deliver(spec, entry)`` of ``tools/guest.py``'s ``API_PROBE``,
+read from that file's source as data (``ast``) and never copied (``pinned_delivery``): the framed part of the answer's
+``stdout`` checked against its stated sha256 and size, written exclusively into the exchange directory under the name,
+and replaced in the answer by one ``AIEH-EXCHANGE-DELIVERED`` line; the answer carries ``delivered`` ``{name, sha256,
+size}`` or ``{error}``, as the live transport's does. The bounds are ``exchange_delivery``'s: the smaller of
+``max_bytes`` and ``tools/guest.py``'s ``EXCHANGE_DELIVERY_MAX_BYTES``. Nothing is invented: the part is the fixture's
+labelled RESULT answer's, and the answer keeps its label. Without an exchange directory a delivery is refused before
+anything is sent (``FIXTURE_DELIVERY_UNAVAILABLE``).
+
+Standard library only; the served fixture's process never loads this module.
 """
 from __future__ import annotations
 
+import ast
 import http.client
 import json
+import re
+from pathlib import Path
 
 LOOPBACK = '127.0.0.1'
 DISPATCHER_ACCESS = 'agentfixture-dispatcher-face-public-value'
@@ -32,6 +48,39 @@ UI_PREFIX = '/ui'
 KEY_HEADER = 'X-Session-API-Key'
 FIXTURE = 'ai-engineering-harness/agentfixture'
 TIMEOUT_S = 600            # a ceiling on one request (as the live transport's), not an expected duration
+GUEST = Path(__file__).resolve().parents[2] / 'tools' / 'guest.py'
+DELIVERY_KEYS = ('name', 'part')
+PART_RE = re.compile(r'[a-z][a-z0-9-]{0,31}')      # tools/guest.py EXCHANGE_PART_RE
+_PINNED: dict = {}
+
+
+def pinned_delivery(path: Path = GUEST):
+    """(deliver, EXCHANGE_DELIVERY_MAX_BYTES) of tools/guest.py, read as data: the ``API_PROBE`` string's own
+    ``deliver`` function with the import and the part markers it uses, compiled from that text alone, and the module's
+    bound; LookupError when the source no longer has that shape."""
+    if path in _PINNED:
+        return _PINNED[path]
+    tree = ast.parse(Path(path).read_text(encoding='utf-8'))
+    probe = limit = None
+    for node in tree.body:
+        names = [getattr(t, 'id', None) for t in node.targets] if isinstance(node, ast.Assign) else []
+        if names == ['API_PROBE']:
+            probe = ast.literal_eval(node.value)
+        elif names == ['EXCHANGE_DELIVERY_MAX_BYTES'] and isinstance(node.value, ast.BinOp) \
+                and isinstance(node.value.op, ast.LShift):
+            limit = ast.literal_eval(node.value.left) << ast.literal_eval(node.value.right)
+    if not isinstance(probe, str) or type(limit) is not int:
+        raise LookupError('tools/guest.py has no API_PROBE string or EXCHANGE_DELIVERY_MAX_BYTES bound')
+    kept = [n for n in ast.parse(probe).body if isinstance(n, ast.Import)
+            or isinstance(n, ast.FunctionDef) and n.name == 'deliver'
+            or isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Tuple)
+            and [getattr(e, 'id', None) for e in n.targets[0].elts] == ['PART_BEGIN', 'PART_END', 'PART_DONE']]
+    if [type(n).__name__ for n in kept] != ['Import', 'Assign', 'FunctionDef']:
+        raise LookupError('API_PROBE no longer holds its import, its part markers and its deliver function')
+    namespace: dict = {}
+    exec(compile(ast.Module(body=kept, type_ignores=[]), f'{path}:API_PROBE', 'exec'), namespace)
+    _PINNED[path] = (namespace['deliver'], limit)
+    return _PINNED[path]
 
 
 class FixtureTransportError(Exception):
@@ -43,16 +92,37 @@ class FixtureTransportError(Exception):
 class FixtureTransport:
     authority = 'fixture'
 
-    def __init__(self, port: int, *, access: str = DISPATCHER_ACCESS, timeout: float = TIMEOUT_S):
+    def __init__(self, port: int, *, access: str = DISPATCHER_ACCESS, timeout: float = TIMEOUT_S, exchange=None,
+                 bounds=None):
         if type(port) is not int or not 0 < port < 65536:
             raise ValueError('the fixture transport needs the fixture\'s port')
+        if (exchange is None) != (bounds is None) or bounds is not None and not (
+                isinstance(bounds, dict) and isinstance(bounds.get('name_pattern'), str)
+                and type(bounds.get('max_bytes')) is int and bounds['max_bytes'] > 0):
+            raise ValueError('an exchange delivery needs the exchange directory and the profile\'s exchange.pull '
+                             'bounds (name_pattern, max_bytes)')
         self.port, self.access, self.timeout = port, access, timeout
+        self.exchange, self.bounds = (None if exchange is None else Path(exchange)), bounds
         self.calls: list[dict] = []
 
+    def _spec(self, deliver) -> dict:
+        """The delivery's spec, as tools/guest.py exchange_delivery makes it for the API probe."""
+        if self.exchange is None:
+            raise FixtureTransportError('FIXTURE_DELIVERY_UNAVAILABLE', 'no exchange directory was given to the '
+                                        'fixture transport; nothing was sent')
+        if not isinstance(deliver, dict) or sorted(deliver) != list(DELIVERY_KEYS) \
+                or not all(isinstance(deliver[k], str) for k in DELIVERY_KEYS) \
+                or not PART_RE.fullmatch(deliver['part']):
+            raise FixtureTransportError('DELIVERY_INVALID', 'an exchange delivery is {part, name}; nothing was sent')
+        _, limit = pinned_delivery()
+        return {'field': 'stdout', 'part': deliver['part'], 'name': deliver['name'], 'dir': str(self.exchange),
+                'name_pattern': self.bounds['name_pattern'], 'max_bytes': min(self.bounds['max_bytes'], limit)}
+
     def __call__(self, method: str, path: str, body=None, **kwargs):
-        if kwargs:
-            raise FixtureTransportError('FIXTURE_DELIVERY_UNAVAILABLE', 'the exchange delivery is not the fixture '
-                                        'listener\'s (E-01.8\'s seam); nothing was sent')
+        if set(kwargs) - {'deliver'}:
+            raise FixtureTransportError('FIXTURE_DELIVERY_UNAVAILABLE', f'unknown arguments {sorted(kwargs)}; '
+                                        'nothing was sent')
+        spec = self._spec(kwargs['deliver']) if 'deliver' in kwargs else None
         if not isinstance(path, str) or not path.startswith('/') or path == UI_PREFIX \
                 or path.startswith(UI_PREFIX + '/') or path.startswith(UI_PREFIX + '?'):
             raise FixtureTransportError('FIXTURE_UI_FACE', 'the dispatcher never calls the UI face; nothing was sent')
@@ -89,4 +159,10 @@ class FixtureTransport:
         answer = {'status': status, 'fixture': fixture}
         if raw or status == 204:
             answer['body'] = parsed
+        if spec is not None:   # the API probe's own rule over the labelled answer (module docstring)
+            deliver, _ = pinned_delivery()
+            entry = {'body': answer.get('body')}
+            answer['delivered'] = deliver(spec, entry)
+            answer['body'] = entry['body']
+            self.calls[-1]['delivered'] = dict(answer['delivered'])
         return answer

@@ -2,7 +2,8 @@
 
 The one fixture catalog, the core that answers from it, and, since E-01.7, the listener that serves it with two faces
 ([below](#the-served-fixture-e-017)). The core answers in process (the dispatch suites, the restart matrix) and,
-through `server.py`, on the host loopback. No composition root uses it yet (E-01.8, slice 11).
+through `server.py`, on the host loopback. Since E-01.8 the composition root `run.py` dispatches a ready task through
+the production path on it ([below](#the-composition-e-018)).
 
 - `observations.json`: the catalog. Each answer is an entry; each field of each entry has its provenance class, its
   citation, the inputs that determine it, whether the dispatch path reads it, whether it is served, and its marks.
@@ -467,9 +468,9 @@ visible window. Its output lines are the script's own (pinned rule), the commit 
 real shell on the same inputs). The identity is an input: the script takes the name, email, date and message the
 command carries. The test output served is D1's recorded one (114 bytes, sha256 `432e7641…7754`), cited only for that
 fixed command over D1's base and changes, and only when the script's own run of the tests passed; the duration that
-run printed is not served. **The exchange delivery (`delivered`) stays E-01.8's seam** (the I1 design's R13): the
-listener serves no delivery, `transport.py` refuses a call that asks for one, and the whole "finished with a result"
-path over the listener is proven at E-01.8.
+run printed is not served. **The exchange delivery (`delivered`) is the transport's** (E-01.8; the I1 design's R13):
+the listener serves no delivery; `transport.py`, given an exchange directory, applies `tools/guest.py`'s own
+`API_PROBE` delivery rule to the labelled answer ([below](#the-composition-e-018)), and refuses a delivery without one.
 
 ### G4: the locked document, route by route
 
@@ -609,3 +610,44 @@ listener (E-01.8); every source-derived field live (U-03.2, and E-01.6 for `mess
 A composition root's use of the core and the served fixture, the exchange delivery and the fixture profile: E-01.8
 (slice 11). Agent Canvas against the UI face: U-01.2 (slice 13). **Not yet verified** live: every source-derived field
 and the non-empty events page (E-01.6; U-03.2 for the UI face).
+
+## The composition (E-01.8)
+
+`run.py` is the composition root of plan leaf E-01.8 (the I1 design's slice 11; the engineering manager's rulings of
+E-01.8): one ready task dispatched through the production resolver, admission, launch gate, attempt run, result
+intake and result path, on the fixture transport, every seam declaring the authority `fixture` (decision 0026 points 1
+and 2). `run(request, ...)` takes every seam from its caller, and in this order:
+
+0. reads the commissioning user's identity as P-01.3's capture reads it (`capture.project_config` of
+   `components.owner_host`, `capture.capture_identities(config, capture.OWNER_PRINCIPAL)`): author and committer of
+   the result commit (decision 0028). An absent or invalid identity is refused with capture's own codes before
+   anything is read, called or written; so is a missing result target (`RESULT_TARGET_UNCONFIGURED`) and a project
+   repository that is not the request's (`PROJECT_NOT_REQUESTED`);
+1. runs `recover` first (decision 0027): `DISPATCHER_BUSY`, or any held row, stops the run with that code;
+2. dispatches (`dispatch_inputs.dispatch`) on the checked-in fixture profile `fixture-d1-replay` and the fixture pin
+   `fixture-d1-implement`, the native execution kind replayed with the fixture credential provider's public-seed token
+   (R10);
+3. runs the attempt (`attempt_run.run_attempt`) with the production launch gate over the recorded inspect source as
+   its `inspect`, the fixture's exchange pull, the result journal's hook and the identity: the intake takes the
+   fixture's cited recorded result (PB-4) through `parse_result` and `intake_result`, unchanged;
+4. publishes the result (`result_path.publish_result`) to the injected Gitea target.
+
+`backend.py` holds the other seams, each declaring `fixture`: `FixtureCredentials` (the native token's entry and the
+builder bot's, values derived from public seeds, never written), `RecordedInspect` (the core's cited
+`container-inspect`), `Declared` and `Puller` (the exchange pull over `tools/guest.py`'s retained verifier).
+
+Every record the attempt causes carries the authority `fixture` (R11): the attempt's transitions, the launch receipt,
+the turn journal, the delivery, pull and intake receipts, the result journal and its receipt, the Owner report and the
+pull request body; the end and stop records when an attempt is ended. The reservation itself carries its binding (the
+pinned allowlist's digest in its policy inputs), so that no fixture attempt can be read as live.
+
+**The command** (`run.py dispatch --work-id ID --repository ID`) refuses `RESULT_TARGET_UNCONFIGURED` and composes
+nothing: the demonstration's result target (a fake Gitea, its listener, census port and matrix edge, or something
+else) is decided at U-06.1 (the engineering manager's ruling 4 of E-01.8), with the execution window.
+
+**The import census.** The production result path binds `integrations/credentials/credential_provider.py` at its own
+import (`gitea_host`'s module-level `credentials = windows.credentials`), so the composition root loads that one
+credential module, from there, and no other; no provider is constructed in a run (a construction census over
+`select_provider`, `qualify_keyring` and the provider classes), no Windows credential library is loaded and no keyring
+module imported (an audit hook), so the native token's entry is never reached. `tests/test_dispatch.py` holds the
+proof (its run needs `AIEH_LOCKED_OPENAPI`).

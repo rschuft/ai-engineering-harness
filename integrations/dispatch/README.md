@@ -1828,6 +1828,35 @@ route's output and the argument limit; the guest it created destroyed in `finall
 
 **Not yet verified** live: all of it.
 
+## The attempt's authority (E-01.8)
+
+An attempt's authority is `live` or `fixture` (the I1 integration design, R8 and R11; decision 0026 points 1, 2 and
+4; the engineering manager's rulings A and B of E-01.8). Its profile's pinned route allowlist declares it: an optional
+top-level `transport`, exactly `{"authority": "fixture", "kind": "loopback-fixture"}`; absent is `live`. The profile
+repeats it at `provisioning.agent_server.transport`, and `admit` requires the two to agree
+(`TRANSPORT_DECLARATION_MISMATCH`). The allowlist's sha256 is in the reserved policy inputs, so the authority is bound
+at reservation; no record format changes (`RESOLVED_FORMAT`, `POLICY_FORMAT`, the golden policy digest and the native
+profile's bytes are unchanged).
+
+Each seam declares its authority in an `authority` attribute (absent: `live`) and must equal the attempt's bound one
+at its first use, refused with a stable code and no call:
+
+| Seam | Where it is compared | Code |
+|---|---|---|
+| The Agent Server transport | `AgentServerClient.__init__`, so every call of the path (the create, the attempt run, the end, the reads, `reconcile_creates` and `recover`, whose read-only wrapper carries its transport's authority) | `TRANSPORT_AUTHORITY_MISMATCH` |
+| The credential provider | `dispatch`, before the native token's entry is read; `publish_result`, the caller of `attempt_role_token` (whose signature is unchanged), before the bot's entry is read | `CREDENTIAL_AUTHORITY_MISMATCH` |
+| The Gitea target (`GiteaTarget.authority`) | `publish_result`, before anything is read or written | `RESULT_TARGET_AUTHORITY_MISMATCH` |
+| The `inspect` and `pull` observers (and `resume_result`'s `exists`) | `run_attempt`, `resume_result`, against the client's authority | `OBSERVER_AUTHORITY_MISMATCH` |
+
+The bound authority comes only from the pinned allowlist, computed by a caller that has its reader
+(`attempt_authority(resolved, read_artifact)`, or the client built from it); the verified result carries the one the
+attempt run's client established, and `publish_result` checks it against the binding again when it is given the
+reader. A record of an attempt whose bound authority is not `live` carries it (`authority`, R11): the dispatched,
+confirmed, failed and unknown transitions, the turn journal, the delivery, pull and intake receipts, the verified
+result's record, the result journal's receipt, the Owner report and the pull request body, the launch receipt, the end
+journal and record, and the stop receipts written with the reader. A live record is byte for byte what it was. The
+dispatch modules compare declared values and contain no fixture-specific path (`tests/test_authority.py`, `Census`).
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -1990,6 +2019,8 @@ acceptance takes effect when a manifest naming it is promoted.
 | `RECOVER_INSIDE_HELD_REGION` | `recover` called by a thread that already holds the dispatcher lock (inside an act's held region): before the lock is taken, nothing read or changed |
 | `RESULT_DELIVERY_UNSETTLED` | the result step's delivery receipt is not confirmed and cannot be settled by reading it against a verified pull: the attempt is held, the delivered digest never left unchecked |
 | `RESULT_WRITE_UNSETTLED`, `RESULT_READBACK` | after the dispatch: a push or pull request refused or its answer lost, or the read-back not answered (the journal `unknown`, settled by the next run's reading); the read-back not as written |
+| `TRANSPORT_AUTHORITY_MISMATCH`, `CREDENTIAL_AUTHORITY_MISMATCH`, `RESULT_TARGET_AUTHORITY_MISMATCH`, `OBSERVER_AUTHORITY_MISMATCH` | E-01.8: a seam (the Agent Server transport, the credential provider, the Gitea target, an inspect or pull observer) declares another authority than the attempt's pinned route allowlist: refused at the seam's first use, with no call ([the attempt's authority](#the-attempts-authority-e-018)) |
+| `TRANSPORT_DECLARATION_MISMATCH` | E-01.8: the profile's transport declaration and its pinned allowlist's differ, or one is not a declaration of the authority vocabulary |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. A manifest
 without a pin refuses every request (`NO_APPROVED_CATALOG` or `CATALOG_PIN_REQUIRED`). That is

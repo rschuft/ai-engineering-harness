@@ -84,7 +84,8 @@ class OverTheListener(TRM.Matrix):
             return self.observe(phase) if self.observe else ()
         return AR.run_attempt(self.store, key, transport=self.wire, base=self.base, actor=TRM.ACTOR,
                               inspect=Declared(lambda cid: ()),
-                              pull=Declared(lambda name: self.fail('no pull expected')), observe=observe, ceiling_s=0, clock=lambda: 0.0,
+                              pull=Declared(lambda name: self.fail('no pull expected')), observe=observe,
+                              ceiling_s=0, clock=lambda: 0.0,
                               wait=lambda s: self.fail('no wait expected'), read_artifact=self.fixture.read_artifact)
 
     def recover(self):

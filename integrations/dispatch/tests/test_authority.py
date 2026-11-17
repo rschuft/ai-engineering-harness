@@ -261,6 +261,17 @@ class Dispatch(Bound):
         [attempt] = self.store.attempts()
         self.assertEqual(self.details(attempt.operation_key)[-1][1]['authority'], 'fixture')
 
+    def test_admission_refuses_a_profile_whose_two_declarations_differ(self):
+        path = self.profiles / FIX / 'profile.json'
+        declared = json.loads(path.read_bytes())
+        declared['provisioning']['agent_server'].pop('transport')       # the allowlist still declares fixture
+        path.write_bytes((json.dumps(declared, indent=2) + '\n').encode('utf-8'))
+        transport = Seam(self.core, 'fixture')
+        refusal = self.refused('TRANSPORT_DECLARATION_MISMATCH',
+                               lambda: self.dispatch(transport, provider('fixture'), manifest=self.approve_fixture()))
+        self.assertEqual((refusal.context['profile'], refusal.context['allowlist']), ('live', 'fixture'))
+        self.assertEqual(transport.count, 0)
+
     def test_a_live_attempts_records_carry_no_authority(self):
         result = self.dispatch(self.core, provider(), profile=ci.REAL, manifest=self.approve_real())
         self.assertNotIn('authority', result.to_json())

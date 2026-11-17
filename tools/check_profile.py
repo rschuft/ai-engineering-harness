@@ -2907,7 +2907,8 @@ def check_fixture(report, profile, root=REPO):
                 'provision_lock')),
             ('network.endpoints', (profile.get('network') or {}).get('endpoints'),
              [e for e in (native.get('network') or {}).get('endpoints') or [] if e.get('class') == 'provider-tunnel'])]
-    content, theirs = (server.get('config') or {}).get('content') or {}, (other.get('config') or {}).get('content') or {}
+    content = (server.get('config') or {}).get('content') or {}
+    theirs = (other.get('config') or {}).get('content') or {}
     same.append(('provisioning.agent_server.config.content', content,
                  {k: theirs.get(k) for k in FIXTURE_CONTENT_KEYS}))
     same.append(('provisioning.agent_server.conversations', server.get('conversations'),
