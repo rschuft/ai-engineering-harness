@@ -526,6 +526,17 @@ class Labels(Base):
         self.turn(result, 'live')
         self.assertStatus(self.view(result.operation_key), 'unknown', 'ATTEMPT_LABEL_MISSING', authority='unknown')
 
+    def test_a_fixture_attempt_whose_typed_transition_lacks_the_label_is_unknown(self):
+        """The store's own reconcile, given no label (as before E-01.8), confirms the typed attempt with no detail."""
+        def no_answer(method, path, body=None, **kwargs):
+            if (method, path) == ('POST', '/api/conversations'):
+                raise OSError('no answer')
+            return self.core(method, path, body, **kwargs)
+        with self.assertRaises(OSError):
+            self.dispatched(TA.Seam(no_answer, 'fixture'))
+        self.store.reconcile(lambda reservation: 'performed', actor=ACTOR)
+        self.assertStatus(self.view(), 'unknown', 'ATTEMPT_LABEL_MISSING', authority='unknown')
+
     def test_a_record_carrying_another_label_is_unknown(self):
         result = self.fixture_attempt()
         self.turn(result, 'elsewhere')
@@ -574,6 +585,32 @@ class Rules(unittest.TestCase):
                           ('end', AE.END_KEY)):
             self.assertEqual(key.format(attempt_id='X'), f'{P.RECORD_PREFIX}X/{name}')
         self.assertTrue(AE.STOP_KEY.startswith(P.RECORD_PREFIX + '{attempt_id}/stop/'))
+
+    def test_the_rows_are_read_in_order(self):
+        """Rows 5 to 7 (the launch's not-launched, a stop, the end) precede row 10 (a published result), each over the
+        rows after it, on records shaped as the writers write them."""
+        def record(key, kind, state, intent, details=()):
+            row = store_mod.Reservation(key, '0' * 64, json.dumps(intent), 'c', state, 'none', len(details), 'x', 'x')
+            events = [store_mod.Event(n + 1, key, n, None, to, 'none', 'test', 'r', None if d is None else json.dumps(d),
+                                      'x') for n, (to, d) in enumerate([('reserved', None), *details])]
+            return P.Record(row, events, kind)
+        typed = record('attempt/v1/x', 'typed', 'confirmed', {}, [('dispatched', {}), ('confirmed', {})])
+        published = record('dispatch/attempt/a/result', 'result', 'confirmed', {'format': P.FORMATS['result']},
+                           [('dispatched', {}), ('confirmed', {'format': P.RESULT_RECEIPT_FORMAT})])
+        launch = record('dispatch/attempt/a/launch', 'launch', 'confirmed',
+                        {'format': P.FORMATS['launch'], 'verdict': P.NOT_LAUNCHED}, [('dispatched', None),
+                                                                                    ('confirmed', None)])
+        stop = record('dispatch/attempt/a/stop/k/c', 'stop', 'confirmed', {'format': P.FORMATS['stop']},
+                      [('dispatched', None), ('confirmed', None)])
+        end = record('dispatch/attempt/a/end', 'end', 'confirmed', {'format': P.FORMATS['end']},
+                     [('dispatched', {}), ('confirmed', {'format': P.END_FORMAT})])
+        for records, code in (({'result': published, 'stop': []}, 'RESULT_PUBLISHED'),
+                              ({'result': published, 'end': end, 'stop': []}, 'ATTEMPT_ENDED'),
+                              ({'result': published, 'end': end, 'stop': [stop]}, 'ATTEMPT_STOPPED'),
+                              ({'result': published, 'end': end, 'launch': launch, 'stop': [stop]},
+                               'LAUNCH_NOT_LAUNCHED')):
+            with self.subTest(code=code):
+                self.assertEqual(P.state_of(typed, records)['code'], code)
 
     def test_the_backlog_pin_is_the_component_lock_s(self):
         lock = json.loads((REPO / 'composition' / 'lock' / 'npm' / 'package.json').read_text(encoding='utf-8'))
@@ -649,6 +686,15 @@ class Outcome(Base):
         [task] = [t for t in projection['tasks'] if t['reference'] == f'backlog:{WORK}']
         self.assertEqual(task['resolution'], 'resolved')
 
+    def test_a_store_that_cannot_be_read_is_unknown_never_pending(self):
+        self.fixture_attempt()
+        projection = Outcome.build(self, 'listed').project(self, store=self.scratch / 'absent' / 'integration.sqlite')
+        self.assertTrue(projection['tasks'])
+        for task in projection['tasks']:
+            self.assertEqual((task['execution']['status'], task['execution']['code']), ('unknown', 'STORE_UNAVAILABLE'))
+        self.assertNotEqual(projection['sources']['integrationStore'], 'read')
+        self.assertEqual(projection['attempts'], [])
+
     def test_the_coverage_field_is_always_present(self):
         self.fixture_attempt()
         for snapshot in ('listed', 'archived', 'deleted'):
@@ -668,12 +714,13 @@ class OutcomeSources:
     def __init__(self, repo, conversations, snapshot):
         self.repo, self.conversations, self.snapshot = repo, conversations, self.SNAPSHOTS[snapshot]
 
-    def project(self, case, outcome=OUTCOME):
+    def project(self, case, outcome=OUTCOME, store=None):
         patch = E.in_process_backlog()
         patch.start()
         try:
             with mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': str(self.snapshot)}):
-                return P.project(outcome, project=self.repo, backlog=E.FAKE_BACKLOG, store=Path(case.store.path),
+                return P.project(outcome, project=self.repo, backlog=E.FAKE_BACKLOG,
+                                 store=Path(case.store.path) if store is None else store,
                                  conversations=self.conversations, read_artifact=case.read_artifact)
         finally:
             patch.stop()
