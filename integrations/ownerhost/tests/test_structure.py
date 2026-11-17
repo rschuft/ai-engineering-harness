@@ -13,7 +13,10 @@ imports no credential, Gitea, authorization-recorder or dispatch-transport modul
   owner modules, owner_decision.py and delegated_decision.py, and the lineage resolvers, lineage_resolve.py, which
   name the effects store's two modules for the effect-receipt resolver; the attempt resolver, which names the
   dispatcher, is lineage_attempt.py, outside the census). The recorder's one network-module import, urllib.parse
-  (a URL parser), is pinned to its two functions, without_userinfo and recordable_origin.
+  (a URL parser), is pinned to its two functions, without_userinfo and recordable_origin. Since U-04.1 the server
+  loads the outcome projection (projection.py), its transport-free reader of an attempt's bound authority
+  (bound_authority.py, in place of the dispatcher's, which holds the Agent Server client) and the lineage traversal
+  (integrations/lineage/lineage_trace.py), each by exact name; none names a dispatch module (``NewModules``).
 - **The import census** (the pattern of the input recorder's): a fresh interpreter loads app.py and builds the
   application; the repository files it has then loaded are exactly the server's modules (the four of U-01.3 and,
   since P-01.3, the capture's), none under integrations/credentials, integrations/gitea, integrations/dispatch or
@@ -55,7 +58,10 @@ LIVE_SERVER_MODULES = {'integrations/ownerhost/app.py', 'integrations/ownerhost/
                        # since P-04.4: the objective acceptance and the acceptance recorder
                        'integrations/ownerhost/acceptance.py', 'integrations/owner/acceptance_recorder.py',
                        'integrations/owner/owner_decision.py', 'integrations/owner/delegated_decision.py',
-                       'integrations/lineage/lineage_resolve.py'}
+                       'integrations/lineage/lineage_resolve.py',
+                       # since U-04.1: the outcome projection, its authority reader and the lineage traversal
+                       'integrations/ownerhost/projection.py', 'integrations/ownerhost/bound_authority.py',
+                       'integrations/lineage/lineage_trace.py'}
 # The effects store's two modules, named (never loaded on this path) by lineage_resolve.py for the effect-receipt
 # resolver: admitted as exact entries (the engineering manager's ruling A on P-04.4; R2 forbids credential, Gitea,
 # authorization-recorder and dispatch-transport modules), each checked to import no network client, call no connector
@@ -263,6 +269,36 @@ class NoClientSocket(unittest.TestCase):
             text = (T.PACKAGE / name).read_text(encoding='utf-8').lower()
             self.assertNotIn('set_cookie', text)
             self.assertNotIn('request.cookies', text)
+
+
+class NewModules(unittest.TestCase):
+    """U-04.1 (the I1 design, R2; the engineering manager's ruling on the STOP, option B): the projection, its authority
+    reader and the lineage traversal open no socket, import no network client or credential, Gitea, dispatch or
+    inference module, call no connector, and name none by file; the reader is not the dispatcher's."""
+    NAMES = ('integrations/ownerhost/projection.py', 'integrations/ownerhost/bound_authority.py',
+             'integrations/lineage/lineage_trace.py')
+
+    def test_each_is_in_the_census_and_has_no_socket_client_credential_or_gitea_import(self):
+        census = {relative(p): p for p in server_census()}
+        for name in self.NAMES:
+            with self.subTest(module=name):
+                path = census[name]
+                self.assertEqual(imported(path) & ({'socket', 'selectors', 'asyncio', 'keyring', 'ctypes'}
+                                                   | set(NETWORK_MODULES)), set())
+                self.assertEqual(connector_calls(path) - DATABASE_CONNECTS, set())
+                self.assertEqual(set(calls(path)) & {'socket', 'bind', 'listen', 'connect'}, set())
+                self.assertEqual(forbidden(relative(p) for p in loaded_sources(path)), [])
+                text = path.read_text(encoding='utf-8')
+                for word in ('credential_provider', 'gitea_host', 'dispatch_inputs.py', 'authorization_recorder',
+                             'guest_transport', 'AgentServerClient('):
+                    self.assertFalse(word in text, f'{name} names {word}')
+
+    def test_the_reader_is_not_the_dispatcher_s(self):
+        names = {relative(p) for p in loaded_sources(T.PACKAGE / 'bound_authority.py')}
+        self.assertEqual(names, {'integrations/store/integration_store.py'})
+        names = {relative(p) for p in loaded_sources(T.PACKAGE / 'projection.py')}
+        self.assertEqual(names, {'integrations/ownerhost/bound_authority.py', 'integrations/ownerhost/capture.py',
+                                 'integrations/lineage/lineage_trace.py'})
 
 
 class ExclusiveListener(unittest.TestCase):

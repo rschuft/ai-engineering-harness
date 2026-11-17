@@ -364,10 +364,14 @@ class Listener(unittest.TestCase):
     def test_the_live_import_census_is_the_server_s_four_modules(self):
         expected = ['integrations/conversation/conversation_store.py', 'integrations/lineage/lineage.py',
                     'integrations/lineage/lineage_resolve.py',                            # since P-04.4
+                    'integrations/lineage/lineage_trace.py',                              # since U-04.1
                     'integrations/owner/acceptance_recorder.py', 'integrations/owner/delegated_decision.py',
                     'integrations/owner/owner_decision.py',                              # since P-04.4
                     'integrations/ownerhost/acceptance.py',                              # since P-04.4
-                    'integrations/ownerhost/app.py', 'integrations/ownerhost/capture.py',
+                    'integrations/ownerhost/app.py',
+                    'integrations/ownerhost/bound_authority.py',                         # since U-04.1
+                    'integrations/ownerhost/capture.py',
+                    'integrations/ownerhost/projection.py',                              # since U-04.1
                     'integrations/ownerhost/session.py', 'integrations/planning/planning_adapter.py',
                     'integrations/repository/repository_access.py', 'integrations/store/integration_store.py',
                     'integrations/storecore/storecore.py', 'tools/check_intent_record.py']   # since P-01.3

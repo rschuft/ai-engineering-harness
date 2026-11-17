@@ -12,16 +12,19 @@ sign-in), and since U-02.1 the thread and history routes keep the Owner chat in 
 since U-02.2 a pending decision kept there survives a restart of the process and a reopened browser, once; since
 P-01.3 an Owner message sent through the shell's request form is captured as an OpenSpec intent change in the project
 repository ([below](#capture-p-013)); since P-04.4 the Owner accepts an objective of such a change on the acceptance
-recorder's challenge, bound to his session ([below](#objective-acceptance-p-044)). The projection (U-04.1) attaches
-later. It has no dispatch endpoint.
+recorder's challenge, bound to his session ([below](#objective-acceptance-p-044)); since U-04.1 an outcome's
+read-only projection joins its lineage with each attempt's observed state ([below](#outcome-projection-u-041)). It has
+no dispatch endpoint.
 
 ## Files
 
 | Path | What |
 |---|---|
-| `app.py` | The ASGI application (`create_app`), its three request checks, the session route, the thread and history routes, the capture route and the two acceptance routes (`acceptance-challenge`, `acceptance`); `bind_listener` and `serve`, the server process |
+| `app.py` | The ASGI application (`create_app`), its three request checks, the session route, the thread and history routes, the capture route, the two acceptance routes (`acceptance-challenge`, `acceptance`) and the outcome projection's route; `bind_listener` and `serve`, the server process |
 | `capture.py` | P-01.3: the request layout's parser, the intent record it writes, the project configuration (`components.owner_host`), the commit identity, the write-ahead receipt and the commit |
 | `acceptance.py` | P-04.4: the review and acceptance layouts, the challenges held in memory, the session-binding verifier, the checks before the reservation (the preflight included), the write-ahead receipt, the recorder's commit and the settlement by reading |
+| `projection.py` | U-04.1: the outcome projection (`outcome-projection/v1`): the lineage traversal joined with each attempt's typed status from the dispatcher's records (the state table below), its result's claims and its result receipt as evidence; `Projection`, the route's configuration and refusals |
+| `bound_authority.py` | U-04.1: an attempt's bound authority read from its reservation's pinned route allowlist, transport-free, with codes of its own (R11; the dispatcher's own reader holds the Agent Server client) |
 | `session.py` | The credential's shape and verifier, and `check`, which decides one request against the session table |
 | `enroll.py` | The Owner's enroll command: the console guard, minting, the session row, the one showing |
 | `service.py` | The lifecycle verbs through the platform contract (decision 0011): `up`, `down`, `restart`, `recover`, `status`, `inspect`, `verify`, and the supervisor |
@@ -37,6 +40,9 @@ later. It has no dispatch endpoint.
 | `tests/test_outbound_guard.py` | The outbound guard in a real server process on a free port (`serve_outbound_probe.py`): connect, connect_ex and getaddrinfo refused before the call, the process still serving, the guard armed by the lifespan; never armed in the test process (integration) |
 | `tests/test_capture.py` | P-01.3's proof in throwaway stores and a throwaway project repository: one change per message, idempotent across a retry, a restart and a reconnect; the quote's span, `check_intent_record.py`, the originates edge (after the acceptance recorder accepts O1 with a synthetic statement); the digest mismatch changing nothing; the layout refusals (bidirectional controls included); the crash windows, the commit id recorded before the branch moves, and settlement through every branch and parent (a branch switch, a merge without fast-forward, packed references, a rewritten history); a confirmed receipt under another configuration; the work-tree flag; the store's refusals; the commit identity, its placeholder classes and the session's principal; the harness checkout refused as the project; no socket, no process, no model (integration) |
 | `tests/test_acceptance.py` | P-04.4's proof in throwaway stores and a throwaway project repository whose change the capture made: the outcome minted once and resolved, the statement resolved to the Owner's message, a re-acceptance keeping the id, author and committer; every refusal (challenge, session, statement, card, layout, repository state, configuration) changing neither the project repository nor either store; the verifier clause by clause; the race window and settlement; the shell's code list; no socket, no process (integration) |
+| `tests/test_projection.py` | U-04.1's proof over attempts the dispatcher's own writers made on a throwaway store (the dispatch suite's `test_authority.Bound`): every status of the state table, the exit claims, the end mapping, R11's label rule, a fixture and a live attempt run to a published receipt, the outcome-level join, archived, deleted and reused task ids from Backlog.md's recorded output, read-only stores and reads, the route's guards and refusals (integration) |
+| `tests/test_bound_authority.py` | The authority reader pinned to `dispatch_inputs.attempt_authority` and `bound_label` case by case, the known divergence, the shared constants (integration, unit) |
+| `tests/fixtures/backlog-archive/` | Backlog.md 1.55.3's own `task list --json` and `task view --json` output in a throwaway project (recorded 2026-11-17): `TASK-2` archived (`archived/`), then deleted (`deleted/`: its view fails), then its id taken by a new task (`reused/`) |
 | `tests/serve_on_port.py` | The test-side child: `app.serve` on the port the test chose, never 13310 |
 | `tests/ownerhost_support.py`, `tests/process_probe.py` | The fixtures (throwaway stores and credentials, the inventory's credential shapes built at run time) and the outside read of a process's environment block and command line |
 
@@ -318,62 +324,117 @@ on a free loopback port, never `127.0.0.1:13310`, so a running Owner instance is
 stops only the processes it started. It stops the process gracefully, by its stop request: a killed process is not
 exercised.
 
-## Outcome projection (U-04.1): the state table
+## Outcome projection (U-04.1)
 
-**Not built yet.** This is the state table the engineering manager's ruling 1 for U-04.1 puts first: how the
-read-only outcome projection maps the dispatcher's own records to an attempt's typed status. The projection and its
-endpoint are not built; nothing here is verified.
+`GET /outcomes/{outcome_id}` answers the read-only projection of `outcome:<outcome_id>` (`projection.py`), behind
+the session, Host and Origin guards like every route. It runs on the event loop, as the capture does.
 
-The status of one attempt comes only from the dispatcher's records in the integration store, opened read-only: never
-from an agent's exit claim, and never from an Agent Server, real or fixture (decision 0013 point 1; the I1 design,
-R6). Anything those records do not determine is `unknown`, never a guess. Each status names the record that shows
-it. The records are the typed attempt `attempt/v1/<...>` (its state and its transitions' details) and, under
-`dispatch/attempt/<attempt id>/`: the turn journal `turn`, the launch receipt `launch`, the result step's receipts
-`delivery`, `pull` and `intake`, the result journal `result` (its confirmed detail is the result receipt,
-`result-receipt/v1`), the end journal `end` (its confirmed detail is the end record, `attempt-end/v1`) and the stop
-receipts `stop/<kind>/<code>`.
+**The schema, `outcome-projection/v1`:**
 
-The rows are read in order, and the first that matches decides:
+| Key | What |
+|---|---|
+| `format`, `outcome` | `outcome-projection/v1`; the outcome reference |
+| `verdict` | `failed` when an objective, statement (`message`, `conversation`) or task (`work`, archived ones included) reference does not resolve; else `incomplete` when the lineage carries an uncertainty; else `complete`. An attempt node's lineage resolution is never asked here (its authority is the Agent Server: `RESOLVER_NOT_CONFIGURED`), so that uncertainty does not count: the attempt's state is the dispatcher's records |
+| `objective`, `statements`, `designs` | The lineage nodes of those roles, as `lineage-projection/v1` has them |
+| `tasks` | Per task: its reference and resolution, how it was reached (`listing`: Backlog.md lists it citing the outcome or its design; `attempt`: only an attempt reservation citing it and the outcome), its attempts, and `execution`: its latest attempt's status and code (by ordinal); `pending` `NO_ATTEMPT` when the store was read and holds none; `unknown` `STORE_UNAVAILABLE` when it could not be read |
+| `attempts` | Per attempt: its ids, `status`, `code`, `detail` and `shownBy` (the record, its state and its last event that decided it); `authority` (`shown`: `live`, `fixture` or `unknown`, and its code); `result` and `evidence` (below); the records it read |
+| `failures` | Each unresolved objective, statement or task reference: role, kind, outcome, code |
+| `uncertainties` | The lineage's, but for the attempt nodes' `RESOLVER_NOT_CONFIGURED` |
+| `coverage` | Always present: `{"archivedTasksEnumerable": false, "code": "ARCHIVED_TASKS_NOT_ENUMERABLE", "basis": "Backlog.md 1.55.3 task list --json", "detail": ...}` |
+| `sources`, `lineage` | The traversal's sources and whether the integration store was read; the whole `lineage-projection/v1` |
+
+Refusals, each changing nothing: `OUTCOME_INVALID` (400: not an outcome id, or a pinned one), and 503 for
+`PROJECTION_PROJECT_UNCONFIGURED`, `PROJECTION_CONFIG_INVALID` (`components.owner_host`, read as the capture reads
+it), `PROJECTION_STORE_UNCONFIGURED` and `PROJECTION_BACKLOG_UNAVAILABLE` (`backlog_command`).
+
+**Read-only.** The integration store and the Owner conversation store are opened read-only (SQLite `mode=ro`,
+`query_only`), the project repository is read through the repository-access module (no git process), Backlog.md runs
+only `task list --json` and `task view <id> --json` (`ReadOnlyBacklog`), and OpenSpec never runs. No Agent Server is
+asked, and the projection holds no transport.
+
+### The state table
+
+The status of one attempt comes only from the dispatcher's records in the integration store: never from an agent's
+exit claim, and never from an Agent Server, real or fixture (decision 0013 point 1; the I1 design, R6). Anything those
+records do not determine is `unknown`, never a guess. Each status names the record that shows it. The records are the
+typed attempt `attempt/v1/<...>` (its state and its transitions' details) and, under `dispatch/attempt/<attempt id>/`:
+the turn journal `turn`, the launch receipt `launch`, the result step's receipts `delivery`, `pull` and `intake`, the
+result journal `result` (its confirmed detail is the result receipt, `result-receipt/v1`), the end journal `end` (its
+confirmed detail is the end record, `attempt-end/v1`) and the stop receipts `stop/<kind>/<code>`.
+
+The rows are read in order, and the first that matches decides. Two changes from the table first written (`73d9e9f`):
+the unreadable-record row is read right after the authority row, not last; and among the failed rows of a confirmed
+attempt the launch receipt is read before the stops and the end, because the gate's `not-launched` causes the end that
+follows it. Rows 5 to 7 against row 10 are unchanged: a published attempt writes no end and no stop record (the result
+path refuses an ended or stopped attempt, the end refuses a result handed on, and `EndToEnd` reads every record of a
+published run: `turn`, `launch`, `delivery`, `pull`, `intake` and `result`).
 
 | # | Records | Status | Code |
 |---|---|---|---|
-| 0 | The bound authority (R11): the reservation's pinned route allowlist's declaration cannot be read | `unknown` | `ATTEMPT_AUTHORITY_UNBOUND` |
-| 0 | Fixture-bound, and a record of the attempt lacks the label `authority: fixture` | `unknown` | `ATTEMPT_LABEL_MISSING` |
+| 0 | The bound authority (R11): the reservation's pinned route allowlist's declaration cannot be read (`bound_authority.py`'s code in `authority.reason`). A typed attempt that is `failed` stays `failed` (row 4), its authority shown as neither | `unknown` | `ATTEMPT_AUTHORITY_UNBOUND` |
+| 0 | Fixture-bound, and a record the writers label lacks `authority: fixture` | `unknown` | `ATTEMPT_LABEL_MISSING` |
 | 0 | Fixture-bound, and a record carries another label | `unknown` | `ATTEMPT_LABEL_MISMATCH` |
 | 0 | Live-bound, and a record carries a label | `unknown` | `ATTEMPT_LABEL_ON_LIVE` |
+| 0b | A record of a kind the table reads in a state or format it does not name, or not strict JSON | `unknown` | `RECORD_UNREADABLE` |
 | 1 | Typed attempt `reserved`: no create sent | `pending` | `ATTEMPT_RESERVED` |
 | 2 | Typed attempt `dispatched`: the create sent, its answer not recorded | `running` | `CREATE_SENT` |
 | 3 | Typed attempt `unknown`: the create's answer lost (E-01.4.1 settles it) | `unknown` | `CREATE_OUTCOME_UNKNOWN` |
-| 4 | Typed attempt `failed`: a refused create, an admission or seam refusal, a reconciled 404 (the failed move's code) | `failed` | `ATTEMPT_FAILED` |
-| 5 | Confirmed, and a stop receipt is confirmed (decision 0024 point 7) | `failed` | `ATTEMPT_STOPPED` |
-| 6 | Confirmed, and the end record is written (its classification, causes and the dispatcher's surfaced execution status: an `error`, `stuck` or `paused` turn ends here, decision 0024 point 7.5) | `failed` | `ATTEMPT_ENDED` |
-| 7 | Confirmed, and the launch receipt's verdict is `not-launched` (the gate; the end follows) | `failed` | `LAUNCH_NOT_LAUNCHED` |
+| 4 | Typed attempt `failed`: a refused create, an admission or seam refusal, a reconciled 404 (the failed move's code in `cause`) | `failed` | `ATTEMPT_FAILED` |
+| 5 | Confirmed, and the launch receipt's verdict is `not-launched` (the gate) | `failed` | `LAUNCH_NOT_LAUNCHED` |
+| 6 | Confirmed, and a stop receipt is confirmed (decision 0024 point 7) | `failed` | `ATTEMPT_STOPPED` |
+| 7 | Confirmed, and the end record is written (its trigger, classification, causes and the conversation's execution status the dispatcher surfaced: an `error`, `stuck` or `paused` turn ends here, decision 0024 point 7.5) | `failed` | `ATTEMPT_ENDED` |
 | 8 | Confirmed, and the end journal is `unknown` | `unknown` | `ATTEMPT_END_UNSETTLED` |
 | 9 | Confirmed, and the end journal is `reserved` or `dispatched` | `running` | `ATTEMPT_ENDING` |
 | 10 | Confirmed, and the result journal is `confirmed` with its result receipt | `succeeded` | `RESULT_PUBLISHED` |
 | 11 | Confirmed, and the result journal is `failed` (its code, for example `RESULT_EMPTY_CHANGE`) | `failed` | `RESULT_FAILED` |
 | 12 | Confirmed, and the result journal is `unknown`: a write refused or its answer lost | `unknown` | `RESULT_WRITE_UNSETTLED` |
 | 13 | Confirmed, and the result journal is `dispatched` | `running` | `RESULT_PUBLISHING` |
-| 14 | Confirmed, and the result journal is `reserved`, or the intake receipt is confirmed: the host verified the result, nothing is published | `running` | `RESULT_VERIFIED` |
-| 15 | Confirmed, and a delivery or pull receipt exists: the result is reported, not yet verified | `running` | `RESULT_DELIVERED` |
+| 14 | Confirmed, and the result journal is `reserved`, or an intake receipt exists: the host verified the result, nothing is published | `running` | `RESULT_VERIFIED` |
+| 15 | Confirmed, and a pull or delivery receipt exists: the result is reported, not yet verified | `running` | `RESULT_DELIVERED` |
 | 16 | Confirmed, and the turn journal is `unknown`: the message's answer lost | `unknown` | `TURN_OUTCOME_UNKNOWN` |
 | 17 | Confirmed, and the turn journal is `failed` (refused, or the run did not start) | `failed` | `TURN_FAILED` |
 | 18 | Confirmed, and the turn journal is `confirmed` (the message delivered) or `dispatched` (being sent) | `running` | `TURN_SENT`, `MESSAGE_SENDING` |
 | 19 | Confirmed, and the turn journal is `reserved`, or the launch receipt says `launched`, or nothing follows the create | `pending` | `MESSAGE_RESERVED`, `LAUNCHED`, `CREATED` |
-| 20 | Any record in a state or format these rows do not name | `unknown` | `RECORD_UNREADABLE` |
+
+**R11's labels (row 0).** The bound authority is read by `bound_authority.py` from the reservation's pinned route
+allowlist. The dispatcher's own reader (`dispatch_inputs.attempt_authority`) lives beside the Agent Server client,
+which the Integration process may not load (R2), so this one reads the same records in the same order, and
+`tests/test_bound_authority.py` pins it to `attempt_authority` and `bound_label` case by case. **The known
+divergence:** the dispatcher validates the whole admission policy before it reads the pin, this reader only the pin.
+A record whose other admission values are invalid while its digests hold is bound here and refused there. The
+dispatcher cannot reserve such a record (admission runs before the reservation, and the record is bound by its
+digests); `Divergence` shows the difference on one built for it. The labels are read where E-01.8's writers put
+them: the top-level `authority` of each `turn`, `launch`, `delivery`, `pull`, `intake`, `end` and stop record's
+intent; `result.authority` of the result journal's intent; the result receipt and the end record; and every
+transition of the typed attempt after its reservation. On a fixture-bound attempt each of those must carry
+`fixture`; on a live-bound one none may carry a label. Other records of the attempt (the engineering manager's
+`auth-cause`, `end-cause` and `escalation`, a brokered grant's journals) are written without one by design and must
+only not carry another. A fixture-answered attempt that passes is shown `fixture`, never `live`.
 
 **Reported and verified are kept apart.** `succeeded` comes only from the result receipt: the host computed the
 commit itself over the pulled bundle (the intake) and read the branch and the draft pull request back (the result
-path). Beside every status, the result's claims are shown with their basis: **reported** for what the attempt itself
-said (the commit and bundle digest RESULT printed, in the delivery receipt; the test status, outcome and output digest
-of the attempt's own tests, which are not independent CI) and **verified** for what the host established (the intake's
-commit, tree and bundle; the result receipt's branch head and pull request). A report never sets a status. The
-result receipt's commit, diff and test output are references with digests (`git:<repository>@<commit>`, the base and
-result commits of the diff with the Owner report's digests, the test output's sha256 and size), never copies.
+path). Every attempt's `result` shows the claims with their basis: `reported` for what the attempt itself said (the
+commit and bundle digest RESULT printed, in the delivery receipt) and for the attempt's own tests (status, command,
+output digest: not independent CI); `verified` for what the host established (the intake's commit, tree, base and
+bundle). A report never sets a status.
 
-A fixture-bound attempt that passes row 0 is shown with its authority, `fixture`; one that fails row 0 is shown as
-neither. A task's status is its latest attempt's (`pending`, `NO_ATTEMPT`, when the integration store was read and
-holds none; `unknown`, `STORE_UNAVAILABLE`, when it could not be read).
+**The result receipt as evidence** (`evidence`, E-05.4's `result-receipt/v1`), by reference and digest, never a copy:
+`commit` (`git:<repository>@<commit>`, the commit and the branch: verified), `diff` (from the base reference to the
+result reference, with the Owner report's JSON and Markdown sha256, which hold it: verified), `testOutput` (its sha256
+and size, status and outcome: reported), `pullRequest` (number, URL, state, draft, the body's sha256: verified), the
+bundle's digest, the lineage references, and the receipt's own record, event and sha256. No referenced artifact is
+served: the commit and the diff are in the project repository's objects and the report is the result path's file,
+each named by its digest, and the receipt holds nothing more.
+
+**Archived tasks.** Every task the projection reaches is resolved through Backlog.md's `task view`, archived ones
+included, and an unresolved one is a failure. Backlog.md 1.55.3's `task list --json` does not list an archived task,
+and no read command enumerates one (observed 2026-11-17 in a throwaway project: no `task list` option, status, search
+or label filter lists it), so a task archived with no attempt citing the outcome is not reached. That limit is the
+`coverage` field, on every projection; it is not a lineage uncertainty and does not by itself change the verdict (the
+engineering manager's ruling on U-04.1). An attempt's task is always reached, archived or not, through the reservation
+that cites the outcome. A known hazard of the pin, shown by a test and not fixed: `task delete` releases an archived
+task's id and the next task takes it, so a reference to the deleted task resolves to the later one (a work reference
+carries no digest).
 
 ## What it never does
 
@@ -389,7 +450,8 @@ Its one socket is `bind_listener`'s listener, bound with `SO_EXCLUSIVEADDRUSE`, 
 failing on any other holder of the port; readiness reads the kernel's TCP table, never a request. The
 server process loads only `app.py`, `session.py`, the conversation store and storecore, and since P-01.3 the
 capture's modules (`capture.py`, the integration store, the planning adapter, the shared repository-access module,
-`lineage.py` and `tools/check_intent_record.py`): no credential, Gitea, authorization-recorder, dispatch or inference
+`lineage.py` and `tools/check_intent_record.py`), since P-04.4 the acceptance's, and since U-04.1 the outcome
+projection's (`projection.py`, `bound_authority.py` and `integrations/lineage/lineage_trace.py`, each by exact name): no credential, Gitea, authorization-recorder, dispatch or inference
 module, and no network client (the repository-access module's remote transport, which imports one, is never reached:
 a whole capture audited opens no socket and starts no process); it reads no credential and no `config.yml`
 (service.py gives it its two directories, `components.owner_host` and the integration store's path); its environment, and its supervisor's, is the allowlist `ENVIRONMENT_NAMES` (Windows and
@@ -450,5 +512,8 @@ rather than skip, when the port is already held. `test_pending_decision.py` uses
 - A pending decision asked by a real producer: no chat model is connected, so only the tests ask one.
 - P-01.3's verdict (built 2026-11-16; its tests PASS offline with throwaway stores and repositories): no capture has
   been made in a real project repository, with the Owner's own configured identity, or from a real browser.
+- U-04.1's verdict (built 2026-11-17; its tests PASS offline with throwaway stores, repositories and Backlog.md's
+  recorded output): no projection of a real project repository, the live Backlog.md, a live attempt or a real
+  browser; the coverage limit of archived tasks and the reuse of a deleted task's id are the pin's, not fixed.
 - Linux and macOS (the platform contract's adapters, F-06.4 and F-06.5).
 - Ending with the Owner's session or a reboot (the job's declared behaviour, as for Gitea).

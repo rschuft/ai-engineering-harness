@@ -48,6 +48,10 @@ Owner's acceptance, his own ``Accept <item> of <change>`` message after that car
 process with channel ``owner-ui`` and the session-binding verifier; one commit in the project repository, idempotent
 by message id, behind a write-ahead receipt in the integration store. Every refusal of a request has a stable code.
 
+The outcome projection's route (U-04.1; projection.py): ``GET /outcomes/{outcome_id}`` answers the read-only
+``outcome-projection/v1`` of ``outcome:<outcome_id>``: its lineage joined with each attempt's observed state from the
+dispatcher's records in the integration store, both stores opened read-only; it asks no Agent Server.
+
 Every write is attributed to the authenticated session. A body is JSON (``Content-Type: application/json``), at most
 ``MAX_BODY_BYTES``, with no duplicate key and no NaN or Infinity (``REQUEST_INVALID``); the store's refusals keep their
 stable codes. Nothing the client wrote is logged: a request is logged by its route's path template.
@@ -103,6 +107,7 @@ session = _load('aieh_ownerhost_session', HERE / 'session.py')
 conversation = _load('aieh_conversation_store', REPO / 'integrations' / 'conversation' / 'conversation_store.py')
 capture = _load('aieh_ownerhost_capture', HERE / 'capture.py')
 acceptance = _load('aieh_ownerhost_acceptance', HERE / 'acceptance.py')
+projection = _load('aieh_ownerhost_projection', HERE / 'projection.py')
 
 from starlette.applications import Starlette          # noqa: E402  (the tools set; decision 0025 point 1)
 from starlette.middleware import Middleware            # noqa: E402
@@ -279,6 +284,15 @@ async def _acceptance_call(request, call):
     return JSONResponse(answer, headers=SECURITY_HEADERS)
 
 
+async def outcome_projection(request):
+    """U-04.1: the read-only outcome projection (projection.py)."""
+    try:
+        answer = request.app.state.projection.project(request.path_params['outcome_id'])
+    except projection.ProjectionRefused as exc:
+        return refusal(exc.code, exc.detail, exc.status, exc.remedy)
+    return JSONResponse(answer, headers=SECURITY_HEADERS)
+
+
 def _no_constant(name):
     raise ValueError(f'{name} is not JSON')
 
@@ -420,6 +434,7 @@ ROUTES = (
     Route('/threads/{thread_id}/messages/{message_id}/capture', capture_message, methods=['POST']),
     Route('/threads/{thread_id}/messages/{message_id}/acceptance-challenge', acceptance_challenge, methods=['POST']),
     Route('/threads/{thread_id}/messages/{message_id}/acceptance', accept_objective, methods=['POST']),
+    Route('/outcomes/{outcome_id}', outcome_projection, methods=['GET']),
 )
 LOGGED_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')
 
@@ -440,12 +455,14 @@ def described(scope) -> str:
 
 def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Callable[[], str] = now,
                log: Callable[[str], None] = lambda line: None, lifespan=None,
-               store: Callable[[], object] | None = None, capturer=None, accepter=None) -> Starlette:
+               store: Callable[[], object] | None = None, capturer=None, accepter=None,
+               projector=None) -> Starlette:
     """The ASGI application. SESSIONS returns the object that answers ``session_by_verifier`` (the conversation
     store); STORE the conversation store the thread and history routes use (SESSIONS' object when not given); CLOCK
     the current time (YYYY-MM-DDTHH:MM:SSZ); LOG takes one line per decided request; CAPTURER the capture
     (capture.Capture; without one every capture is CAPTURE_PROJECT_UNCONFIGURED); ACCEPTER the objective acceptance
-    (acceptance.Acceptance; without one every acceptance request is CAPTURE_PROJECT_UNCONFIGURED)."""
+    (acceptance.Acceptance; without one every acceptance request is CAPTURE_PROJECT_UNCONFIGURED); PROJECTOR the
+    outcome projection (projection.Projection; without one every projection is PROJECTION_PROJECT_UNCONFIGURED)."""
     app = Starlette(
         routes=list(ROUTES),
         middleware=[
@@ -460,6 +477,7 @@ def create_app(sessions: Callable[[], object], *, port: int = PORT, clock: Calla
     app.state.clock = clock
     app.state.capture = capturer or capture.Capture(None, None)
     app.state.acceptance = accepter or acceptance.Acceptance(None, None)
+    app.state.projection = projector or projection.Projection(None, None, None)
     return app
 
 
@@ -629,8 +647,10 @@ def serve(state_dir: Path, logs_dir: Path, *, port: int = PORT, owner_host: str 
 
     capturer = capture.Capture(owner_host_config(owner_host), integration_store)
     accepter = acceptance.Acceptance(owner_host_config(owner_host), integration_store)
+    projector = projection.Projection(owner_host_config(owner_host), integration_store,
+                                      state_dir / conversation.DB_NAME)
     app = create_app(lambda: store, port=port, log=log.info, lifespan=lifespan, capturer=capturer,
-                     accepter=accepter)
+                     accepter=accepter, projector=projector)
     config = uvicorn.Config(app, log_config=None, access_log=False, proxy_headers=False, server_header=False,
                             date_header=True, ws='none', http='h11', loop='asyncio', lifespan='on',
                             timeout_graceful_shutdown=5)

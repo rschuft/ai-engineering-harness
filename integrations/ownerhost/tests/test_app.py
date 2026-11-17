@@ -68,7 +68,8 @@ class EveryRequestNeedsTheCredential(Base):
 
     def test_the_route_table_is_one_session_route_and_no_dispatch_endpoint(self):
         """One session route, POST /session; since U-02.1 the thread and history routes beside it, since P-01.3
-        the capture route, and since P-04.4 the two acceptance routes; no dispatch."""
+        the capture route, since P-04.4 the two acceptance routes, and since U-04.1 the outcome projection; no
+        dispatch."""
         self.assertEqual(self.routes(), [
             ('/session', ['POST']), ('/threads', ['GET', 'HEAD', 'POST']), ('/threads/{thread_id}', ['GET', 'HEAD']),
             ('/threads/{thread_id}/title', ['POST']), ('/threads/{thread_id}/archive', ['POST']),
@@ -77,7 +78,8 @@ class EveryRequestNeedsTheCredential(Base):
             ('/threads/{thread_id}/messages/{message_id}', ['POST']),
             ('/threads/{thread_id}/messages/{message_id}/capture', ['POST']),
             ('/threads/{thread_id}/messages/{message_id}/acceptance-challenge', ['POST']),
-            ('/threads/{thread_id}/messages/{message_id}/acceptance', ['POST'])])
+            ('/threads/{thread_id}/messages/{message_id}/acceptance', ['POST']),
+            ('/outcomes/{outcome_id}', ['GET', 'HEAD'])])
         self.assertEqual([r.path for r in A.ROUTES if r.path.startswith('/session')], ['/session'])
         self.assertFalse([r.path for r in A.ROUTES if 'dispatch' in r.path or 'conversations' in r.path])
 
@@ -107,6 +109,7 @@ class EveryRequestNeedsTheCredential(Base):
             for method in methods:
                 with self.subTest(method=method, path=path):
                     concrete = path.replace('{thread_id}', thread.thread_id).replace('{message_id}', 'A000001')
+                    concrete = concrete.replace('{outcome_id}', '5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a')
                     body = bodies.get(path) if method == 'POST' else None
                     extra = ((('content-type', 'application/json'),) if body is not None else ())
                     status, headers, answer = self.call(method, concrete, (S.HEADER, credential), *extra,
@@ -117,6 +120,8 @@ class EveryRequestNeedsTheCredential(Base):
                         self.assertEqual((status, T.code_of(answer)), (503, 'CAPTURE_PROJECT_UNCONFIGURED'))
                     elif '/acceptance' in path:                         # P-04.4: answers; no project is configured
                         self.assertEqual((status, T.code_of(answer)), (503, 'CAPTURE_PROJECT_UNCONFIGURED'))
+                    elif path.startswith('/outcomes/'):                 # U-04.1: answers; no project is configured
+                        self.assertEqual((status, T.code_of(answer)), (503, 'PROJECTION_PROJECT_UNCONFIGURED'))
                     else:
                         self.assertEqual(status, 200, answer)
                     if path == '/session':

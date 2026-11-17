@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-list",
+  "tasks": [
+    {
+      "id": "TASK-1",
+      "title": "First task",
+      "status": "To Do",
+      "archived": false,
+      "type": null,
+      "priority": null,
+      "project": null,
+      "assignees": [],
+      "reporter": null,
+      "labels": [],
+      "milestone": null,
+      "parentTaskId": null,
+      "acceptanceCriteriaCompleted": 0,
+      "acceptanceCriteriaCount": 0,
+      "references": [],
+      "modifiedFiles": [],
+      "ordinal": 1000,
+      "createdAt": "2026-11-17T13:09:00Z",
+      "updatedAt": null,
+      "dueDate": null,
+      "isReady": true
+    }
+  ]
+}
