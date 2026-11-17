@@ -3393,6 +3393,7 @@
     "test_outbound_guard.InThisProcess.test_the_test_process_has_not_armed_the_guard",
     "test_outcome_card_fixtures.Committed.test_each_fixture_names_its_source_and_holds_only_the_projection_s_values",
     "test_outcome_card_fixtures.Committed.test_every_scenario_is_committed_and_nothing_else",
+    "test_outcome_card_fixtures.Committed.test_the_evidence_basis_is_the_host_s_or_the_attempt_s_as_r6_has_it",
     "test_outcome_card_fixtures.Committed.test_the_schema_is_the_projection_s_constants",
     "test_outcome_card_fixtures.Committed.test_the_shape_comparison_sees_a_key_added_removed_or_retyped",
     "test_outcome_card_fixtures.Committed.test_together_they_cover_what_the_card_must_show",

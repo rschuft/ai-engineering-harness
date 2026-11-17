@@ -116,10 +116,10 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 332,
+   "tests": 333,
    "launches": 1472,
    "mkdtemp": 492,
-   "wall_s": 97.1
+   "wall_s": 100.5
   },
   "agentfixture": {
    "tests": 104,
@@ -318,6 +318,17 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at eeba87e (U-04.2: the outcome card's fixture pin and its end-to-end test) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "4e7d12dc8eaeab6f6aaa6987caa9540fc19cd256",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at 4e7d12d (U-04.2's review fixes: the evidence-basis pin) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
