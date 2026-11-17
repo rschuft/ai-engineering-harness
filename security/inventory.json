@@ -1900,6 +1900,20 @@
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
+      "id": "op-objective-acceptance",
+      "name": "Record the Owner's acceptance of an objective from the Owner UI",
+      "mechanism": "On the Owner's request in the Owner host, authenticated by the Owner UI session credential: the acceptance recorder's prepare challenge (P-04.1) for an Objective item of an intent change is shown as a card; the Owner's acceptance is a user message of the same session after that card, whose stored bytes match the request's sha256; the acceptance recorder records it in process with channel owner-ui, reference conversation:<thread>/<message>#sha256:<digest> and recordedBy owner, admitted only with the session-binding verifier the Integration process passes in process (owner-ui from the command line is SESSION_BINDING_REQUIRED); one commit in the project repository writes the owner-decision/v1 record and mints the outcome id once (re-recording keeps it), behind a write-ahead receipt (owner-ui/objective-acceptance/v1/<thread>/<message>) in the integration store; idempotent by message id; no model is called",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-owner-ui-session"],
+      "assets": ["store-owner-conversation", "store-integration", "repo-owner-local"],
+      "planned_performer": "integration-service",
+      "performed_via": "P-04.4 (2026-11-17; its verdict pending; decision 0025 points 8 and 9; integrations/ownerhost/acceptance.py): the Integration process performs it on the Owner's authenticated request, building the statement from the Owner conversation store, never from the request; the challenge is held in the process's memory, bound to the session, the thread and the card, and is lost on a restart (ACCEPTANCE_CHALLENGE_UNKNOWN: the Owner reviews again). The commit's author and committer are the commissioning user's own git identity, configured explicitly per principal (components.owner_host.git_identities; decision 0028) and refused when absent, malformed or a placeholder; aieh-owner is never used. Decision 0012's authorization recorder and the dispatch-input commands keep main-session only. Not performed live: throwaway stores and repositories only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.4", "decisions/0008-outcome-identity-assignment-form-and-record.md", "decisions/0025-integration-process-owner-ui-session-credential-and-owner-conversation-store.md", "decisions/0028-git-attribution-commissioning-user-is-author-agents-are-not-git-contributors.md", "evidence/I1-integration-design-2026-11-16.md", "integrations/ownerhost/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "op-model-selection",
       "name": "Select the models inside a provider envelope",
       "mechanism": "Record the exact model identifiers the broker may serve inside the Owner's provider-envelope authorization (select-models), resting on the governing provider-envelope receipt, as a write-ahead receipt at the next position of the one series model-selection/v1/<n> in the integration store; the broker starts and admits only the selected models",
