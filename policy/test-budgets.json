@@ -116,16 +116,16 @@
    "wall_s": 0.4
   },
   "ownerhost": {
-   "tests": 295,
-   "launches": 1375,
-   "mkdtemp": 335,
-   "wall_s": 79.7
+   "tests": 321,
+   "launches": 1417,
+   "mkdtemp": 413,
+   "wall_s": 93.1
   },
   "agentfixture": {
-   "tests": 90,
+   "tests": 93,
    "launches": 55,
-   "mkdtemp": 49,
-   "wall_s": 30.8
+   "mkdtemp": 56,
+   "wall_s": 28.5
   }
  },
  "categories": {
@@ -240,6 +240,28 @@
    "measured": "2026-11-17",
    "runs": 3,
    "note": "Re-measured for these suites only at 592ef79 (U-04.1: the outcome projection's tests) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "ownerhost"
+   ],
+   "revision": "fd5808857bf4240a1080dfb9be465f58b089da5f",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at fd58088 (U-04.1's review fixes, and E-01.8's launch-gate label fix's tests in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
+   "profile": "evidence/test-profile/baseline.json"
+  },
+  {
+   "suites": [
+    "agentfixture"
+   ],
+   "revision": "fd5808857bf4240a1080dfb9be465f58b089da5f",
+   "dirty": false,
+   "measured": "2026-11-17",
+   "runs": 3,
+   "note": "Re-measured for these suites only at fd58088 (U-04.1's review fixes, and E-01.8's launch-gate label fix's tests in agentfixture) from a profile of each suite alone (tools/test_profile.py run --runs 3 --suite <suite>, without AIEH_LOCKED_OPENAPI; check_test_budget.py propose): their suite, class and module rows here and their counters in policy/test-budgets.json move together; every other suite, category and total keeps its own recording.",
    "profile": "evidence/test-profile/baseline.json"
   }
  ]
